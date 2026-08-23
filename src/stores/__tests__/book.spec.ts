@@ -9,7 +9,7 @@ describe('book store', () => {
   })
 
   function seededStore(numPages = 10) {
-    const store = useBookStore()
+    const store = useBookStore('test')
     store.setNumPages(numPages)
     return store
   }

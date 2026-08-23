@@ -1,18 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
-import Flipbook from '@/components/Flipbook.vue'
-import { useBookStore } from '@/stores/book'
+import TurnItem from '@/components/TurnItem.vue'
+import VueTurn from '@/components/VueTurn.vue'
 
-const NUM_PAGES = 10
-
-const store = useBookStore()
 const route = useRoute()
 const router = useRouter()
 
+const currentPage = ref(1)
+
 let syncing = false
-const pendingPage = ref<number | null>(null)
 
 // 解析路由页码：仅接受正整数；非法值（abc/0/负数等）回退第 1 页并纠正 URL
 function applyRoutePage() {
@@ -22,18 +20,13 @@ function applyRoutePage() {
   const parsed = value === undefined ? NaN : Number(value)
   const valid = Number.isInteger(parsed) && parsed >= 1
   if (valid && parsed > 1) {
-    const target = parsed - 1
-    if (store.isFlipping) {
-      pendingPage.value = target
-    } else {
-      store.goToPage(target)
-    }
+    currentPage.value = parsed
     return
   }
   if (!valid && value !== undefined) {
-    store.goToPage(0)
+    currentPage.value = 1
     syncing = true
-    router.replace({ name: 'book', params: { page: String(store.page) } }).finally(() => {
+    router.replace({ name: 'book', params: { page: '1' } }).finally(() => {
       syncing = false
     })
   }
@@ -41,36 +34,22 @@ function applyRoutePage() {
 
 watch(() => route.params.page, applyRoutePage)
 
-watch(
-  () => store.page,
-  (value) => {
-    if (syncing) return
-    syncing = true
-    router.replace({ name: 'book', params: { page: value } }).finally(() => {
-      syncing = false
-    })
-  },
-)
+watch(currentPage, (value) => {
+  if (syncing) return
+  syncing = true
+  router.replace({ name: 'book', params: { page: String(value) } }).finally(() => {
+    syncing = false
+  })
+})
 
-watch(
-  () => store.isFlipping,
-  (flipping) => {
-    if (!flipping && pendingPage.value !== null) {
-      const target = pendingPage.value
-      pendingPage.value = null
-      store.goToPage(target)
-    }
-  },
-)
-
-onMounted(applyRoutePage)
+applyRoutePage()
 </script>
 
 <template>
   <div class="book-view">
-    <Flipbook :num-pages="NUM_PAGES" :page-aspect="0.75" :start-page="1">
+    <VueTurn v-model="currentPage" :page-aspect="0.75">
       <template
-        #default="{ page, numPages, isFlipping, canFlipLeft, canFlipRight, flipLeft, flipRight }"
+        #toolbar="{ page, numPages, isFlipping, canFlipLeft, canFlipRight, flipLeft, flipRight }"
       >
         <div class="toolbar">
           <button class="nav-btn" :disabled="!canFlipRight || isFlipping" @click="flipRight">
@@ -83,15 +62,17 @@ onMounted(applyRoutePage)
         </div>
       </template>
 
-      <template #page="{ index }">
-        <div v-if="index === 0" class="demo-page cover">
+      <turn-item>
+        <div class="demo-page cover">
           <span class="cover-badge">vue-turn</span>
           <h1 class="cover-title">TURN</h1>
           <p class="cover-subtitle">基于 Three.js 的真实卷曲翻页</p>
           <p class="cover-meta">Vue 3 · Pinia · Vue Router · TypeScript</p>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 1" class="demo-page">
+      <turn-item>
+        <div class="demo-page">
           <h2 class="page-heading">前言</h2>
           <p class="page-paragraph">
             这本书演示了如何把传统的 DOM 翻页组件重构为基于 WebGL 的三维翻页体验。每一页都是真实的
@@ -102,8 +83,10 @@ onMounted(applyRoutePage)
           </p>
           <p class="page-note">— vue-turn 团队</p>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 2" class="demo-page">
+      <turn-item>
+        <div class="demo-page">
           <h2 class="page-heading">第一章 · Three.js 渲染</h2>
           <ul class="page-list">
             <li>每个页面离屏渲染为 768×1024 的 DOM 节点</li>
@@ -115,8 +98,10 @@ onMounted(applyRoutePage)
             渲染循环由 requestAnimationFrame 驱动，翻页结束后网格与材质会被立即释放。
           </p>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 3" class="demo-page art-page">
+      <turn-item>
+        <div class="demo-page art-page">
           <div class="art-frame">
             <div class="art-blob art-blob-a"></div>
             <div class="art-blob art-blob-b"></div>
@@ -124,8 +109,10 @@ onMounted(applyRoutePage)
           </div>
           <p class="art-caption">图 1 · 纯 CSS 渐变也能随页面一起卷曲</p>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 4" class="demo-page">
+      <turn-item>
+        <div class="demo-page">
           <h2 class="page-heading">第二章 · 卷曲的数学</h2>
           <p class="page-paragraph">纸张绕着一根虚拟圆柱缠绕，弧长在形变中保持不变：</p>
           <div class="formula">α(s) = θ + κ·s</div>
@@ -134,8 +121,10 @@ onMounted(applyRoutePage)
             当曲率 κ 趋近于 0 时，公式退化为刚体旋转；动画过程中 κ 在中点达到峰值，两端归零。
           </p>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 5" class="demo-page code-page">
+      <turn-item>
+        <div class="demo-page code-page">
           <h2 class="page-heading">代码一瞥</h2>
           <pre class="code-block">
 export function curlPoint(s, θ, κ) {
@@ -149,11 +138,13 @@ export function curlPoint(s, θ, κ) {
   }
 }</pre>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 6" class="demo-page">
+      <turn-item>
+        <div class="demo-page">
           <h2 class="page-heading">第三章 · 状态与路由</h2>
           <p class="page-paragraph">
-            Pinia 管理页码、可见页数与翻页锁；Vue Router 提供 /book/:page
+            vue-turn 以 v-model 暴露当前页码；Vue Router 提供 /book/:page
             深度链接。两个方向互相监听，翻页过程中收到的跳转请求会被推迟到动画结束后执行。
           </p>
           <div class="link-row">
@@ -168,14 +159,18 @@ export function curlPoint(s, θ, κ) {
             </RouterLink>
           </div>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 7" class="demo-page quote-page">
+      <turn-item>
+        <div class="demo-page quote-page">
           <p class="quote-mark">“</p>
           <p class="quote-text">纸张会旧，交互不会。</p>
           <p class="quote-author">— 某位翻书页翻到腱鞘炎的工程师</p>
         </div>
+      </turn-item>
 
-        <div v-else-if="index === 8" class="demo-page">
+      <turn-item>
+        <div class="demo-page">
           <h2 class="page-heading">小结</h2>
           <ul class="page-list">
             <li>两种镜像几何（A / B）统一处理左右与前进后退</li>
@@ -184,13 +179,15 @@ export function curlPoint(s, θ, κ) {
             <li>所有数学均有单元测试覆盖</li>
           </ul>
         </div>
+      </turn-item>
 
-        <div v-else class="demo-page cover back-cover">
+      <turn-item>
+        <div class="demo-page cover back-cover">
           <h1 class="cover-title small">FIN</h1>
           <p class="cover-subtitle">感谢阅读</p>
         </div>
-      </template>
-    </Flipbook>
+      </turn-item>
+    </VueTurn>
   </div>
 </template>
 
@@ -392,7 +389,7 @@ export function curlPoint(s, θ, κ) {
 .art-caption {
   margin: 36px 0 0;
   font-size: 22px;
-  opacity: 0.65;
+  opacity: 0.6;
 }
 
 .quote-page {

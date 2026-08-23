@@ -23,7 +23,7 @@ export interface FlipSpec {
   toFitWidth?: number
 }
 
-export interface FlipbookSlotProps {
+export interface TurnSlotProps {
   page: number
   numPages: number
   isFlipping: boolean

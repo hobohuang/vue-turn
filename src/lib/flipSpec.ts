@@ -4,7 +4,7 @@ import type {
   SheetGeometry,
   Slot,
   StaticPlacement,
-} from '@/types/flipbook'
+} from '@/types/turn'
 
 export const PAGE_HEIGHT = 2
 

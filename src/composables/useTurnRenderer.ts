@@ -1,10 +1,10 @@
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type * as THREE from 'three'
 
-import { FlipbookScene } from '@/lib/FlipbookScene'
-import type { FlipSpec, StaticPlacement } from '@/types/flipbook'
+import { TurnScene } from '@/lib/TurnScene'
+import type { FlipSpec, StaticPlacement } from '@/types/turn'
 
-export interface FlipbookRendererOptions {
+export interface TurnRendererOptions {
   pageAspect: number
   nPolygons: number
   perspective: number
@@ -13,17 +13,17 @@ export interface FlipbookRendererOptions {
   curl: number
 }
 
-export function useFlipbookRenderer(options: FlipbookRendererOptions) {
+export function useTurnRenderer(options: TurnRendererOptions) {
   const container = ref<HTMLElement | null>(null)
   const containerSize = reactive({ width: 0, height: 0 })
   const webglSupported = ref(true)
-  let scene: FlipbookScene | null = null
+  let scene: TurnScene | null = null
   let observer: ResizeObserver | null = null
 
   onMounted(() => {
     const el = container.value
     if (!el) return
-    scene = new FlipbookScene({ container: el, ...options })
+    scene = new TurnScene({ container: el, ...options })
     webglSupported.value = scene.hasRenderer
     const rect = el.getBoundingClientRect()
     containerSize.width = rect.width

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
 import { curledColumns, easeInOutCubic, flipAngle } from '@/lib/pageCurl'
-import type { FlipSpec, StaticPlacement } from '@/types/flipbook'
+import type { FlipSpec, StaticPlacement } from '@/types/turn'
 
 const STATIC_Z = -0.01
 const FIT_MARGIN = 1.12
@@ -21,7 +21,7 @@ function createRenderer(): THREE.WebGLRenderer | null {
   }
 }
 
-export interface FlipbookSceneOptions {
+export interface TurnSceneOptions {
   container: HTMLElement
   pageAspect: number
   nPolygons?: number
@@ -57,7 +57,7 @@ interface StaticEntry {
   fromIsWorld: boolean
 }
 
-export class FlipbookScene {
+export class TurnScene {
   private readonly container: HTMLElement
   private readonly pageAspect: number
   private readonly nPolygons: number
@@ -80,7 +80,7 @@ export class FlipbookScene {
   private rafId = 0
   private disposed = false
 
-  constructor(options: FlipbookSceneOptions) {
+  constructor(options: TurnSceneOptions) {
     this.container = options.container
     this.pageAspect = positive(options.pageAspect, 0.75)
     this.nPolygons = Math.round(positive(options.nPolygons ?? 64, 64))

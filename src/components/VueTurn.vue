@@ -1,18 +1,26 @@
+<script lang="ts">
+// 模块级计数器：<script setup> 内的变量会随每个实例重新初始化，
+// 放在普通 <script> 块中才能保证所有实例共享并递增
+let instanceSeq = 0
+</script>
+
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Comment, computed, nextTick, onBeforeUnmount, onMounted, ref, useSlots, watch } from 'vue'
+import { cloneVNode, type VNode } from 'vue'
 import type * as THREE from 'three'
 
-import { useFlipbookRenderer } from '@/composables/useFlipbookRenderer'
+import TurnItem from '@/components/TurnItem.vue'
+import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import { computeFlipSpec, spreadLayout } from '@/lib/flipSpec'
 import { elementToTexture } from '@/lib/textureFactory'
 import { useBookStore } from '@/stores/book'
-import type { FlipbookSlotProps, ForwardDirection } from '@/types/flipbook'
+import type { ForwardDirection, TurnSlotProps } from '@/types/turn'
 
 const PAGE_PIXEL_WIDTH = 768
 
 const props = withDefaults(
   defineProps<{
-    numPages: number
+    modelValue?: number
     pageAspect?: number
     flipDuration?: number
     startPage?: number
@@ -39,14 +47,16 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
+  'update:modelValue': [page: number]
   'flip-left-start': []
   'flip-left-end': []
   'flip-right-start': []
   'flip-right-end': []
-  'update:page': [page: number]
 }>()
 
-const store = useBookStore()
+// 实例隔离：每个 vue-turn 使用独立 store
+const store = useBookStore(`turn-${instanceSeq++}`)
+
 const {
   container,
   containerSize,
@@ -54,7 +64,7 @@ const {
   setStaticPages,
   applyStaticTexture,
   startFlip,
-} = useFlipbookRenderer({
+} = useTurnRenderer({
   pageAspect: props.pageAspect,
   nPolygons: props.nPolygons,
   perspective: props.perspective,
@@ -63,20 +73,40 @@ const {
   curl: props.curl,
 })
 
+const slots = useSlots()
+
+// 收集默认插槽中的 turn-item vnode（展平 v-for 产生的 Fragment），
+// 非 turn-item 子节点忽略并提示
+let warnedInvalidChild = false
+const pageVnodes = computed<VNode[]>(() => {
+  const root = slots.default?.() ?? []
+  const result: VNode[] = []
+  const walk = (nodes: VNode[]) => {
+    for (const node of nodes) {
+      if (node.type === TurnItem) {
+        result.push(node)
+      } else if (Array.isArray(node.children)) {
+        walk(node.children as VNode[])
+      } else if (!warnedInvalidChild && node.type !== Comment && typeof node.type !== 'symbol') {
+        warnedInvalidChild = true
+        console.warn('[vue-turn] 默认插槽中仅支持 <turn-item>，其余子节点将被忽略')
+      }
+    }
+  }
+  walk(root)
+  return result
+})
+
 const pageEls = ref<HTMLElement[]>([])
 const textures = new Map<number, THREE.Texture>()
 let disposed = false
+let pendingTarget: number | null = null
 
-// props 运行时校验：非法值回退到默认值，避免污染几何与动画时长
-const safeNumPages = computed(() =>
-  Number.isFinite(props.numPages) ? Math.max(0, Math.floor(props.numPages)) : 0,
-)
+const safeNumPages = computed(() => pageVnodes.value.length)
 const safeFlipDuration = computed(() =>
   Number.isFinite(props.flipDuration) && props.flipDuration > 0 ? props.flipDuration : 900,
 )
 
-// 使用 watch 而非 watchEffect：clampAndAlign 会读取 currentPage，
-// watchEffect 会在翻页提交后重跑并把封面/封底的落点重新对齐到跨页
 watch(
   () => [props.forwardDirection, safeNumPages.value] as const,
   ([direction, count]) => {
@@ -92,6 +122,32 @@ watch(
     store.setDisplayedPages(!props.singlePage && width > height ? 2 : 1)
   },
   { immediate: true },
+)
+
+// v-model：外部页码变化时跳转；翻页中则推迟到动画结束
+watch(
+  () => props.modelValue,
+  (value) => {
+    if (value === undefined) return
+    const target = Number.isFinite(value) ? Math.round(value) - 1 : 0
+    if (target === store.currentPage) return
+    if (store.isFlipping) {
+      pendingTarget = target
+    } else {
+      store.goToPage(target)
+    }
+  },
+)
+
+watch(
+  () => store.isFlipping,
+  (flipping) => {
+    if (!flipping && pendingTarget !== null) {
+      const target = pendingTarget
+      pendingTarget = null
+      store.goToPage(target)
+    }
+  },
 )
 
 function renderStatic() {
@@ -136,7 +192,7 @@ function flip(trigger: 'left' | 'right') {
     } else {
       emit('flip-right-end')
     }
-    emit('update:page', store.page)
+    emit('update:modelValue', store.page)
   }
   startFlip(
     spec,
@@ -152,7 +208,7 @@ function goToPage(page: number) {
   store.goToPage(page - 1)
 }
 
-const slotProps = computed<FlipbookSlotProps>(() => ({
+const slotProps = computed<TurnSlotProps>(() => ({
   page: store.page,
   numPages: safeNumPages.value,
   isFlipping: store.isFlipping,
@@ -165,7 +221,8 @@ const slotProps = computed<FlipbookSlotProps>(() => ({
 
 onMounted(async () => {
   store.setDisplayedPages(!props.singlePage && containerSize.width > containerSize.height ? 2 : 1)
-  store.goToPage(props.startPage - 1)
+  const initial = props.modelValue ?? props.startPage
+  store.goToPage((Number.isFinite(initial) ? Math.round(initial) : 1) - 1)
   await nextTick()
   // 逐页光栅化并单独兜底：任意一页失败只影响该页纹理，不阻断整体初始化
   await Promise.all(
@@ -182,7 +239,7 @@ onMounted(async () => {
         textures.set(index, texture)
         applyStaticTexture(index, texture)
       } catch (error) {
-        console.warn(`[Flipbook] 第 ${index + 1} 页纹理生成失败`, error)
+        console.warn(`[vue-turn] 第 ${index + 1} 页纹理生成失败`, error)
       }
     }),
   )
@@ -205,15 +262,15 @@ defineExpose({
 </script>
 
 <template>
-  <div class="flipbook">
+  <div class="vue-turn">
     <div v-if="!webglSupported" class="webgl-fallback">
       当前环境不支持 WebGL，无法展示 3D 翻页效果。
     </div>
     <div v-show="webglSupported" ref="container" class="viewport"></div>
-    <slot v-bind="slotProps" />
+    <slot name="toolbar" v-bind="slotProps" />
     <div class="offscreen-pages" aria-hidden="true">
       <div
-        v-for="index in safeNumPages"
+        v-for="(vnode, index) in pageVnodes"
         :key="index"
         ref="pageEls"
         class="page-source"
@@ -222,14 +279,14 @@ defineExpose({
           height: `${PAGE_PIXEL_WIDTH / props.pageAspect}px`,
         }"
       >
-        <slot name="page" :index="index - 1" />
+        <component :is="() => cloneVNode(vnode)" />
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.flipbook {
+.vue-turn {
   position: relative;
   width: 100%;
   height: 100%;

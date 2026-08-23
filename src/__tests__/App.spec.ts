@@ -5,7 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { reactive, ref } from 'vue'
 
 import App from '../App.vue'
-import Flipbook from '../components/Flipbook.vue'
+import VueTurn from '../components/VueTurn.vue'
 import BookView from '../views/BookView.vue'
 
 type FakeTexture = { dispose: () => void }
@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   startFlip:
     vi.fn<
       (
-        spec: import('@/types/flipbook').FlipSpec,
+        spec: import('@/types/turn').FlipSpec,
         front: FakeTexture | null,
         back: FakeTexture | null,
         duration: number,
@@ -27,8 +27,8 @@ const mocks = vi.hoisted(() => ({
   elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
 }))
 
-vi.mock('@/composables/useFlipbookRenderer', () => ({
-  useFlipbookRenderer: () => ({
+vi.mock('@/composables/useTurnRenderer', () => ({
+  useTurnRenderer: () => ({
     container: ref(null),
     containerSize: reactive({ width: 900, height: 600 }),
     webglSupported: ref(true),
@@ -62,7 +62,7 @@ describe('App', () => {
     })
     router.push('/book')
     await flushPromises()
-    expect(wrapper.findComponent(Flipbook).exists()).toBe(true)
+    expect(wrapper.findComponent(VueTurn).exists()).toBe(true)
     expect(wrapper.find('.indicator').text()).toBe('第 1 / 10 页')
   })
 

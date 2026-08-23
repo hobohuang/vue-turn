@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { computeFlipSpec, PAGE_HEIGHT, pageWidth, spreadLayout } from '@/lib/flipSpec'
-import type { FlipSpec } from '@/types/flipbook'
+import type { FlipSpec } from '@/types/turn'
 
 const ASPECT = 0.75
 
