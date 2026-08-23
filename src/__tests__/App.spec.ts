@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { reactive, ref } from 'vue'
 
@@ -21,7 +20,6 @@ const mocks = vi.hoisted(() => ({
         onDone: () => void,
       ) => void
     >(),
-  startSlide: vi.fn<(duration: number, onDone: () => void) => void>(),
   setStaticPages: vi.fn<(placements: unknown[], textureOf: (index: number) => unknown) => void>(),
   applyStaticTexture: vi.fn<(index: number, texture: FakeTexture) => void>(),
   elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
@@ -35,7 +33,6 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     setStaticPages: mocks.setStaticPages,
     applyStaticTexture: mocks.applyStaticTexture,
     startFlip: mocks.startFlip,
-    startSlide: mocks.startSlide,
   }),
 }))
 
@@ -58,7 +55,7 @@ describe('App', () => {
     mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
     const router = createTestRouter()
     const wrapper = mount(App, {
-      global: { plugins: [createPinia(), router] },
+      global: { plugins: [router] },
     })
     router.push('/book')
     await flushPromises()
@@ -70,7 +67,7 @@ describe('App', () => {
     mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
     const router = createTestRouter()
     mount(App, {
-      global: { plugins: [createPinia(), router] },
+      global: { plugins: [router] },
     })
     router.push('/book/abc')
     await flushPromises()

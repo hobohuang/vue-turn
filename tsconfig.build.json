@@ -1,0 +1,21 @@
+// 库声明文件构建：仅对组件入口相关源码产出 .d.ts
+{
+  "extends": "./tsconfig.app.json",
+  "include": ["src/**/*", "src/**/*.vue"],
+  "exclude": [
+    "src/**/__tests__/*",
+    "src/main.ts",
+    "src/App.vue",
+    "src/router/*",
+    "src/views/*"
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.build.tsbuildinfo"
+  }
+}

@@ -1,22 +1,38 @@
 <script lang="ts">
-// 模块级计数器：<script setup> 内的变量会随每个实例重新初始化，
-// 放在普通 <script> 块中才能保证所有实例共享并递增
-let instanceSeq = 0
+import { defineComponent, type PropType, type VNode } from 'vue'
+import { cloneVNode } from 'vue'
+
+// 稳定类型的渲染载体：按 vnode 实际结构做最小 diff，
+// 避免父组件每次渲染都整体重建离屏页面 DOM
+export const VnodeHolder = defineComponent({
+  name: 'VnodeHolder',
+  props: { vnode: { type: Object as PropType<VNode>, required: true } },
+  setup(props) {
+    return () => cloneVNode(props.vnode)
+  },
+})
 </script>
 
 <script setup lang="ts">
-import { Comment, computed, nextTick, onBeforeUnmount, onMounted, ref, useSlots, watch } from 'vue'
-import { cloneVNode, type VNode } from 'vue'
+import {
+  Comment,
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  onUpdated,
+  ref,
+  useSlots,
+  watch,
+} from 'vue'
 import type * as THREE from 'three'
 
 import TurnItem from '@/components/TurnItem.vue'
+import { useBookState } from '@/composables/useBookState'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import { computeFlipSpec, spreadLayout } from '@/lib/flipSpec'
 import { elementToTexture } from '@/lib/textureFactory'
-import { useBookStore } from '@/stores/book'
-import type { ForwardDirection, TurnSlotProps } from '@/types/turn'
-
-const PAGE_PIXEL_WIDTH = 768
+import type { FlipDirection, TurnSlotProps } from '@/types/turn'
 
 const props = withDefaults(
   defineProps<{
@@ -29,8 +45,13 @@ const props = withDefaults(
     ambient?: number
     gloss?: number
     curl?: number
-    forwardDirection?: ForwardDirection
+    forwardDirection?: FlipDirection
     singlePage?: boolean
+    // 光栅化参数：控制纹理清晰度与内存占用
+    pageWidth?: number
+    pixelRatio?: number
+    // 页面底色（纹理背景）
+    pageBackground?: string
   }>(),
   {
     pageAspect: 0.75,
@@ -43,6 +64,9 @@ const props = withDefaults(
     curl: 0.8,
     forwardDirection: 'left',
     singlePage: false,
+    pageWidth: 768,
+    pixelRatio: 1,
+    pageBackground: '#ffffff',
   },
 )
 
@@ -52,10 +76,16 @@ const emit = defineEmits<{
   'flip-left-end': []
   'flip-right-start': []
   'flip-right-end': []
+  // 方向无关的统一事件
+  'flip-start': [direction: FlipDirection]
+  'flip-end': [direction: FlipDirection]
+  // 页码变化（翻页提交与直接跳转均触发）
+  change: [page: number]
+  // 首次纹理就绪
+  ready: []
 }>()
 
-// 实例隔离：每个 vue-turn 使用独立 store
-const store = useBookStore(`turn-${instanceSeq++}`)
+const state = useBookState()
 
 const {
   container,
@@ -75,10 +105,11 @@ const {
 
 const slots = useSlots()
 
-// 收集默认插槽中的 turn-item vnode（展平 v-for 产生的 Fragment），
-// 非 turn-item 子节点忽略并提示
+// 在模板渲染期收集 turn-item vnode（展平 v-for 产生的 Fragment），
+// 非 turn-item 子节点忽略并提示。必须在渲染函数内调用插槽，
+// 才能让父组件的内容变化正常触发本组件更新
 let warnedInvalidChild = false
-const pageVnodes = computed<VNode[]>(() => {
+function collectPages(): VNode[] {
   const root = slots.default?.() ?? []
   const result: VNode[] = []
   const walk = (nodes: VNode[]) => {
@@ -95,23 +126,40 @@ const pageVnodes = computed<VNode[]>(() => {
   }
   walk(root)
   return result
-})
+}
 
+const offscreenEl = ref<HTMLElement | null>(null)
 const pageEls = ref<HTMLElement[]>([])
+const pageCount = ref(0)
 const textures = new Map<number, THREE.Texture>()
 let disposed = false
 let pendingTarget: number | null = null
+let pendingRaster = false
+let rasterSeq = 0
+let rasterScheduled = false
+let readyEmitted = false
+let mutationObserver: MutationObserver | null = null
 
-const safeNumPages = computed(() => pageVnodes.value.length)
 const safeFlipDuration = computed(() =>
   Number.isFinite(props.flipDuration) && props.flipDuration > 0 ? props.flipDuration : 900,
 )
+const safePageWidth = computed(() =>
+  Number.isFinite(props.pageWidth) && props.pageWidth > 0 ? props.pageWidth : 768,
+)
+const safePixelRatio = computed(() =>
+  Number.isFinite(props.pixelRatio) && props.pixelRatio > 0 ? props.pixelRatio : 1,
+)
+
+function syncPageCount() {
+  const count = pageEls.value.length
+  if (pageCount.value !== count) pageCount.value = count
+}
 
 watch(
-  () => [props.forwardDirection, safeNumPages.value] as const,
+  () => [props.forwardDirection, pageCount.value] as const,
   ([direction, count]) => {
-    store.setForwardDirection(direction)
-    store.setNumPages(count)
+    state.setForwardDirection(direction)
+    state.setNumPages(count)
   },
   { immediate: true },
 )
@@ -119,7 +167,7 @@ watch(
 watch(
   () => [containerSize.width, containerSize.height] as const,
   ([width, height]) => {
-    store.setDisplayedPages(!props.singlePage && width > height ? 2 : 1)
+    state.setDisplayedPages(!props.singlePage && width > height ? 2 : 1)
   },
   { immediate: true },
 )
@@ -130,69 +178,85 @@ watch(
   (value) => {
     if (value === undefined) return
     const target = Number.isFinite(value) ? Math.round(value) - 1 : 0
-    if (target === store.currentPage) return
-    if (store.isFlipping) {
+    if (target === state.currentPage.value) return
+    if (state.isFlipping.value) {
       pendingTarget = target
     } else {
-      store.goToPage(target)
+      state.goToPage(target)
     }
   },
 )
 
 watch(
-  () => store.isFlipping,
+  () => state.isFlipping.value,
   (flipping) => {
-    if (!flipping && pendingTarget !== null) {
+    if (flipping) return
+    if (pendingTarget !== null) {
       const target = pendingTarget
       pendingTarget = null
-      store.goToPage(target)
+      state.goToPage(target)
+    }
+    // 翻页期间累积的内容变化，动画结束后补刷纹理
+    if (pendingRaster) {
+      pendingRaster = false
+      void rasterizeAll()
     }
   },
 )
 
 function renderStatic() {
-  if (store.isFlipping) return
+  if (state.isFlipping.value) return
   const placements = spreadLayout({
-    currentPage: store.currentPage,
-    displayedPages: store.displayedPages,
+    currentPage: state.currentPage.value,
+    displayedPages: state.displayedPages.value,
     forwardDirection: props.forwardDirection,
-    numPages: safeNumPages.value,
+    numPages: pageCount.value,
   })
   setStaticPages(placements, (index) => textures.get(index) ?? null)
 }
 
-watch([() => store.currentPage, () => store.displayedPages], () => {
+watch([() => state.currentPage.value, () => state.displayedPages.value], () => {
   renderStatic()
 })
 
-function flip(trigger: 'left' | 'right') {
+// 页码变化统一出口：同步 v-model 并派发 change
+watch(
+  () => state.currentPage.value,
+  () => {
+    emit('update:modelValue', state.page.value)
+    emit('change', state.page.value)
+  },
+)
+
+function flip(trigger: FlipDirection) {
   const ltr = props.forwardDirection === 'left'
   const advancing = ltr ? trigger === 'left' : trigger === 'right'
-  if (advancing ? !store.canGoForward : !store.canGoBack) return
-  store.startFlip()
+  if (advancing ? !state.canGoForward.value : !state.canGoBack.value) return
+  state.startFlip()
   if (trigger === 'left') {
     emit('flip-left-start')
   } else {
     emit('flip-right-start')
   }
+  emit('flip-start', trigger)
   const spec = computeFlipSpec({
-    currentPage: store.currentPage,
-    displayedPages: store.displayedPages,
+    currentPage: state.currentPage.value,
+    displayedPages: state.displayedPages.value,
     forwardDirection: props.forwardDirection,
     backward: !advancing,
     pageAspect: props.pageAspect,
-    numPages: safeNumPages.value,
+    numPages: pageCount.value,
   })
   setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null)
   const onDone = () => {
-    store.commitFlip(spec.delta)
+    state.commitFlip(spec.delta)
     renderStatic()
     if (trigger === 'left') {
       emit('flip-left-end')
     } else {
       emit('flip-right-end')
     }
-    emit('update:modelValue', store.page)
+    emit('flip-end', trigger)
   }
   startFlip(
     spec,
@@ -203,51 +267,119 @@ function flip(trigger: 'left' | 'right') {
   )
 }
 
+function next() {
+  flip(props.forwardDirection)
+}
+
+function prev() {
+  flip(props.forwardDirection === 'left' ? 'right' : 'left')
+}
+
 function goToPage(page: number) {
-  if (store.isFlipping) return
-  store.goToPage(page - 1)
+  if (state.isFlipping.value) return
+  state.goToPage(page - 1)
+}
+
+// 光栅化单页：seq 过期（内容再次变化/卸载）时丢弃结果，旧纹理立即释放
+async function rasterizePage(index: number, seq: number) {
+  const el = pageEls.value[index]
+  if (!el) return
+  try {
+    const texture = await elementToTexture(el, safePixelRatio.value, props.pageBackground)
+    if (disposed || seq !== rasterSeq) {
+      texture.dispose()
+      return
+    }
+    textures.get(index)?.dispose()
+    textures.set(index, texture)
+    applyStaticTexture(index, texture)
+  } catch (error) {
+    if (seq === rasterSeq) {
+      console.warn(`[vue-turn] 第 ${index + 1} 页纹理生成失败`, error)
+    }
+  }
+}
+
+async function rasterizeAll() {
+  const seq = ++rasterSeq
+  // 等待离屏 DOM 完成最新内容的 patch，避免光栅化到旧内容
+  await nextTick()
+  if (disposed || seq !== rasterSeq) return
+  const total = pageEls.value.length
+  await Promise.all(Array.from({ length: total }, (_, index) => rasterizePage(index, seq)))
+  if (disposed || seq !== rasterSeq) return
+  renderStatic()
+  if (!readyEmitted) {
+    readyEmitted = true
+    emit('ready')
+  }
+}
+
+// 手动重绘全部页面纹理（内容含异步资源时可在资源就绪后调用）
+function refresh() {
+  return rasterizeAll()
+}
+
+// 离屏内容发生 DOM 变化时合并触发一次重光栅化；
+// 翻页动画期间不打断，动画结束后补刷
+function scheduleRaster() {
+  if (disposed) return
+  if (state.isFlipping.value) {
+    pendingRaster = true
+    return
+  }
+  if (rasterScheduled) return
+  rasterScheduled = true
+  void nextTick(() => {
+    rasterScheduled = false
+    if (!disposed) void rasterizeAll()
+  })
 }
 
 const slotProps = computed<TurnSlotProps>(() => ({
-  page: store.page,
-  numPages: safeNumPages.value,
-  isFlipping: store.isFlipping,
-  canFlipLeft: store.canFlipLeft,
-  canFlipRight: store.canFlipRight,
+  page: state.page.value,
+  numPages: pageCount.value,
+  isFlipping: state.isFlipping.value,
+  canFlipLeft: state.canFlipLeft.value,
+  canFlipRight: state.canFlipRight.value,
   flipLeft: () => flip('left'),
   flipRight: () => flip('right'),
+  next,
+  prev,
   goToPage,
+  refresh,
 }))
 
 onMounted(async () => {
-  store.setDisplayedPages(!props.singlePage && containerSize.width > containerSize.height ? 2 : 1)
+  state.setDisplayedPages(
+    !props.singlePage && containerSize.width > containerSize.height ? 2 : 1,
+  )
   const initial = props.modelValue ?? props.startPage
-  store.goToPage((Number.isFinite(initial) ? Math.round(initial) : 1) - 1)
+  state.goToPage((Number.isFinite(initial) ? Math.round(initial) : 1) - 1)
+  syncPageCount()
+  if (offscreenEl.value) {
+    mutationObserver = new MutationObserver(scheduleRaster)
+    mutationObserver.observe(offscreenEl.value, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    })
+  }
   await nextTick()
   // 逐页光栅化并单独兜底：任意一页失败只影响该页纹理，不阻断整体初始化
-  await Promise.all(
-    Array.from({ length: safeNumPages.value }, async (_, index) => {
-      const el = pageEls.value[index]
-      if (!el) return
-      try {
-        const texture = await elementToTexture(el, 1)
-        if (disposed) {
-          // 卸载发生在生成期间：立即释放，避免纹理泄漏
-          texture.dispose()
-          return
-        }
-        textures.set(index, texture)
-        applyStaticTexture(index, texture)
-      } catch (error) {
-        console.warn(`[vue-turn] 第 ${index + 1} 页纹理生成失败`, error)
-      }
-    }),
-  )
-  if (!disposed) renderStatic()
+  await rasterizeAll()
+})
+
+onUpdated(() => {
+  syncPageCount()
 })
 
 onBeforeUnmount(() => {
   disposed = true
+  rasterSeq++
+  mutationObserver?.disconnect()
+  mutationObserver = null
   for (const texture of textures.values()) {
     texture.dispose()
   }
@@ -257,29 +389,42 @@ onBeforeUnmount(() => {
 defineExpose({
   flipLeft: () => flip('left'),
   flipRight: () => flip('right'),
+  next,
+  prev,
   goToPage,
+  refresh,
+  get page() {
+    return state.page.value
+  },
+  get numPages() {
+    return pageCount.value
+  },
+  get isFlipping() {
+    return state.isFlipping.value
+  },
 })
 </script>
 
 <template>
   <div class="vue-turn">
     <div v-if="!webglSupported" class="webgl-fallback">
-      当前环境不支持 WebGL，无法展示 3D 翻页效果。
+      <slot name="fallback">当前环境不支持 WebGL，无法展示 3D 翻页效果。</slot>
     </div>
     <div v-show="webglSupported" ref="container" class="viewport"></div>
     <slot name="toolbar" v-bind="slotProps" />
-    <div class="offscreen-pages" aria-hidden="true">
+    <div ref="offscreenEl" class="offscreen-pages" aria-hidden="true">
       <div
-        v-for="(vnode, index) in pageVnodes"
+        v-for="(vnode, index) in collectPages()"
         :key="index"
         ref="pageEls"
         class="page-source"
         :style="{
-          width: `${PAGE_PIXEL_WIDTH}px`,
-          height: `${PAGE_PIXEL_WIDTH / props.pageAspect}px`,
+          width: `${safePageWidth}px`,
+          height: `${safePageWidth / props.pageAspect}px`,
+          background: props.pageBackground,
         }"
       >
-        <component :is="() => cloneVNode(vnode)" />
+        <VnodeHolder :vnode="vnode" />
       </div>
     </div>
   </div>
@@ -326,6 +471,5 @@ defineExpose({
 
 .page-source {
   overflow: hidden;
-  background: #ffffff;
 }
 </style>

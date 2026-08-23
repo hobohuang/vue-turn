@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { createPinia, setActivePinia } from 'pinia'
 import { h, reactive, ref } from 'vue'
 
 import TurnItem from '@/components/TurnItem.vue'
@@ -53,8 +52,7 @@ function toolbar(slotProps: TurnSlotProps) {
       { id: 'next', disabled: !slotProps.canFlipLeft, onClick: slotProps.flipLeft },
       'next',
     ),
-    h('button', { id: 'jump', onClick: () => slotProps.goToPage(5) }, 'jump',
-    ),
+    h('button', { id: 'jump', onClick: () => slotProps.goToPage(5) }, 'jump'),
   ])
 }
 
@@ -78,7 +76,6 @@ async function mountTurn(numPages = 6, extraProps: Record<string, unknown> = {})
 
 describe('VueTurn', () => {
   beforeEach(() => {
-    setActivePinia(createPinia())
     vi.clearAllMocks()
     mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
     mocks.startFlip.mockImplementation(() => undefined)
@@ -197,13 +194,40 @@ describe('VueTurn', () => {
     expect(wrapper.find('#indicator').text()).toBe('1/6')
   })
 
-  it('emits update:modelValue when a flip commits', async () => {
+  it('emits update:modelValue and change when a flip commits', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     const wrapper = await mountTurn()
     await wrapper.find('#next').trigger('click')
     await flushPromises()
     const emitted = wrapper.emitted('update:modelValue')
     expect(emitted?.[emitted.length - 1]).toEqual([2])
+    const changes = wrapper.emitted('change')
+    expect(changes?.[changes.length - 1]).toEqual([2])
+  })
+
+  it('emits change on direct jumps too', async () => {
+    const wrapper = await mountTurn()
+    await wrapper.find('#jump').trigger('click')
+    await flushPromises()
+    const changes = wrapper.emitted('change')
+    expect(changes?.[changes.length - 1]).toEqual([4])
+  })
+
+  it('emits unified flip-start and flip-end with direction', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn()
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('flip-start')).toEqual([['left']])
+    expect(wrapper.emitted('flip-end')).toEqual([['left']])
+  })
+
+  it('emits ready once after the first rasterization', async () => {
+    const wrapper = await mountTurn()
+    expect(wrapper.emitted('ready')).toHaveLength(1)
+    await wrapper.vm.refresh()
+    await flushPromises()
+    expect(wrapper.emitted('ready')).toHaveLength(1)
   })
 
   it('follows external modelValue changes', async () => {
@@ -267,5 +291,52 @@ describe('VueTurn', () => {
     await flushPromises()
     expect(second.find('#indicator').text()).toBe('2/6')
     expect(first.find('#indicator').text()).toBe('1/6')
+  })
+
+  it('re-rasterizes when page content changes', async () => {
+    const content = ref('initial')
+    const wrapper = mount(VueTurn, {
+      slots: {
+        default: () => [h(TurnItem, null, { default: () => [h('div', content.value)] })],
+        toolbar,
+      },
+    })
+    await flushPromises()
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(1)
+    content.value = 'updated'
+    await flushPromises()
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('#indicator').text()).toBe('1/1')
+  })
+
+  it('keeps navigation consistent when pages are added dynamically', async () => {
+    const count = ref(4)
+    const wrapper = mount(VueTurn, {
+      slots: {
+        default: () => pages(count.value),
+        toolbar,
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('1/4')
+    count.value = 6
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    // 新增页也完成了光栅化
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(10)
+  })
+
+  it('exposes next/prev and readonly state on the instance api', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn()
+    expect(wrapper.vm.page).toBe(1)
+    expect(wrapper.vm.numPages).toBe(6)
+    expect(wrapper.vm.isFlipping).toBe(false)
+    wrapper.vm.next()
+    await flushPromises()
+    expect(wrapper.vm.page).toBe(2)
+    wrapper.vm.prev()
+    await flushPromises()
+    expect(wrapper.vm.page).toBe(1)
   })
 })

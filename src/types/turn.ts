@@ -23,6 +23,8 @@ export interface FlipSpec {
   toFitWidth?: number
 }
 
+export type FlipDirection = ForwardDirection
+
 export interface TurnSlotProps {
   page: number
   numPages: number
@@ -31,5 +33,20 @@ export interface TurnSlotProps {
   canFlipRight: boolean
   flipLeft: () => void
   flipRight: () => void
+  next: () => void
+  prev: () => void
   goToPage: (page: number) => void
+  refresh: () => Promise<void>
+}
+
+export interface TurnInstance {
+  flipLeft: () => void
+  flipRight: () => void
+  next: () => void
+  prev: () => void
+  goToPage: (page: number) => void
+  refresh: () => Promise<void>
+  readonly page: number
+  readonly numPages: number
+  readonly isFlipping: boolean
 }
