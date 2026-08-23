@@ -14,19 +14,32 @@ const router = useRouter()
 let syncing = false
 const pendingPage = ref<number | null>(null)
 
-watch(
-  () => route.params.page,
-  (value) => {
-    if (syncing) return
-    const target = Number(value) - 1
-    if (!Number.isFinite(target) || target < 0) return
+// 解析路由页码：仅接受正整数；非法值（abc/0/负数等）回退第 1 页并纠正 URL
+function applyRoutePage() {
+  if (syncing) return
+  const raw = route.params.page
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const parsed = value === undefined ? NaN : Number(value)
+  const valid = Number.isInteger(parsed) && parsed >= 1
+  if (valid && parsed > 1) {
+    const target = parsed - 1
     if (store.isFlipping) {
       pendingPage.value = target
     } else {
       store.goToPage(target)
     }
-  },
-)
+    return
+  }
+  if (!valid && value !== undefined) {
+    store.goToPage(0)
+    syncing = true
+    router.replace({ name: 'book', params: { page: String(store.page) } }).finally(() => {
+      syncing = false
+    })
+  }
+}
+
+watch(() => route.params.page, applyRoutePage)
 
 watch(
   () => store.page,
@@ -50,12 +63,7 @@ watch(
   },
 )
 
-onMounted(() => {
-  const target = Number(route.params.page) - 1
-  if (Number.isFinite(target) && target > 0) {
-    store.goToPage(target)
-  }
-})
+onMounted(applyRoutePage)
 </script>
 
 <template>

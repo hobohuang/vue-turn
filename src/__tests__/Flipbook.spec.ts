@@ -29,6 +29,7 @@ vi.mock('@/composables/useFlipbookRenderer', () => ({
   useFlipbookRenderer: () => ({
     container: ref(null),
     containerSize: reactive({ width: 900, height: 600 }),
+    webglSupported: ref(true),
     setStaticPages: mocks.setStaticPages,
     applyStaticTexture: mocks.applyStaticTexture,
     startFlip: mocks.startFlip,
@@ -185,5 +186,43 @@ describe('Flipbook', () => {
     await flushPromises()
     expect(wrapper.find('#indicator').text()).toBe('1/6')
     expect(useBookStore().isFlipping).toBe(true)
+  })
+
+  it('keeps working when a page texture fails to rasterize', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture
+      .mockResolvedValueOnce({ dispose: vi.fn<() => void>() })
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValue({ dispose: vi.fn<() => void>() })
+    const wrapper = await mountFlipbook()
+    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('disposes textures that resolve after unmount', async () => {
+    const dispose = vi.fn<() => void>()
+    const resolvers: Array<() => void> = []
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(
+      () =>
+        new Promise<FakeTexture>((resolve) => {
+          resolvers.push(() => resolve({ dispose }))
+        }),
+    )
+    const wrapper = mount(Flipbook, {
+      props: { numPages: 2 },
+      slots: { default: toolbar },
+    })
+    await flushPromises()
+    wrapper.unmount()
+    resolvers.forEach((resolve) => resolve())
+    await flushPromises()
+    expect(dispose).toHaveBeenCalledTimes(2)
   })
 })

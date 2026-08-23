@@ -16,6 +16,7 @@ export interface FlipbookRendererOptions {
 export function useFlipbookRenderer(options: FlipbookRendererOptions) {
   const container = ref<HTMLElement | null>(null)
   const containerSize = reactive({ width: 0, height: 0 })
+  const webglSupported = ref(true)
   let scene: FlipbookScene | null = null
   let observer: ResizeObserver | null = null
 
@@ -23,6 +24,7 @@ export function useFlipbookRenderer(options: FlipbookRendererOptions) {
     const el = container.value
     if (!el) return
     scene = new FlipbookScene({ container: el, ...options })
+    webglSupported.value = scene.hasRenderer
     const rect = el.getBoundingClientRect()
     containerSize.width = rect.width
     containerSize.height = rect.height
@@ -62,8 +64,13 @@ export function useFlipbookRenderer(options: FlipbookRendererOptions) {
     duration: number,
     onDone: () => void,
   ) {
-    scene?.startFlip(spec, frontTexture, backTexture, duration, onDone)
+    if (scene) {
+      scene.startFlip(spec, frontTexture, backTexture, duration, onDone)
+    } else {
+      // 场景未建立时同步提交，避免翻页状态锁死
+      onDone()
+    }
   }
 
-  return { container, containerSize, setStaticPages, applyStaticTexture, startFlip }
+  return { container, containerSize, webglSupported, setStaticPages, applyStaticTexture, startFlip }
 }

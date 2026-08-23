@@ -31,6 +31,7 @@ vi.mock('@/composables/useFlipbookRenderer', () => ({
   useFlipbookRenderer: () => ({
     container: ref(null),
     containerSize: reactive({ width: 900, height: 600 }),
+    webglSupported: ref(true),
     setStaticPages: mocks.setStaticPages,
     applyStaticTexture: mocks.applyStaticTexture,
     startFlip: mocks.startFlip,
@@ -43,15 +44,19 @@ vi.mock('@/lib/textureFactory', () => ({
 }))
 
 describe('App', () => {
-  it('renders the book view at /book', async () => {
-    mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
-    const router = createRouter({
+  function createTestRouter() {
+    return createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: '/', redirect: '/book' },
         { path: '/book/:page?', name: 'book', component: BookView },
       ],
     })
+  }
+
+  it('renders the book view at /book', async () => {
+    mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
+    const router = createTestRouter()
     const wrapper = mount(App, {
       global: { plugins: [createPinia(), router] },
     })
@@ -59,5 +64,16 @@ describe('App', () => {
     await flushPromises()
     expect(wrapper.findComponent(Flipbook).exists()).toBe(true)
     expect(wrapper.find('.indicator').text()).toBe('第 1 / 10 页')
+  })
+
+  it('corrects an invalid route page back to page one', async () => {
+    mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
+    const router = createTestRouter()
+    mount(App, {
+      global: { plugins: [createPinia(), router] },
+    })
+    router.push('/book/abc')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/book/1')
   })
 })

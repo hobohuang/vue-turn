@@ -47,23 +47,38 @@ const emit = defineEmits<{
 }>()
 
 const store = useBookStore()
-const { container, containerSize, setStaticPages, applyStaticTexture, startFlip } =
-  useFlipbookRenderer({
-    pageAspect: props.pageAspect,
-    nPolygons: props.nPolygons,
-    perspective: props.perspective,
-    ambient: props.ambient,
-    gloss: props.gloss,
-    curl: props.curl,
-  })
+const {
+  container,
+  containerSize,
+  webglSupported,
+  setStaticPages,
+  applyStaticTexture,
+  startFlip,
+} = useFlipbookRenderer({
+  pageAspect: props.pageAspect,
+  nPolygons: props.nPolygons,
+  perspective: props.perspective,
+  ambient: props.ambient,
+  gloss: props.gloss,
+  curl: props.curl,
+})
 
 const pageEls = ref<HTMLElement[]>([])
 const textures = new Map<number, THREE.Texture>()
+let disposed = false
+
+// props 运行时校验：非法值回退到默认值，避免污染几何与动画时长
+const safeNumPages = computed(() =>
+  Number.isFinite(props.numPages) ? Math.max(0, Math.floor(props.numPages)) : 0,
+)
+const safeFlipDuration = computed(() =>
+  Number.isFinite(props.flipDuration) && props.flipDuration > 0 ? props.flipDuration : 900,
+)
 
 // 使用 watch 而非 watchEffect：clampAndAlign 会读取 currentPage，
 // watchEffect 会在翻页提交后重跑并把封面/封底的落点重新对齐到跨页
 watch(
-  () => [props.forwardDirection, props.numPages] as const,
+  () => [props.forwardDirection, safeNumPages.value] as const,
   ([direction, count]) => {
     store.setForwardDirection(direction)
     store.setNumPages(count)
@@ -85,7 +100,7 @@ function renderStatic() {
     currentPage: store.currentPage,
     displayedPages: store.displayedPages,
     forwardDirection: props.forwardDirection,
-    numPages: props.numPages,
+    numPages: safeNumPages.value,
   })
   setStaticPages(placements, (index) => textures.get(index) ?? null)
 }
@@ -110,7 +125,7 @@ function flip(trigger: 'left' | 'right') {
     forwardDirection: props.forwardDirection,
     backward: !advancing,
     pageAspect: props.pageAspect,
-    numPages: props.numPages,
+    numPages: safeNumPages.value,
   })
   setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null)
   const onDone = () => {
@@ -127,7 +142,7 @@ function flip(trigger: 'left' | 'right') {
     spec,
     textures.get(spec.frontIndex) ?? null,
     textures.get(spec.backIndex) ?? null,
-    props.flipDuration,
+    safeFlipDuration.value,
     onDone,
   )
 }
@@ -139,7 +154,7 @@ function goToPage(page: number) {
 
 const slotProps = computed<FlipbookSlotProps>(() => ({
   page: store.page,
-  numPages: props.numPages,
+  numPages: safeNumPages.value,
   isFlipping: store.isFlipping,
   canFlipLeft: store.canFlipLeft,
   canFlipRight: store.canFlipRight,
@@ -152,20 +167,30 @@ onMounted(async () => {
   store.setDisplayedPages(!props.singlePage && containerSize.width > containerSize.height ? 2 : 1)
   store.goToPage(props.startPage - 1)
   await nextTick()
+  // 逐页光栅化并单独兜底：任意一页失败只影响该页纹理，不阻断整体初始化
   await Promise.all(
-    Array.from({ length: props.numPages }, async (_, index) => {
+    Array.from({ length: safeNumPages.value }, async (_, index) => {
       const el = pageEls.value[index]
       if (!el) return
-      textures.set(index, await elementToTexture(el, 1))
+      try {
+        const texture = await elementToTexture(el, 1)
+        if (disposed) {
+          // 卸载发生在生成期间：立即释放，避免纹理泄漏
+          texture.dispose()
+          return
+        }
+        textures.set(index, texture)
+        applyStaticTexture(index, texture)
+      } catch (error) {
+        console.warn(`[Flipbook] 第 ${index + 1} 页纹理生成失败`, error)
+      }
     }),
   )
-  for (const [index, texture] of textures) {
-    applyStaticTexture(index, texture)
-  }
-  renderStatic()
+  if (!disposed) renderStatic()
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   for (const texture of textures.values()) {
     texture.dispose()
   }
@@ -181,11 +206,14 @@ defineExpose({
 
 <template>
   <div class="flipbook">
-    <div ref="container" class="viewport"></div>
+    <div v-if="!webglSupported" class="webgl-fallback">
+      当前环境不支持 WebGL，无法展示 3D 翻页效果。
+    </div>
+    <div v-show="webglSupported" ref="container" class="viewport"></div>
     <slot v-bind="slotProps" />
     <div class="offscreen-pages" aria-hidden="true">
       <div
-        v-for="index in props.numPages"
+        v-for="index in safeNumPages"
         :key="index"
         ref="pageEls"
         class="page-source"
@@ -217,6 +245,19 @@ defineExpose({
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.webgl-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: #e8ecf4;
+  background: rgba(20, 24, 33, 0.6);
+  font-size: 15px;
 }
 
 .offscreen-pages {

@@ -7,6 +7,20 @@ import type { FlipSpec, StaticPlacement } from '@/types/flipbook'
 const STATIC_Z = -0.01
 const FIT_MARGIN = 1.12
 
+function positive(value: number, fallback: number) {
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function createRenderer(): THREE.WebGLRenderer | null {
+  const probe = document.createElement('canvas')
+  if (!probe.getContext('webgl2') && !probe.getContext('webgl')) return null
+  try {
+    return new THREE.WebGLRenderer({ antialias: true, alpha: true })
+  } catch {
+    return null
+  }
+}
+
 export interface FlipbookSceneOptions {
   container: HTMLElement
   pageAspect: number
@@ -50,7 +64,8 @@ export class FlipbookScene {
   private readonly perspective: number
   private readonly curl: number
   private readonly sheetWidth: number
-  private readonly renderer: THREE.WebGLRenderer
+  private readonly renderer: THREE.WebGLRenderer | null
+  private contextLost = false
   private readonly scene = new THREE.Scene()
   private readonly camera: THREE.PerspectiveCamera
   private readonly staticMeshes = new Map<number, StaticEntry>()
@@ -67,17 +82,20 @@ export class FlipbookScene {
 
   constructor(options: FlipbookSceneOptions) {
     this.container = options.container
-    this.pageAspect = options.pageAspect
-    this.nPolygons = options.nPolygons ?? 64
-    this.perspective = options.perspective ?? 2400
+    this.pageAspect = positive(options.pageAspect, 0.75)
+    this.nPolygons = Math.round(positive(options.nPolygons ?? 64, 64))
+    this.perspective = positive(options.perspective ?? 2400, 2400)
     this.curl = options.curl ?? 0.8
     this.sheetWidth = pageWidth(this.pageAspect)
     this.targetFitWidth = this.sheetWidth * 2
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-    this.renderer.setClearColor(0x000000, 0)
-    this.container.appendChild(this.renderer.domElement)
+    this.renderer = createRenderer()
+    if (this.renderer) {
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+      this.renderer.setClearColor(0x000000, 0)
+      this.container.appendChild(this.renderer.domElement)
+      this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost)
+    }
 
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100)
     this.camera.position.set(0, 0, 10)
@@ -96,11 +114,27 @@ export class FlipbookScene {
     return this.sheet !== null
   }
 
+  get hasRenderer() {
+    return this.renderer !== null
+  }
+
+  private onContextLost = (event: Event) => {
+    event.preventDefault()
+    this.contextLost = true
+    // 上下文丢失后动画无法继续，提交翻页回调避免状态锁死
+    const sheet = this.sheet
+    if (sheet) {
+      const onDone = sheet.onDone
+      this.removeSheet()
+      onDone?.()
+    }
+  }
+
   resize(width: number, height: number) {
     if (width <= 0 || height <= 0) return
     this.canvasW = width
     this.canvasH = height
-    this.renderer.setSize(width, height)
+    this.renderer?.setSize(width, height)
     this.camera.aspect = width / height
     this.fitCamera()
     if (this.cameraDuration <= 0 && !this.sheet) {
@@ -178,6 +212,11 @@ export class FlipbookScene {
   }
 
   startFlip(spec: FlipSpec, frontTexture: THREE.Texture | null, backTexture: THREE.Texture | null, duration: number, onDone: () => void) {
+    // 渲染不可用时同步提交翻页，保证状态机不会锁死
+    if (!this.renderer || this.contextLost) {
+      onDone()
+      return
+    }
     if (this.sheet) this.removeSheet()
 
     const worldFromX = spec.worldFromX ?? 0
@@ -257,6 +296,7 @@ export class FlipbookScene {
     group.add(back)
     this.scene.add(group)
 
+    const safeDuration = positive(duration, 900)
     const startTime = performance.now()
     this.sheet = {
       group,
@@ -271,15 +311,15 @@ export class FlipbookScene {
       worldFromX,
       worldToX,
       startTime,
-      duration,
+      duration: safeDuration,
       onDone,
     }
-    const fromFitWidth = spec.fromFitWidth ?? this.targetFitWidth
-    const toFitWidth = spec.toFitWidth ?? this.targetFitWidth
+    const fromFitWidth = positive(spec.fromFitWidth ?? this.targetFitWidth, this.targetFitWidth)
+    const toFitWidth = positive(spec.toFitWidth ?? this.targetFitWidth, this.targetFitWidth)
     this.cameraFrom = this.fitDistance(fromFitWidth)
     this.cameraTo = this.fitDistance(toFitWidth)
     this.cameraStart = startTime
-    this.cameraDuration = duration
+    this.cameraDuration = safeDuration
   }
 
   private updateCamera(now: number) {
@@ -347,7 +387,9 @@ export class FlipbookScene {
     this.updateSheet(now)
     this.updateSlide(now)
     this.updateCamera(now)
-    this.renderer.render(this.scene, this.camera)
+    if (this.renderer && !this.contextLost) {
+      this.renderer.render(this.scene, this.camera)
+    }
     this.rafId = requestAnimationFrame(this.tick)
   }
 
@@ -362,7 +404,10 @@ export class FlipbookScene {
       entry.material.dispose()
     }
     this.staticMeshes.clear()
-    this.renderer.dispose()
-    this.renderer.domElement.remove()
+    if (this.renderer) {
+      this.renderer.domElement.removeEventListener('webglcontextlost', this.onContextLost)
+      this.renderer.dispose()
+      this.renderer.domElement.remove()
+    }
   }
 }
