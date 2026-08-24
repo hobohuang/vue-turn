@@ -38,6 +38,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
 
 vi.mock('@/lib/textureFactory', () => ({
   elementToTexture: mocks.elementToTexture,
+  waitForResources: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }))
 
 describe('App', () => {

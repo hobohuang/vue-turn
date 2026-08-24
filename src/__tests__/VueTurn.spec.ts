@@ -37,6 +37,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
 
 vi.mock('@/lib/textureFactory', () => ({
   elementToTexture: mocks.elementToTexture,
+  waitForResources: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }))
 
 function toolbar(slotProps: TurnSlotProps) {
@@ -338,5 +339,70 @@ describe('VueTurn', () => {
     wrapper.vm.prev()
     await flushPromises()
     expect(wrapper.vm.page).toBe(1)
+  })
+
+  it('flips forward when clicking the right half of the viewport', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn()
+    const viewport = wrapper.find('.viewport')
+    // 模拟点击右半区：clientX 取元素右缘
+    const el = viewport.element as HTMLElement
+    el.getBoundingClientRect = () =>
+      ({ left: 0, width: 900, height: 600 }) as DOMRect
+    await viewport.trigger('click', { clientX: 700 })
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
+  })
+
+  it('does not flip on click when clickToFlip is disabled', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn(6, { clickToFlip: false })
+    const viewport = wrapper.find('.viewport')
+    const el = viewport.element as HTMLElement
+    el.getBoundingClientRect = () =>
+      ({ left: 0, width: 900, height: 600 }) as DOMRect
+    await viewport.trigger('click', { clientX: 700 })
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('1/6')
+  })
+
+  it('flips with arrow keys when focused', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn()
+    const viewport = wrapper.find('.viewport')
+    await viewport.trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    // 回到封面后左键不再前进
+    await viewport.trigger('keydown', { key: 'ArrowLeft' })
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('1/6')
+  })
+
+  it('exposes accessibility attributes on the viewport', async () => {
+    const wrapper = await mountTurn()
+    const viewport = wrapper.find('.viewport')
+    expect(viewport.attributes('role')).toBe('group')
+    expect(viewport.attributes('aria-label')).toBe('翻书')
+    expect(viewport.attributes('tabindex')).toBe('0')
+  })
+
+  it('forces single page when displayedPages is 1', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn(6, { displayedPages: 1 })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    // 单页模式每次只前进一页
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    const spec = mocks.startFlip.mock.calls[0]?.[0]
+    expect(spec?.delta).toBe(1)
+  })
+
+  it('forces double page when displayedPages is 2', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn(6, { displayedPages: 2 })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
   })
 })

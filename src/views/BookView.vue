@@ -67,7 +67,7 @@ applyRoutePage()
           <span class="cover-badge">vue-turn</span>
           <h1 class="cover-title">TURN</h1>
           <p class="cover-subtitle">基于 Three.js 的真实卷曲翻页</p>
-          <p class="cover-meta">Vue 3 · Pinia · Vue Router · TypeScript</p>
+          <p class="cover-meta">Vue 3 · Three.js · TypeScript</p>
         </div>
       </turn-item>
 

@@ -2,10 +2,13 @@ import * as THREE from 'three'
 
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
 import { curledColumns, easeInOutCubic, flipAngle } from '@/lib/pageCurl'
-import type { FlipSpec, StaticPlacement } from '@/types/turn'
+import type { EasingFn, FlipSpec, StaticPlacement } from '@/types/turn'
 
 const STATIC_Z = -0.01
-const FIT_MARGIN = 1.12
+// 相机适配边距默认值：视口相对书宽的外扩比例，越大留白越多
+const DEFAULT_FIT_MARGIN = 1.12
+// 渲染像素比默认上限：平衡清晰度与性能
+const DEFAULT_MAX_PIXEL_RATIO = 2
 
 function positive(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback
@@ -29,6 +32,12 @@ export interface TurnSceneOptions {
   ambient?: number
   gloss?: number
   curl?: number
+  // 相机适配边距（视口外扩比例）
+  fitMargin?: number
+  // 渲染像素比上限
+  maxPixelRatio?: number
+  // 翻页进度缓动函数
+  easing?: EasingFn
 }
 
 interface SheetState {
@@ -63,6 +72,8 @@ export class TurnScene {
   private readonly nPolygons: number
   private readonly perspective: number
   private readonly curl: number
+  private readonly fitMargin: number
+  private readonly easing: EasingFn
   private readonly sheetWidth: number
   private readonly renderer: THREE.WebGLRenderer | null
   private contextLost = false
@@ -86,12 +97,18 @@ export class TurnScene {
     this.nPolygons = Math.round(positive(options.nPolygons ?? 64, 64))
     this.perspective = positive(options.perspective ?? 2400, 2400)
     this.curl = options.curl ?? 0.8
+    this.fitMargin = positive(options.fitMargin ?? DEFAULT_FIT_MARGIN, DEFAULT_FIT_MARGIN)
+    this.easing = options.easing ?? easeInOutCubic
     this.sheetWidth = pageWidth(this.pageAspect)
     this.targetFitWidth = this.sheetWidth * 2
 
     this.renderer = createRenderer()
     if (this.renderer) {
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+      const maxPixelRatio = positive(
+        options.maxPixelRatio ?? DEFAULT_MAX_PIXEL_RATIO,
+        DEFAULT_MAX_PIXEL_RATIO,
+      )
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio))
       this.renderer.setClearColor(0x000000, 0)
       this.container.appendChild(this.renderer.domElement)
       this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost)
@@ -146,8 +163,8 @@ export class TurnScene {
     const vFov = 2 * Math.atan(this.canvasH / (2 * this.perspective))
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (this.canvasW / this.canvasH))
     return Math.max(
-      (fitWidth * FIT_MARGIN) / (2 * Math.tan(hFov / 2)),
-      (PAGE_HEIGHT * FIT_MARGIN) / (2 * Math.tan(vFov / 2)),
+      (fitWidth * this.fitMargin) / (2 * Math.tan(hFov / 2)),
+      (PAGE_HEIGHT * this.fitMargin) / (2 * Math.tan(vFov / 2)),
     )
   }
 
@@ -325,7 +342,7 @@ export class TurnScene {
   private updateCamera(now: number) {
     if (this.cameraDuration <= 0) return
     const t = Math.min(1, (now - this.cameraStart) / this.cameraDuration)
-    const eased = easeInOutCubic(t)
+    const eased = this.easing(t)
     this.camera.position.z = this.cameraFrom + (this.cameraTo - this.cameraFrom) * eased
     if (t >= 1) this.cameraDuration = 0
   }
@@ -333,7 +350,7 @@ export class TurnScene {
   private updateSlide(now: number) {
     if (!this.sheet) return
     const t = Math.min(1, (now - this.sheet.startTime) / this.sheet.duration)
-    const eased = easeInOutCubic(t)
+    const eased = this.easing(t)
     for (const entry of this.staticMeshes.values()) {
       entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * eased
     }
@@ -343,7 +360,7 @@ export class TurnScene {
     const sheet = this.sheet
     if (!sheet) return
     const t = Math.min(1, (now - sheet.startTime) / sheet.duration)
-    const eased = easeInOutCubic(t)
+    const eased = this.easing(t)
     sheet.group.position.x =
       sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * eased
     const theta = flipAngle(t)

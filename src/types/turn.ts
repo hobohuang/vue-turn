@@ -2,6 +2,12 @@ export type ForwardDirection = 'left' | 'right'
 
 export type SheetGeometry = 'A' | 'B'
 
+// 翻页进度缓动函数：输入归一化时间 [0,1]，输出归一化进度
+export type EasingFn = (t: number) => number
+
+// 显示模式：auto 按容器宽高自动判定，1/2 强制单/双页
+export type DisplayMode = 'auto' | 1 | 2
+
 export type Slot = 'left' | 'right' | 'center'
 
 export interface StaticPlacement {

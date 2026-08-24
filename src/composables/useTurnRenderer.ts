@@ -2,7 +2,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type * as THREE from 'three'
 
 import { TurnScene } from '@/lib/TurnScene'
-import type { FlipSpec, StaticPlacement } from '@/types/turn'
+import type { EasingFn, FlipSpec, StaticPlacement } from '@/types/turn'
 
 export interface TurnRendererOptions {
   pageAspect: number
@@ -11,6 +11,9 @@ export interface TurnRendererOptions {
   ambient: number
   gloss: number
   curl: number
+  fitMargin?: number
+  maxPixelRatio?: number
+  easing?: EasingFn
 }
 
 export function useTurnRenderer(options: TurnRendererOptions) {

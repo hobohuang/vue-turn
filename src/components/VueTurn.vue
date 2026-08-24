@@ -31,27 +31,51 @@ import TurnItem from '@/components/TurnItem.vue'
 import { useBookState } from '@/composables/useBookState'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import { computeFlipSpec, spreadLayout } from '@/lib/flipSpec'
-import { elementToTexture } from '@/lib/textureFactory'
-import type { FlipDirection, TurnSlotProps } from '@/types/turn'
+import { elementToTexture, waitForResources } from '@/lib/textureFactory'
+import type { DisplayMode, EasingFn, FlipDirection, TurnSlotProps } from '@/types/turn'
 
 const props = withDefaults(
   defineProps<{
+    /** 当前页码（从 1 开始），支持 v-model 双向绑定 */
     modelValue?: number
+    /** 页面宽高比（宽 / 高） */
     pageAspect?: number
+    /** 单次翻页动画时长（毫秒） */
     flipDuration?: number
+    /** 初始页码（未提供 modelValue 时生效） */
     startPage?: number
+    /** 翻页网格纵向分段数，越大卷曲越平滑 */
     nPolygons?: number
+    /** 透视参考距离（像素），越小透视越强 */
     perspective?: number
+    /** 环境光强度 */
     ambient?: number
+    /** 方向光（纸张光泽）强度 */
     gloss?: number
+    /** 卷曲幅度（0 为纯刚体旋转） */
     curl?: number
+    /** 前进方向：left 为从左向右阅读 */
     forwardDirection?: FlipDirection
-    singlePage?: boolean
-    // 光栅化参数：控制纹理清晰度与内存占用
+    /** 显示模式：auto 按容器宽高自动判定，1/2 强制单/双页 */
+    displayedPages?: DisplayMode
+    /** 离屏光栅化宽度（像素），控制纹理清晰度与内存占用 */
     pageWidth?: number
+    /** 光栅化像素比 */
     pixelRatio?: number
-    // 页面底色（纹理背景）
+    /** 页面底色（纹理背景） */
     pageBackground?: string
+    /** 相机适配边距（视口外扩比例），越大留白越多 */
+    fitMargin?: number
+    /** 渲染像素比上限 */
+    maxPixelRatio?: number
+    /** 翻页进度缓动函数 */
+    easing?: EasingFn
+    /** 是否允许点击视口翻页（右半前进、左半后退） */
+    clickToFlip?: boolean
+    /** 是否允许键盘方向键翻页（需先聚焦组件） */
+    keyboard?: boolean
+    /** 无障碍标签 */
+    ariaLabel?: string
   }>(),
   {
     pageAspect: 0.75,
@@ -63,10 +87,13 @@ const props = withDefaults(
     gloss: 0.35,
     curl: 0.8,
     forwardDirection: 'left',
-    singlePage: false,
+    displayedPages: 'auto',
     pageWidth: 768,
     pixelRatio: 1,
     pageBackground: '#ffffff',
+    clickToFlip: true,
+    keyboard: true,
+    ariaLabel: '翻书',
   },
 )
 
@@ -76,12 +103,13 @@ const emit = defineEmits<{
   'flip-left-end': []
   'flip-right-start': []
   'flip-right-end': []
-  // 方向无关的统一事件
+  /** 方向无关的统一翻页开始事件 */
   'flip-start': [direction: FlipDirection]
+  /** 方向无关的统一翻页结束事件 */
   'flip-end': [direction: FlipDirection]
-  // 页码变化（翻页提交与直接跳转均触发）
+  /** 页码变化（翻页提交与直接跳转均触发） */
   change: [page: number]
-  // 首次纹理就绪
+  /** 首次纹理就绪 */
   ready: []
 }>()
 
@@ -101,6 +129,9 @@ const {
   ambient: props.ambient,
   gloss: props.gloss,
   curl: props.curl,
+  fitMargin: props.fitMargin,
+  maxPixelRatio: props.maxPixelRatio,
+  easing: props.easing,
 })
 
 const slots = useSlots()
@@ -164,10 +195,17 @@ watch(
   { immediate: true },
 )
 
+// 显示模式解析：auto 按容器宽高判定，1/2 为强制值
+function resolveDisplayedPages(): 1 | 2 {
+  if (props.displayedPages === 1) return 1
+  if (props.displayedPages === 2) return 2
+  return containerSize.width > containerSize.height ? 2 : 1
+}
+
 watch(
-  () => [containerSize.width, containerSize.height] as const,
-  ([width, height]) => {
-    state.setDisplayedPages(!props.singlePage && width > height ? 2 : 1)
+  () => [containerSize.width, containerSize.height, props.displayedPages] as const,
+  () => {
+    state.setDisplayedPages(resolveDisplayedPages())
   },
   { immediate: true },
 )
@@ -280,11 +318,40 @@ function goToPage(page: number) {
   state.goToPage(page - 1)
 }
 
+// 点击视口翻页：右半前进、左半后退（与真实书籍一致）
+function onViewportClick(event: MouseEvent) {
+  if (!props.clickToFlip || state.isFlipping.value) return
+  const target = event.currentTarget as HTMLElement | null
+  if (!target) return
+  const rect = target.getBoundingClientRect()
+  if (rect.width <= 0) return
+  if (event.clientX - rect.left >= rect.width / 2) {
+    next()
+  } else {
+    prev()
+  }
+}
+
+// 键盘方向键翻页：仅在组件聚焦时生效
+function onKeydown(event: KeyboardEvent) {
+  if (!props.keyboard) return
+  if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    next()
+  } else if (event.key === 'ArrowLeft') {
+    event.preventDefault()
+    prev()
+  }
+}
+
 // 光栅化单页：seq 过期（内容再次变化/卸载）时丢弃结果，旧纹理立即释放
 async function rasterizePage(index: number, seq: number) {
   const el = pageEls.value[index]
   if (!el) return
   try {
+    // 等待页内图片与字体就绪，避免光栅化出缺图/缺字的纹理
+    await waitForResources(el)
+    if (disposed || seq !== rasterSeq) return
     const texture = await elementToTexture(el, safePixelRatio.value, props.pageBackground)
     if (disposed || seq !== rasterSeq) {
       texture.dispose()
@@ -351,9 +418,7 @@ const slotProps = computed<TurnSlotProps>(() => ({
 }))
 
 onMounted(async () => {
-  state.setDisplayedPages(
-    !props.singlePage && containerSize.width > containerSize.height ? 2 : 1,
-  )
+  state.setDisplayedPages(resolveDisplayedPages())
   const initial = props.modelValue ?? props.startPage
   state.goToPage((Number.isFinite(initial) ? Math.round(initial) : 1) - 1)
   syncPageCount()
@@ -410,7 +475,16 @@ defineExpose({
     <div v-if="!webglSupported" class="webgl-fallback">
       <slot name="fallback">当前环境不支持 WebGL，无法展示 3D 翻页效果。</slot>
     </div>
-    <div v-show="webglSupported" ref="container" class="viewport"></div>
+    <div
+      v-show="webglSupported"
+      ref="container"
+      class="viewport"
+      role="group"
+      :aria-label="ariaLabel"
+      :tabindex="keyboard ? 0 : undefined"
+      @click="onViewportClick"
+      @keydown="onKeydown"
+    ></div>
     <slot name="toolbar" v-bind="slotProps" />
     <div ref="offscreenEl" class="offscreen-pages" aria-hidden="true">
       <div
@@ -441,6 +515,11 @@ defineExpose({
   position: absolute;
   inset: 0;
   overflow: hidden;
+}
+
+.viewport:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.9);
+  outline-offset: -2px;
 }
 
 .viewport :deep(canvas) {

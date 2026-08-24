@@ -8,6 +8,9 @@
   "main": "./dist/vue-turn.cjs",
   "module": "./dist/vue-turn.mjs",
   "types": "./dist/index.d.ts",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
