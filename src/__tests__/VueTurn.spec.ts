@@ -66,6 +66,9 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     getZoom: mocks.getZoom,
     panBy: mocks.panBy,
     pickPage: mocks.pickPage,
+    setStacks: vi.fn<() => void>(),
+    pickStack: vi.fn<() => null>().mockReturnValue(null),
+    setStackHover: vi.fn<() => void>(),
   }),
 }))
 

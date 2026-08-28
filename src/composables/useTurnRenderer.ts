@@ -2,7 +2,14 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type * as THREE from 'three'
 
 import { TurnScene, type PagePick } from '@/lib/TurnScene'
-import type { EasingFn, FlipSheetOptions, FlipSpec, StaticPlacement } from '@/types/turn'
+import type {
+  EasingFn,
+  FlipSheetOptions,
+  FlipSpec,
+  StackHover,
+  StackVisual,
+  StaticPlacement,
+} from '@/types/turn'
 
 export interface TurnRendererOptions {
   pageAspect: number
@@ -68,6 +75,19 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     scene?.applyStaticTexture(index, texture)
   }
 
+  // 纸叠：to 省略时吸附到 from（空闲布局），否则随翻页动画插值
+  function setStacks(from: StackVisual | null, to?: StackVisual | null) {
+    scene?.setStacks(from, to)
+  }
+
+  function pickStack(clientX: number, clientY: number) {
+    return scene ? scene.pickStack(clientX, clientY) : null
+  }
+
+  function setStackHover(hover: StackHover | null) {
+    scene?.setStackHover(hover)
+  }
+
   function startFlip(
     spec: FlipSpec,
     frontTexture: THREE.Texture | null,
@@ -130,6 +150,9 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     maxAnisotropy,
     setStaticPages,
     applyStaticTexture,
+    setStacks,
+    pickStack,
+    setStackHover,
     startFlip,
     beginDragFlip,
     setDragProgress,

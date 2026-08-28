@@ -33,6 +33,29 @@ export interface FlipSpec {
 
 export type FlipDirection = ForwardDirection
 
+/** 纸叠条带一侧的渲染几何：贴在可见页面外缘的页层块 */
+export interface StackSideVisual {
+  /** 条带内侧贴合的页面外缘 x（世界坐标） */
+  edgeX: number
+  /** 厚度（世界单位） */
+  thickness: number
+  /** 伸展方向：-1 向左 / +1 向右 */
+  dir: 1 | -1
+}
+
+/** 纸叠条带整体（渲染用） */
+export interface StackVisual {
+  left: StackSideVisual | null
+  right: StackSideVisual | null
+}
+
+/** 纸叠高亮：start/end 为沿厚度方向自内侧算起的比例 [0,1] */
+export interface StackHover {
+  side: 'left' | 'right'
+  start: number
+  end: number
+}
+
 /** 页面热区：坐标与尺寸均为占整页（TurnItem 内容）的比例，左上角为原点 */
 export interface PageRegion {
   x: number

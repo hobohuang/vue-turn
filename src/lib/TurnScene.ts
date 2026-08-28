@@ -2,7 +2,14 @@ import * as THREE from 'three'
 
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
 import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
-import type { EasingFn, FlipSheetOptions, FlipSpec, StaticPlacement } from '@/types/turn'
+import type {
+  EasingFn,
+  FlipSheetOptions,
+  FlipSpec,
+  StackHover,
+  StackVisual,
+  StaticPlacement,
+} from '@/types/turn'
 
 const STATIC_Z = -0.01
 // 相机适配边距默认值：视口相对书宽的外扩比例，越大留白越多
@@ -11,6 +18,11 @@ const DEFAULT_FIT_MARGIN = 1.12
 const DEFAULT_MAX_PIXEL_RATIO = 2
 // 最大缩放倍数默认值
 const DEFAULT_MAX_ZOOM = 3
+// 纸叠条带 z 向厚度（世界单位）：页高 2 时约 1.6%，模拟翻开书页堆的鼓起
+const STACK_DEPTH = 0.032
+// 纸叠条纹纹理单元的世界宽度：单元内画约 20 条页线，
+// 保证常见视口下线距约 2px——既细密又可见，不会糊成色块
+const STACK_STRIPE_UNIT = 0.09
 // 拖拽松手后回弹/补完动画的最短时长
 const MIN_SETTLE_DURATION = 120
 
@@ -30,6 +42,46 @@ function createRenderer(): THREE.WebGLRenderer | null {
   } catch {
     return null
   }
+}
+
+// 程序化生成纸叠页边纹理：亮纸色底 + 细密页线 + 上下边缘阴影。
+// 一个纹理单元对应 STACK_STRIPE_UNIT 世界宽度，线距换算到屏幕约 2px，
+// 密度不随厚度取整跳变（repeat 取小数，保持世界间距恒定）
+function createStackTexture(): THREE.Texture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')
+  if (ctx) {
+    // 纸页切口的暖白底色，接近页面白避免色块突兀
+    ctx.fillStyle = '#efeade'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    // 页线：间距 10~14px 随机、宽 1~2px、深浅随机，模拟纸页切口的细密层理
+    for (let x = 0; x < canvas.width; x += 10 + Math.floor(Math.random() * 5)) {
+      const w = Math.random() < 0.25 ? 2 : 1
+      const alpha = 0.08 + Math.random() * 0.2
+      ctx.fillStyle = `rgba(122, 106, 82, ${alpha.toFixed(3)})`
+      ctx.fillRect(x, 0, w, canvas.height)
+    }
+    // 少量更深的分隔线，模拟纸页局部错位形成的"书口纹"
+    for (let i = 0; i < 4; i++) {
+      const x = Math.floor(Math.random() * canvas.width)
+      ctx.fillStyle = 'rgba(122, 106, 82, 0.3)'
+      ctx.fillRect(x, 0, 1, canvas.height)
+    }
+    // 上下边缘轻微压暗：页堆顶/底边与页面衔接处的柔和阴影
+    const shade = ctx.createLinearGradient(0, 0, 0, canvas.height)
+    shade.addColorStop(0, 'rgba(60, 50, 36, 0.16)')
+    shade.addColorStop(0.12, 'rgba(60, 50, 36, 0)')
+    shade.addColorStop(0.88, 'rgba(60, 50, 36, 0)')
+    shade.addColorStop(1, 'rgba(60, 50, 36, 0.16)')
+    ctx.fillStyle = shade
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+  }
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.wrapS = THREE.RepeatWrapping
+  return texture
 }
 
 export interface TurnSceneOptions {
@@ -102,6 +154,16 @@ interface StaticEntry {
   spread: boolean
 }
 
+// 纸叠条带一侧的运行时状态：网格为缩放的单位盒，厚度/位置随翻页插值更新
+interface StackSideMesh {
+  mesh: THREE.Mesh
+  material: THREE.MeshLambertMaterial
+  texture: THREE.Texture
+  edgeX: number
+  thickness: number
+  dir: 1 | -1
+}
+
 interface CameraTarget {
   x: number
   y: number
@@ -132,8 +194,21 @@ export class TurnScene {
   private readonly camera: THREE.PerspectiveCamera
   private readonly raycaster = new THREE.Raycaster()
   private readonly staticMeshes = new Map<number, StaticEntry>()
+  // 纸叠条带（左右各一，懒创建）
+  private readonly stackSides: { left: StackSideMesh | null; right: StackSideMesh | null } = {
+    left: null,
+    right: null,
+  }
+  private stackFrom: StackVisual | null = null
+  private stackTo: StackVisual | null = null
+  private stackGeometry: THREE.BoxGeometry | null = null
+  private stackBaseTexture: THREE.Texture | null = null
+  private stackHighlight: THREE.Mesh | null = null
+  private stackHighlightMaterial: THREE.MeshBasicMaterial | null = null
   private sheet: SheetState | null = null
   private targetFitWidth: number
+  // 页面布局适配宽度（不含纸叠）
+  private pageFitWidth: number
   // 当前缩放级别（1 为未缩放），显式维护，resize/布局变化时按它重新适配相机距离
   private zoomLevel = 1
   private camTarget: CameraTarget = { x: 0, y: 0, z: 10 }
@@ -154,6 +229,7 @@ export class TurnScene {
     this.maxZoom = positive(options.maxZoom ?? DEFAULT_MAX_ZOOM, DEFAULT_MAX_ZOOM)
     this.easing = options.easing ?? easeInOutCubic
     this.sheetWidth = pageWidth(this.pageAspect)
+    this.pageFitWidth = this.sheetWidth * 2
     this.targetFitWidth = this.sheetWidth * 2
 
     this.renderer = createRenderer()
@@ -214,6 +290,8 @@ export class TurnScene {
       entry.material.dispose()
     }
     this.staticMeshes.clear()
+    // 纸叠同样失效，恢复时随 renderStatic 重建
+    this.disposeStacks()
   }
 
   private onContextRestoredHandler = () => {
@@ -276,11 +354,12 @@ export class TurnScene {
     }
     this.staticMeshes.clear()
 
-    this.targetFitWidth = placements.reduce(
+    this.pageFitWidth = placements.reduce(
       (width, p) =>
         Math.max(width, p.spread ? this.sheetWidth * 2 : Math.abs(this.slotX(p.slot)) * 2 + this.sheetWidth),
       this.sheetWidth,
     )
+    this.recomputeFitWidth()
 
     for (const p of placements) {
       // 跨页项：双倍宽度网格，纹理为整张跨页图
@@ -320,6 +399,180 @@ export class TurnScene {
     if (!entry) return
     entry.material.map = texture
     entry.material.needsUpdate = true
+  }
+
+  // 适配宽度 = 页面布局宽度 + 纸叠两侧厚度（空闲态以 stackTo 计）
+  private recomputeFitWidth() {
+    this.targetFitWidth =
+      this.pageFitWidth + (this.stackTo?.left?.thickness ?? 0) + (this.stackTo?.right?.thickness ?? 0)
+  }
+
+  // 纸叠条带：贴在可见页面外缘的页层块，厚度随翻页插值变化。
+  // to 省略时直接吸附到 from（空闲布局）；同时给出时由翻页动画驱动插值。
+  setStacks(from: StackVisual | null, to?: StackVisual | null) {
+    this.stackFrom = from
+    this.stackTo = to ?? from
+    this.recomputeFitWidth()
+    this.hideStackHighlight()
+    // 无纸张动画时立即应用终点（渲染不可用的兜底路径也走到这里）
+    if (!this.sheet) this.applyStacks(1)
+  }
+
+  // 应用插值进度 p 下的纸叠几何：edgeX 与厚度在 from/to 间线性过渡；
+  // 某一侧状态缺失时按厚度 0、边缘取另一状态插值（从无到有生长）。
+  // edgeX 已含布局差异（居中封面半页宽 ↔ 展开跨页整页宽），无需叠加翻页世界偏移
+  private applyStacks(p: number) {
+    const from = this.stackFrom
+    const to = this.stackTo
+    for (const side of ['left', 'right'] as const) {
+      const f = from?.[side] ?? null
+      const t = to?.[side] ?? null
+      const entry = this.stackSides[side]
+      if (!f && !t) {
+        if (entry) entry.mesh.visible = false
+        continue
+      }
+      const fe = f ? f.edgeX : t!.edgeX
+      const te = t ? t.edgeX : f!.edgeX
+      const ft = f?.thickness ?? 0
+      const tt = t?.thickness ?? 0
+      const e = entry ?? this.ensureStackSide(side)
+      e.dir = (t ?? f)!.dir
+      e.edgeX = fe + (te - fe) * p
+      e.thickness = ft + (tt - ft) * p
+      e.mesh.visible = e.thickness > 1e-4
+      e.mesh.scale.x = Math.max(e.thickness, 1e-4)
+      e.mesh.position.x = e.edgeX + (e.dir * e.thickness) / 2
+      // 条纹密度保持世界间距恒定：repeat 取小数，厚度连续变化时疏密不跳变
+      e.texture.repeat.set(Math.max(1e-3, e.thickness / STACK_STRIPE_UNIT), 1)
+    }
+  }
+
+  private ensureStackSide(side: 'left' | 'right'): StackSideMesh {
+    const existing = this.stackSides[side]
+    if (existing) return existing
+    if (!this.stackGeometry) {
+      // 高度略低于页面：内页通常小于封面，留出的收边让纸叠不像贴纸块
+      this.stackGeometry = new THREE.BoxGeometry(1, PAGE_HEIGHT * 0.988, STACK_DEPTH)
+    }
+    if (!this.stackBaseTexture) this.stackBaseTexture = createStackTexture()
+    // 各侧克隆纹理以独立设置 repeat（条纹密度随厚度变化）
+    const texture = this.stackBaseTexture.clone()
+    texture.needsUpdate = true
+    const material = new THREE.MeshLambertMaterial({ color: 0xffffff, map: texture })
+    const mesh = new THREE.Mesh(this.stackGeometry, material)
+    mesh.visible = false
+    this.scene.add(mesh)
+    const entry: StackSideMesh = {
+      mesh,
+      material,
+      texture,
+      edgeX: 0,
+      thickness: 0,
+      dir: side === 'left' ? -1 : 1,
+    }
+    this.stackSides[side] = entry
+    return entry
+  }
+
+  // 射线拾取纸叠：返回命中侧与自内侧算起的厚度比例
+  pickStack(clientX: number, clientY: number): { side: 'left' | 'right'; fraction: number } | null {
+    if (!this.renderer || this.contextLost) return null
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return null
+    const entries = (['left', 'right'] as const)
+      .map((side) => ({ side, entry: this.stackSides[side] }))
+      .filter(
+        (item): item is { side: 'left' | 'right'; entry: StackSideMesh } =>
+          item.entry !== null && item.entry.mesh.visible && item.entry.thickness > 0,
+      )
+    if (entries.length === 0) return null
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    )
+    this.raycaster.setFromCamera(ndc, this.camera)
+    const hits = this.raycaster.intersectObjects(
+      entries.map((item) => item.entry.mesh),
+      false,
+    )
+    const hit = hits[0]
+    if (!hit) return null
+    const found = entries.find((item) => item.entry.mesh === hit.object)
+    if (!found) return null
+    const { entry } = found
+    const fraction = ((hit.point.x - entry.edgeX) * entry.dir) / entry.thickness
+    return { side: found.side, fraction: clamp(fraction, 0, 0.9999) }
+  }
+
+  // 设置纸叠高亮条带（null 清除）
+  setStackHover(hover: StackHover | null) {
+    if (!hover) {
+      this.hideStackHighlight()
+      return
+    }
+    const entry = this.stackSides[hover.side]
+    if (!entry || !entry.mesh.visible || entry.thickness <= 0) {
+      this.hideStackHighlight()
+      return
+    }
+    if (!this.stackHighlight) {
+      this.stackHighlightMaterial = new THREE.MeshBasicMaterial({
+        color: 0x7fa8ff,
+        transparent: true,
+        opacity: 0.38,
+        depthWrite: false,
+      })
+      this.stackHighlight = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, PAGE_HEIGHT * 0.988),
+        this.stackHighlightMaterial,
+      )
+      this.stackHighlight.visible = false
+      this.scene.add(this.stackHighlight)
+    }
+    // 层过薄时保证最小可见高亮宽度
+    const width = Math.max((hover.end - hover.start) * entry.thickness, 0.01)
+    const center = (hover.start + hover.end) / 2
+    this.stackHighlight.visible = true
+    this.stackHighlight.scale.x = width
+    this.stackHighlight.position.set(
+      entry.edgeX + entry.dir * center * entry.thickness,
+      0,
+      STACK_DEPTH / 2 + 0.003,
+    )
+  }
+
+  private hideStackHighlight() {
+    if (this.stackHighlight) this.stackHighlight.visible = false
+  }
+
+  private stackExtentWidth(visual: StackVisual | null): number {
+    return (visual?.left?.thickness ?? 0) + (visual?.right?.thickness ?? 0)
+  }
+
+  // 释放纸叠资源（上下文丢失/组件销毁时）
+  private disposeStacks() {
+    for (const side of ['left', 'right'] as const) {
+      const entry = this.stackSides[side]
+      if (!entry) continue
+      this.scene.remove(entry.mesh)
+      entry.material.dispose()
+      entry.texture.dispose()
+      this.stackSides[side] = null
+    }
+    if (this.stackHighlight) {
+      this.scene.remove(this.stackHighlight)
+      this.stackHighlight.geometry.dispose()
+      this.stackHighlight = null
+    }
+    this.stackHighlightMaterial?.dispose()
+    this.stackHighlightMaterial = null
+    this.stackGeometry?.dispose()
+    this.stackGeometry = null
+    this.stackBaseTexture?.dispose()
+    this.stackBaseTexture = null
+    this.stackFrom = null
+    this.stackTo = null
   }
 
   private slotX(slot: 'left' | 'right' | 'center') {
@@ -472,9 +725,16 @@ export class TurnScene {
     sheet.startTime = startTime
     sheet.duration = positive(duration, 900)
     this.sheet = sheet
-    // 相机从当前位置动画到目标适配距离（缩放/平移被一并复位，级别归 1）
+    // 相机从当前位置动画到目标适配距离（缩放/平移被一并复位，级别归 1）；
+    // 适配宽度计入目标态纸叠厚度，条带不被视口裁剪
     this.zoomLevel = 1
-    this.animateCameraTo(this.fitDistance(sheet.toFitWidth), 0, 0, sheet.duration, startTime)
+    this.animateCameraTo(
+      this.fitDistance(sheet.toFitWidth + this.stackExtentWidth(this.stackTo)),
+      0,
+      0,
+      sheet.duration,
+      startTime,
+    )
   }
 
   // 开始拖拽翻页：返回 false 表示渲染不可用，调用方不应进入拖拽状态
@@ -529,7 +789,9 @@ export class TurnScene {
       MIN_SETTLE_DURATION,
       positive(baseDuration, 900) * Math.abs(target - sheet.progress),
     )
-    const fitWidth = commit ? sheet.toFitWidth : sheet.fromFitWidth
+    const fitWidth =
+      (commit ? sheet.toFitWidth : sheet.fromFitWidth) +
+      this.stackExtentWidth(commit ? this.stackTo : this.stackFrom)
     // 相机复位到适配距离，缩放级别归 1
     this.zoomLevel = 1
     this.animateCameraTo(this.fitDistance(fitWidth), 0, 0, sheet.duration, startTime)
@@ -550,7 +812,9 @@ export class TurnScene {
 
   // 立即完成一张纸张：跳到终点、复位相机并触发回调
   private finishSheet(sheet: SheetState, committed: boolean) {
-    const fitWidth = committed ? sheet.toFitWidth : sheet.fromFitWidth
+    const fitWidth =
+      (committed ? sheet.toFitWidth : sheet.fromFitWidth) +
+      this.stackExtentWidth(committed ? this.stackTo : this.stackFrom)
     // 相机复位到适配距离，缩放级别归 1
     this.zoomLevel = 1
     this.snapCamera(this.fitDistance(fitWidth), 0, 0)
@@ -730,6 +994,8 @@ export class TurnScene {
     for (const entry of this.staticMeshes.values()) {
       entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
     }
+    // 纸叠厚度/位置与静态页同步插值
+    this.applyStacks(slideP)
     this.deformSheet(sheet, pe)
   }
 
@@ -765,6 +1031,7 @@ export class TurnScene {
       entry.material.dispose()
     }
     this.staticMeshes.clear()
+    this.disposeStacks()
     if (this.renderer) {
       this.renderer.domElement.removeEventListener('webglcontextlost', this.onContextLost)
       this.renderer.domElement.removeEventListener(

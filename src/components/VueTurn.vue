@@ -32,7 +32,13 @@ import TurnItem from '@/components/TurnItem.vue'
 import { useBookState } from '@/composables/useBookState'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import type { PagePick } from '@/lib/TurnScene'
-import { computeFlipSpec, spreadLayout } from '@/lib/flipSpec'
+import { computeFlipSpec, pageWidth as pageWidthOf, spreadLayout } from '@/lib/flipSpec'
+import {
+  computeStackSides,
+  pageAtFraction,
+  stackThickness,
+  type StackSide,
+} from '@/lib/pageStack'
 import { elementToTexture, waitForResources } from '@/lib/textureFactory'
 import type {
   BeforeFlipContext,
@@ -42,6 +48,7 @@ import type {
   FlipSheetOptions,
   FlipSpec,
   PageRegion,
+  StackVisual,
   StaticPlacement,
   TurnInstance,
   ViewportPoint,
@@ -109,6 +116,10 @@ const props = withDefaults(
     zoomEnabled?: boolean
     /** 是否允许双击切换缩放（开启后单击翻页会延迟约 260ms 以区分双击） */
     dblClickZoom?: boolean
+    /** 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页变化，可悬停/点击跳页） */
+    stack?: boolean
+    /** 纸叠最大厚度占单页宽度的比例（0~0.5） */
+    stackDepth?: number
   }>(),
   {
     pageAspect: 0.75,
@@ -137,6 +148,8 @@ const props = withDefaults(
     maxZoom: 3,
     zoomEnabled: false,
     dblClickZoom: false,
+    stack: true,
+    stackDepth: 0.08,
   },
 )
 
@@ -166,6 +179,10 @@ const emit = defineEmits<{
   ready: []
   /** 单页光栅化失败 */
   'rasterize-error': [page: number, error: unknown]
+  /** 悬停纸叠层（page 为 null 表示离开），point 为视口内坐标 */
+  'stack-hover': [page: number | null, point?: ViewportPoint]
+  /** 点击纸叠层跳转 */
+  'stack-tap': [page: number]
 }>()
 
 const state = useBookState()
@@ -177,6 +194,9 @@ const {
   maxAnisotropy,
   setStaticPages,
   applyStaticTexture,
+  setStacks,
+  pickStack,
+  setStackHover,
   startFlip,
   beginDragFlip,
   setDragProgress,
@@ -341,6 +361,10 @@ const safePeelZone = computed(() => {
   const value = Number(props.peelZone)
   return Number.isFinite(value) ? Math.min(Math.max(value, 0), 0.5) : 0.12
 })
+const safeStackDepth = computed(() => {
+  const value = Number(props.stackDepth)
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 0.5) : 0.15
+})
 
 // 懒光栅化窗口：覆盖当前可见页 [currentPage, currentPage+spread) 前后各 W 页
 function computeWindow(): [number, number] {
@@ -456,6 +480,56 @@ watch(
 // 最近一次静态布局：rasterizePage 完成后按此判断该把整图还是半图贴到现有网格
 let lastPlacements: StaticPlacement[] = []
 
+// ---------------------------------------------------------------------------
+// 纸叠：书本左右两侧的页层厚度条带（厚度随翻页在两侧间转移）
+// ---------------------------------------------------------------------------
+
+// 某页状态下的纸叠渲染几何
+function stackVisualFor(pageIndex: number): StackVisual {
+  const width = pageWidthOf(props.pageAspect)
+  const sides = computeStackSides({
+    currentPage: pageIndex,
+    displayedPages: state.displayedPages.value,
+    forwardDirection: props.forwardDirection,
+    numPages: pageCount.value,
+    sheetWidth: width,
+  })
+  const maxDepth = width * safeStackDepth.value
+  const toVisual = (side: StackSide | null) =>
+    side
+      ? {
+          edgeX: side.edgeX,
+          dir: side.dir,
+          thickness: stackThickness(side.count, pageCount.value, maxDepth),
+        }
+      : null
+  return { left: toVisual(sides.left), right: toVisual(sides.right) }
+}
+
+// 空闲布局：纸叠吸附到当前页状态
+function applyStacksIdle() {
+  setStacks(props.stack ? stackVisualFor(state.currentPage.value) : null)
+}
+
+// 翻页前置布局：纸叠随动画从当前状态过渡到目标状态。
+// 封面/封底开合时合书侧由 computeStackSides 返回空，
+// 纸叠自动从无到有生长/渐隐消失，不会在硬页落定前提前出现
+function applyStacksFlip(spec: FlipSpec) {
+  if (!props.stack) {
+    setStacks(null)
+    return
+  }
+  setStacks(
+    stackVisualFor(state.currentPage.value),
+    stackVisualFor(state.currentPage.value + spec.delta),
+  )
+}
+
+// 纸叠开关/厚度变化：空闲时立即生效（翻页中由结束后 renderStatic 收敛）
+watch([() => props.stack, safeStackDepth], () => {
+  if (!state.isFlipping.value) applyStacksIdle()
+})
+
 function renderStatic() {
   if (state.isFlipping.value) return
   const placements = spreadLayout({
@@ -501,6 +575,7 @@ function renderStatic() {
     }
     return textures.get(index) ?? null
   })
+  applyStacksIdle()
 }
 
 watch([() => state.currentPage.value, () => state.displayedPages.value], () => {
@@ -573,11 +648,13 @@ function flip(trigger: FlipDirection) {
   if (!emitBeforeFlip(trigger, state.page.value, state.page.value + spec.delta)) return
   // 折角悬停的纸张会被 startFlip 静默替换
   discardPeel()
+  clearStackHover()
   const prevZoom = getZoom()
   state.startFlip()
   emit('flip-start', trigger)
   // 翻页前置布局：相机由翻页动画接管
   setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+  applyStacksFlip(spec)
   const onDone = () => {
     state.commitFlip(spec.delta)
     renderStatic()
@@ -613,8 +690,9 @@ function goToPage(page: number): boolean {
   if (!Number.isFinite(target) || target < 0 || target > pageCount.value - 1) return false
   if (target !== state.currentPage.value) {
     if (!emitBeforeFlip(null, state.page.value, target + 1)) return false
-    // 跳转会重建静态布局，先收起折角悬停的纸张
+    // 跳转会重建静态布局，先收起折角悬停的纸张与纸叠悬停
     releasePeelNow()
+    clearStackHover()
   }
   state.goToPage(target)
   return true
@@ -662,6 +740,21 @@ function onViewportClick(event: MouseEvent) {
   if (disabledRef.value || state.isFlipping.value) return
   const target = event.currentTarget as HTMLElement | null
   if (!target) return
+  // 纸叠点击：跳转到命中页（跳转会自动对齐到所属跨页）
+  if (props.stack && webglSupported.value) {
+    const hit = pickStack(event.clientX, event.clientY)
+    if (hit) {
+      const side =
+        hit.side === 'left' ? currentStackSides.value.left : currentStackSides.value.right
+      if (side && side.count > 0) {
+        const page = pageAtFraction(side, hit.fraction) + 1
+        emit('stack-tap', page)
+        clearStackHover()
+        goToPage(page)
+        return
+      }
+    }
+  }
   // 页面热区优先于翻页（含放大状态下的热区点击）
   const pick = pickPage(event.clientX, event.clientY)
   if (pick) {
@@ -771,6 +864,87 @@ let clickTimer: ReturnType<typeof setTimeout> | null = null
 const PEEL_PROGRESS = 0.07
 const CLICK_DISAMBIGUATION_MS = 260
 
+// ---------------------------------------------------------------------------
+// 纸叠悬停：命中层高亮 + 页码提示，点击跳转对应页
+// ---------------------------------------------------------------------------
+
+// 当前布局下的纸叠页面映射（悬停命中换算页码用）
+const currentStackSides = computed(() =>
+  computeStackSides({
+    currentPage: state.currentPage.value,
+    displayedPages: state.displayedPages.value,
+    forwardDirection: props.forwardDirection,
+    numPages: pageCount.value,
+    sheetWidth: pageWidthOf(props.pageAspect),
+  }),
+)
+
+const stackHover = ref<{ page: number; x: number; y: number } | null>(null)
+let lastStackHoverPage: number | null = null
+
+// 悬停层提示位置：跟随指针并钳制在视口内
+const stackTooltipStyle = computed(() => {
+  const hover = stackHover.value
+  if (!hover) return {}
+  const x = Math.min(hover.x + 16, Math.max(0, containerSize.width - 84))
+  return { left: `${x}px`, top: `${hover.y}px` }
+})
+
+// 命中比例 → 页索引与高亮条带（层过薄时保证最小可见宽度）
+function stackBand(side: StackSide, fraction: number) {
+  const layer = Math.min(side.count - 1, Math.max(0, Math.floor(fraction * side.count)))
+  let start = layer / side.count
+  let end = (layer + 1) / side.count
+  const minBand = 0.12
+  if (end - start < minBand) {
+    const center = (start + end) / 2
+    start = Math.max(0, center - minBand / 2)
+    end = Math.min(1, center + minBand / 2)
+  }
+  return { page: side.first + side.step * layer, start, end }
+}
+
+// 悬停纸叠：命中返回 true（调用方据此抑制折角悬停）
+function updateStackHover(event: PointerEvent): boolean {
+  if (!props.stack || disabledRef.value || state.isFlipping.value || !webglSupported.value) {
+    clearStackHover()
+    return false
+  }
+  const hit = pickStack(event.clientX, event.clientY)
+  if (!hit) {
+    clearStackHover()
+    return false
+  }
+  const side = hit.side === 'left' ? currentStackSides.value.left : currentStackSides.value.right
+  if (!side || side.count <= 0) {
+    clearStackHover()
+    return false
+  }
+  const band = stackBand(side, hit.fraction)
+  const el = event.currentTarget as HTMLElement | null
+  const rect = el?.getBoundingClientRect()
+  const point: ViewportPoint = {
+    x: rect ? event.clientX - rect.left : 0,
+    y: rect ? event.clientY - rect.top : 0,
+  }
+  stackHover.value = { page: band.page + 1, x: point.x, y: point.y }
+  setStackHover({ side: hit.side, start: band.start, end: band.end })
+  // 仅在命中页变化时派发事件，避免高频触发
+  if (lastStackHoverPage !== band.page + 1) {
+    lastStackHoverPage = band.page + 1
+    emit('stack-hover', band.page + 1, point)
+  }
+  return true
+}
+
+function clearStackHover() {
+  if (!stackHover.value && lastStackHoverPage === null) return
+  stackHover.value = null
+  lastStackHoverPage = null
+  setStackHover(null)
+  emit('stack-hover', null)
+}
+
 function isZoomed() {
   return getZoom() > 1.01
 }
@@ -832,6 +1006,7 @@ function ensurePeel(trigger: FlipDirection) {
   if (!spec) return
   // 翻页前置布局：折角悬停不动相机
   setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+  applyStacksFlip(spec)
   const ok = beginDragFlip(
     spec,
     textures.get(spec.frontIndex) ?? null,
@@ -897,6 +1072,7 @@ function onPointerDown(event: PointerEvent) {
   const spec = computeFlipSpecFor(trigger)
   if (!spec) return
   if (!emitBeforeFlip(trigger, state.page.value, state.page.value + spec.delta)) return
+  clearStackHover()
   state.startFlip()
   emit('flip-start', trigger)
   emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
@@ -904,6 +1080,7 @@ function onPointerDown(event: PointerEvent) {
   if (!(sheetOwner === 'peel' && peelTrigger === trigger)) {
     // 翻页前置布局：相机由拖拽结束动画接管
     setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    applyStacksFlip(spec)
     const ok = beginDragFlip(
       spec,
       textures.get(spec.frontIndex) ?? null,
@@ -960,8 +1137,12 @@ function onPointerMove(event: PointerEvent) {
     setDragProgress(drag.progress)
     return
   }
-  // 无按键悬停：折角提示
+  // 无按键悬停：纸叠提示优先于折角提示（两者都在视口边缘区域）
   if (event.buttons !== 0) return
+  if (updateStackHover(event)) {
+    releasePeelNow()
+    return
+  }
   updatePeel(event)
 }
 
@@ -998,7 +1179,10 @@ function onPointerCancel(event: PointerEvent) {
 }
 
 function onPointerLeave() {
-  if (!drag && !pan) releasePeelNow()
+  if (!drag && !pan) {
+    releasePeelNow()
+    clearStackHover()
+  }
 }
 
 // 滚轮缩放：级别按指数随滚轮增量变化
@@ -1049,6 +1233,7 @@ function stop() {
   pan = null
   if (wasDrag || wasPan) suppressClick = true
   clearClickTimer()
+  clearStackHover()
   // stopFlip 同步触发 onDone 完成收尾（含缩放相机复位）
   stopFlip()
   if (sheetOwner === 'peel') {
@@ -1323,6 +1508,9 @@ defineExpose({
       @pointercancel="onPointerCancel"
       @pointerleave="onPointerLeave"
     ></div>
+    <div v-if="stackHover" class="stack-tooltip" :style="stackTooltipStyle" aria-hidden="true">
+      {{ stackHover.page }}
+    </div>
     <div ref="offscreenEl" class="offscreen-pages" aria-hidden="true">
       <div
         v-for="(item, index) in pageItems"
@@ -1381,6 +1569,20 @@ defineExpose({
   color: #e8ecf4;
   background: rgba(20, 24, 33, 0.6);
   font-size: 15px;
+}
+
+.stack-tooltip {
+  position: absolute;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: #e8ecf4;
+  background: rgba(20, 24, 33, 0.82);
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translateY(-50%);
 }
 
 .offscreen-pages {
