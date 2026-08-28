@@ -576,7 +576,8 @@ function flip(trigger: FlipDirection) {
   const prevZoom = getZoom()
   state.startFlip()
   emit('flip-start', trigger)
-  setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null)
+  // 翻页前置布局：相机由翻页动画接管
+  setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
   const onDone = () => {
     state.commitFlip(spec.delta)
     renderStatic()
@@ -829,7 +830,8 @@ function ensurePeel(trigger: FlipDirection) {
   releasePeelNow()
   const spec = computeFlipSpecFor(trigger)
   if (!spec) return
-  setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null)
+  // 翻页前置布局：折角悬停不动相机
+  setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
   const ok = beginDragFlip(
     spec,
     textures.get(spec.frontIndex) ?? null,
@@ -900,7 +902,8 @@ function onPointerDown(event: PointerEvent) {
   emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
   // 该方向的折角悬停已创建纸张：直接接管，避免重建
   if (!(sheetOwner === 'peel' && peelTrigger === trigger)) {
-    setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null)
+    // 翻页前置布局：相机由拖拽结束动画接管
+    setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
     const ok = beginDragFlip(
       spec,
       textures.get(spec.frontIndex) ?? null,

@@ -58,8 +58,10 @@ export function useTurnRenderer(options: TurnRendererOptions) {
   function setStaticPages(
     placements: StaticPlacement[],
     textureOf: (index: number) => THREE.Texture | null,
+    // false 表示翻页前置布局，相机由翻页动画接管
+    refit = true,
   ) {
-    scene?.setStaticPages(placements, textureOf)
+    scene?.setStaticPages(placements, textureOf, refit)
   }
 
   function applyStaticTexture(index: number, texture: THREE.Texture) {

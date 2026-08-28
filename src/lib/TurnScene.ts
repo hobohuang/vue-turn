@@ -134,8 +134,11 @@ export class TurnScene {
   private readonly staticMeshes = new Map<number, StaticEntry>()
   private sheet: SheetState | null = null
   private targetFitWidth: number
+  // 当前缩放级别（1 为未缩放），显式维护，resize/布局变化时按它重新适配相机距离
+  private zoomLevel = 1
   private camTarget: CameraTarget = { x: 0, y: 0, z: 10 }
   private camAnim: CameraAnim | null = null
+  private cameraReady = false
   private canvasW = 0
   private canvasH = 0
   private rafId = 0
@@ -223,17 +226,24 @@ export class TurnScene {
     if (width <= 0 || height <= 0) return
     this.canvasW = width
     this.canvasH = height
+    this.cameraReady = true
     this.renderer?.setSize(width, height)
     this.camera.aspect = width / height
     this.fitCamera()
-    // 空闲时按当前缩放级别重新适配相机距离（翻页/缩放动画进行中不打断）
-    if (!this.camAnim && !this.sheet) {
-      const level = this.getZoom()
-      this.camTarget = {
-        x: this.clampPanX(this.camTarget.x, this.fitDistance(this.targetFitWidth) / level),
-        y: this.clampPanY(this.camTarget.y, this.fitDistance(this.targetFitWidth) / level),
-        z: this.fitDistance(this.targetFitWidth) / level,
-      }
+    // 空闲时按当前布局与缩放级别重新适配相机（翻页/缩放动画进行中不打断）
+    this.refitCamera()
+  }
+
+  // 空闲时按 targetFitWidth 与 zoomLevel 重新适配相机距离；
+  // 相机动画或翻页进行中、画布尺寸未知时跳过（随后由动画终点或下一次 resize 收敛）
+  private refitCamera() {
+    if (!this.cameraReady || this.camAnim || this.sheet) return
+    const z = this.fitDistance(this.targetFitWidth) / this.zoomLevel
+    if (!Number.isFinite(z) || z <= 0) return
+    this.camTarget = {
+      x: this.clampPanX(this.camTarget.x, z),
+      y: this.clampPanY(this.camTarget.y, z),
+      z,
     }
   }
 
@@ -256,6 +266,8 @@ export class TurnScene {
   setStaticPages(
     placements: StaticPlacement[],
     textureOf: (index: number) => THREE.Texture | null,
+    // false 表示这是翻页前置布局（spec.staticPages），相机由翻页动画接管，不重新适配
+    refit = true,
   ) {
     for (const entry of this.staticMeshes.values()) {
       this.scene.remove(entry.mesh)
@@ -298,6 +310,9 @@ export class TurnScene {
       })
     }
     this.fitCamera()
+    // 布局变化（封面居中/跨页/单双页切换/跳转）时相机跟随当前布局适配，
+    // 修复初始封面按跨页宽度适配导致的书本偏小；翻页前置布局不触发
+    if (refit) this.refitCamera()
   }
 
   applyStaticTexture(index: number, texture: THREE.Texture) {
@@ -457,7 +472,8 @@ export class TurnScene {
     sheet.startTime = startTime
     sheet.duration = positive(duration, 900)
     this.sheet = sheet
-    // 相机从当前位置动画到目标适配距离（缩放/平移被一并复位）
+    // 相机从当前位置动画到目标适配距离（缩放/平移被一并复位，级别归 1）
+    this.zoomLevel = 1
     this.animateCameraTo(this.fitDistance(sheet.toFitWidth), 0, 0, sheet.duration, startTime)
   }
 
@@ -514,6 +530,8 @@ export class TurnScene {
       positive(baseDuration, 900) * Math.abs(target - sheet.progress),
     )
     const fitWidth = commit ? sheet.toFitWidth : sheet.fromFitWidth
+    // 相机复位到适配距离，缩放级别归 1
+    this.zoomLevel = 1
     this.animateCameraTo(this.fitDistance(fitWidth), 0, 0, sheet.duration, startTime)
   }
 
@@ -533,6 +551,8 @@ export class TurnScene {
   // 立即完成一张纸张：跳到终点、复位相机并触发回调
   private finishSheet(sheet: SheetState, committed: boolean) {
     const fitWidth = committed ? sheet.toFitWidth : sheet.fromFitWidth
+    // 相机复位到适配距离，缩放级别归 1
+    this.zoomLevel = 1
     this.snapCamera(this.fitDistance(fitWidth), 0, 0)
     if (this.sheet === sheet) this.sheet = null
     this.scene.remove(sheet.group)
@@ -545,15 +565,14 @@ export class TurnScene {
 
   // 当前缩放级别：1 为未缩放
   getZoom() {
-    const fit = this.fitDistance(this.targetFitWidth)
-    if (fit <= 0 || this.camTarget.z <= 0) return 1
-    return fit / this.camTarget.z
+    return this.zoomLevel
   }
 
   // 设置缩放级别（钳制到 [1, maxZoom]）；翻页进行中忽略
   setZoom(level: number, animate = true, duration = 200) {
     if (!this.renderer || this.sheet) return
     const clamped = clamp(Number.isFinite(level) ? level : 1, 1, this.maxZoom)
+    this.zoomLevel = clamped
     const z = this.fitDistance(this.targetFitWidth) / clamped
     const x = this.clampPanX(this.camTarget.x, z)
     const y = this.clampPanY(this.camTarget.y, z)
