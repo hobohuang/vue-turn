@@ -149,7 +149,7 @@ const props = withDefaults(
     zoomEnabled: false,
     dblClickZoom: false,
     stack: true,
-    stackDepth: 0.08,
+    stackDepth: 0.04,
   },
 )
 

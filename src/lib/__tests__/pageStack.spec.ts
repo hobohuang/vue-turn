@@ -17,8 +17,9 @@ function sides(overrides: Partial<Parameters<typeof computeStackSides>[0]>) {
 
 describe('computeStackSides in spread mode', () => {
   it('splits read pages left and remaining pages right for ltr', () => {
+    // 封面已平躺左侧，不计入纸叠层数
     expect(sides({})).toEqual({
-      left: { first: 1, count: 2, step: -1, edgeX: -WIDTH, dir: -1 },
+      left: { first: 1, count: 1, step: -1, edgeX: -WIDTH, dir: -1 },
       right: { first: 4, count: 6, step: 1, edgeX: WIDTH, dir: 1 },
     })
   })
@@ -26,17 +27,36 @@ describe('computeStackSides in spread mode', () => {
   it('mirrors sides for rtl', () => {
     expect(sides({ forwardDirection: 'right' })).toEqual({
       left: { first: 4, count: 6, step: 1, edgeX: -WIDTH, dir: -1 },
-      right: { first: 1, count: 2, step: -1, edgeX: WIDTH, dir: 1 },
+      right: { first: 1, count: 1, step: -1, edgeX: WIDTH, dir: 1 },
     })
   })
 
-  it('hides both sides when the book is closed (cover or back cover up)', () => {
-    // 封面：内页被硬页盖住，无纸叠
-    expect(sides({ currentPage: 0 })).toEqual({ left: null, right: null })
-    // 封底（末索引为奇数时居中）：同样无纸叠
-    expect(sides({ currentPage: 9, numPages: 10 })).toEqual({ left: null, right: null })
-    // 末索引为偶数时封底与前一页成跨页，书仍打开，正常显示纸叠
-    expect(sides({ currentPage: 8, numPages: 10 }).left).not.toBeNull()
+  it('shows the whole book minus the cover when closed', () => {
+    // 封面朝上：右侧纸叠为除封面外的整本书
+    expect(sides({ currentPage: 0 })).toEqual({
+      left: null,
+      right: { first: 1, count: 9, step: 1, edgeX: WIDTH / 2, dir: 1 },
+    })
+    // 封底朝上：左侧纸叠为除封底外的整本书（封面计入）
+    expect(sides({ currentPage: 9, numPages: 10 })).toEqual({
+      left: { first: 8, count: 8, step: -1, edgeX: -WIDTH / 2, dir: -1 },
+      right: null,
+    })
+  })
+
+  it('excludes the flat cover/back cover from stacks', () => {
+    // 封面平躺后左侧只剩已读内页
+    expect(sides({ currentPage: 1 }).left).toBeNull()
+    // 封底合上时右侧为 1 层（封底本身，尚未平躺）
+    expect(sides({ currentPage: 7 }).right).toEqual({
+      first: 9,
+      count: 1,
+      step: 1,
+      edgeX: WIDTH,
+      dir: 1,
+    })
+    // 封底平躺后右侧无纸叠
+    expect(sides({ currentPage: 8 }).right).toBeNull()
   })
 
   it('hugs the half-width edge in single-page mode', () => {
@@ -44,13 +64,14 @@ describe('computeStackSides in spread mode', () => {
     expect(sides({ displayedPages: 1 }).right?.edgeX).toBe(WIDTH / 2)
   })
 
-  it('keeps read count equal to currentPage and remaining count consistent', () => {
-    for (const currentPage of [1, 3, 5, 7]) {
+  it('keeps layer counts consistent with visible and flat pages', () => {
+    for (const currentPage of [2, 3, 5, 7]) {
       const s = sides({ currentPage })
-      expect(s.left?.count).toBe(currentPage)
+      // 封面平躺不计入
+      expect(s.left?.count).toBe(currentPage - 1)
       expect(s.right?.count).toBe(10 - 1 - Math.min(currentPage + 1, 9))
-      // 两侧页数总和 + 当前可见两页 = 总页数
-      expect((s.left?.count ?? 0) + (s.right?.count ?? 0) + 2).toBe(10)
+      // 两侧层数 + 可见两页 + 平躺封面 = 总页数
+      expect((s.left?.count ?? 0) + (s.right?.count ?? 0) + 2 + 1).toBe(10)
     }
   })
 })

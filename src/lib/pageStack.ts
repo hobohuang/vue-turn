@@ -36,30 +36,33 @@ export interface StackLayoutOptions {
 }
 
 // 计算某页状态下左右纸叠的页面映射。
-// 合书状态（封面或封底朝上居中）内页被硬页完全盖住，不显示纸叠——
-// 打开/合上硬页时纸叠随翻页动画从无到有生长/渐隐消失，不会提前出现。
+// 平躺显示的封面/封底（已作为页面网格渲染）不计入纸叠层数：
+// 封面在 currentPage>0 时已翻到左侧平躺；封底（末索引为奇数）在
+// 翻到最后一个跨页后平躺右侧。合书状态（封面/封底朝上）纸叠为
+// 除封面外的整本书，正常显示。
 // 单页显示模式为居中单页（条带贴合半页宽外缘），其余为跨页（贴合整页宽外缘）。
 // LTR：已读页堆在左侧、剩余页在右侧；RTL 镜像。
 export function computeStackSides(options: StackLayoutOptions): StackSides {
   const { currentPage, displayedPages, forwardDirection, numPages, sheetWidth } = options
-  const closed =
+  const centered =
+    displayedPages === 1 ||
     currentPage === 0 ||
     (currentPage === numPages - 1 && currentPage % 2 === 1)
-  if (closed) return { left: null, right: null }
-  const centered = displayedPages === 1
   const last = centered ? currentPage : Math.min(currentPage + 1, numPages - 1)
   const edge = centered ? sheetWidth / 2 : sheetWidth
 
+  const coverFlat = currentPage > 0
+  const backFlat = (numPages - 1) % 2 === 1 && currentPage >= numPages - 2
   const read: StackSide = {
     first: currentPage - 1,
-    count: currentPage,
+    count: Math.max(0, currentPage - (coverFlat ? 1 : 0)),
     step: -1,
     edgeX: 0,
     dir: 1,
   }
   const remain: StackSide = {
     first: last + 1,
-    count: numPages - 1 - last,
+    count: Math.max(0, numPages - 1 - last - (backFlat ? 1 : 0)),
     step: 1,
     edgeX: 0,
     dir: 1,
