@@ -1,14 +1,35 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import TurnItem from '@/components/TurnItem.vue'
 import VueTurn from '@/components/VueTurn.vue'
+import type { PageRegion, TurnInstance } from '@/types/turn'
 
 const route = useRoute()
 const router = useRouter()
 
+const turnRef = ref<TurnInstance | null>(null)
 const currentPage = ref(1)
+const total = ref(10)
+const flipping = ref(false)
+const zoom = ref(1)
+const MAX_ZOOM = 3
+// canNext/canPrev 是实例 getter，非响应式；用 tick 在事件后强制重渲按钮状态
+const tick = ref(0)
+const bump = () => {
+  tick.value++
+}
+
+// 工具栏按钮状态：翻页中统一禁用，否则取实例 getter
+const canNext = computed(() => {
+  void tick.value
+  return flipping.value ? false : (turnRef.value?.canNext ?? false)
+})
+const canPrev = computed(() => {
+  void tick.value
+  return flipping.value ? false : (turnRef.value?.canPrev ?? false)
+})
 
 let syncing = false
 
@@ -43,26 +64,65 @@ watch(currentPage, (value) => {
 })
 
 applyRoutePage()
+
+function onPrev() {
+  turnRef.value?.prev()
+}
+function onNext() {
+  turnRef.value?.next()
+}
+function onZoomIn() {
+  turnRef.value?.zoomIn()
+}
+function onZoomOut() {
+  turnRef.value?.zoomOut()
+}
+function onFlipStart() {
+  flipping.value = true
+  bump()
+}
+function onFlipEnd() {
+  flipping.value = false
+  bump()
+}
+function onReady() {
+  total.value = turnRef.value?.numPages ?? total.value
+  bump()
+}
+function onZoomChange(level: number) {
+  zoom.value = level
+}
+
+// 目录热区：与页面内 .toc-box 的绝对定位百分比一一对应，
+// 点击命中后跳转对应页（region.data 为目标页码）
+const tocRegions: PageRegion[] = [
+  { x: 0.08, y: 0.66, w: 0.24, h: 0.14, data: 1 },
+  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 5 },
+  { x: 0.68, y: 0.66, w: 0.24, h: 0.14, data: 11 },
+]
+
+function onRegionTap(_page: number, region: PageRegion) {
+  const target = Number(region.data)
+  if (Number.isInteger(target) && target >= 1) {
+    turnRef.value?.goToPage(target)
+  }
+}
 </script>
 
 <template>
   <div class="book-view">
-    <VueTurn v-model="currentPage" :page-aspect="0.75">
-      <template
-        #toolbar="{ page, numPages, isFlipping, canFlipLeft, canFlipRight, flipLeft, flipRight }"
-      >
-        <div class="toolbar">
-          <button class="nav-btn" :disabled="!canFlipRight || isFlipping" @click="flipRight">
-            上一页
-          </button>
-          <span class="indicator">第 {{ page }} / {{ numPages }} 页</span>
-          <button class="nav-btn" :disabled="!canFlipLeft || isFlipping" @click="flipLeft">
-            下一页
-          </button>
-        </div>
-      </template>
-
-      <turn-item>
+    <VueTurn
+      ref="turnRef"
+      v-model="currentPage"
+      :page-aspect="0.75"
+      @change="bump"
+      @flip-start="onFlipStart"
+      @flip-end="onFlipEnd"
+      @ready="onReady"
+      @zoom-change="onZoomChange"
+      @region-tap="onRegionTap"
+    >
+      <turn-item hard>
         <div class="demo-page cover">
           <span class="cover-badge">vue-turn</span>
           <h1 class="cover-title">TURN</h1>
@@ -100,14 +160,14 @@ applyRoutePage()
         </div>
       </turn-item>
 
-      <turn-item>
+      <turn-item spread>
         <div class="demo-page art-page">
           <div class="art-frame">
             <div class="art-blob art-blob-a"></div>
             <div class="art-blob art-blob-b"></div>
             <div class="art-blob art-blob-c"></div>
           </div>
-          <p class="art-caption">图 1 · 纯 CSS 渐变也能随页面一起卷曲</p>
+          <p class="art-caption">图 1 · 跨页大图：内容横跨整个跨页，随页面一起卷曲</p>
         </div>
       </turn-item>
 
@@ -140,24 +200,20 @@ export function curlPoint(s, θ, κ) {
         </div>
       </turn-item>
 
-      <turn-item>
+      <turn-item :regions="tocRegions">
         <div class="demo-page">
           <h2 class="page-heading">第三章 · 状态与路由</h2>
           <p class="page-paragraph">
             vue-turn 以 v-model 暴露当前页码；Vue Router 提供 /book/:page
             深度链接。两个方向互相监听，翻页过程中收到的跳转请求会被推迟到动画结束后执行。
           </p>
-          <div class="link-row">
-            <RouterLink class="deep-link" :to="{ name: 'book', params: { page: 1 } }">
-              第 1 页
-            </RouterLink>
-            <RouterLink class="deep-link" :to="{ name: 'book', params: { page: 5 } }">
-              第 5 页
-            </RouterLink>
-            <RouterLink class="deep-link" :to="{ name: 'book', params: { page: 9 } }">
-              第 9 页
-            </RouterLink>
-          </div>
+          <p class="page-paragraph">
+            页面内容光栅化为纹理后 DOM 不再可交互：下方目录使用“页面热区”实现——
+            点击命中区域触发 region-tap 事件完成跳转。试试拖拽页面边缘翻页、悬停页角查看折角提示。
+          </p>
+          <div class="toc-box">第 1 页 · 封面</div>
+          <div class="toc-box toc-box-mid">第 5 页 · 跨页大图</div>
+          <div class="toc-box toc-box-end">第 11 页 · 目录</div>
         </div>
       </turn-item>
 
@@ -181,13 +237,23 @@ export function curlPoint(s, θ, κ) {
         </div>
       </turn-item>
 
-      <turn-item>
+      <turn-item hard>
         <div class="demo-page cover back-cover">
           <h1 class="cover-title small">FIN</h1>
           <p class="cover-subtitle">感谢阅读</p>
         </div>
       </turn-item>
     </VueTurn>
+
+    <div class="toolbar">
+      <button class="nav-btn" :disabled="!canPrev" @click="onPrev">上一页</button>
+      <span class="indicator">第 {{ currentPage }} / {{ total }} 页</span>
+      <button class="nav-btn" :disabled="!canNext" @click="onNext">下一页</button>
+      <button class="nav-btn" :disabled="flipping || zoom >= MAX_ZOOM" @click="onZoomIn">
+        放大
+      </button>
+      <button class="nav-btn" :disabled="flipping || zoom <= 1" @click="onZoomOut">缩小</button>
+    </div>
   </div>
 </template>
 
@@ -416,23 +482,28 @@ export function curlPoint(s, θ, κ) {
   margin: 0;
 }
 
-.link-row {
+/* 目录热区按钮：绝对定位百分比与 tocRegions 的 x/y/w/h 一一对应 */
+.toc-box {
+  position: absolute;
+  left: 8%;
+  top: 66%;
+  width: 24%;
+  height: 14%;
   display: flex;
-  gap: 20px;
-  margin-top: 8px;
-}
-
-.deep-link {
-  padding: 10px 22px;
+  align-items: center;
+  justify-content: center;
   border: 1px solid rgba(43, 42, 38, 0.35);
-  border-radius: 999px;
-  font-size: 22px;
+  border-radius: 14px;
+  font-size: 21px;
   color: #2b2a26;
-  text-decoration: none;
+  background: rgba(43, 42, 38, 0.04);
 }
 
-.deep-link.router-link-active {
-  background: #2b2a26;
-  color: #f3efe6;
+.toc-box-mid {
+  left: 38%;
+}
+
+.toc-box-end {
+  left: 68%;
 }
 </style>

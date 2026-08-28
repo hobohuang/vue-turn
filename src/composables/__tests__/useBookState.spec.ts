@@ -107,4 +107,16 @@ describe('book state', () => {
     state.commitFlip(-2)
     expect(state.currentPage.value).toBe(1)
   })
+
+  it('cancelFlip keeps the page and releases the lock', () => {
+    const state = seededState()
+    state.goToPage(4)
+    state.startFlip()
+    expect(state.isFlipping.value).toBe(true)
+    state.cancelFlip()
+    expect(state.isFlipping.value).toBe(false)
+    // 页码不变（拖拽回弹）
+    expect(state.currentPage.value).toBe(3)
+    expect(state.page.value).toBe(4)
+  })
 })

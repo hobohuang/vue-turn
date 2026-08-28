@@ -17,9 +17,27 @@ const mocks = vi.hoisted(() => ({
         front: FakeTexture | null,
         back: FakeTexture | null,
         duration: number,
-        onDone: () => void,
+        onDone: (committed?: boolean) => void,
+        options?: import('@/types/turn').FlipSheetOptions,
       ) => void
     >(),
+  beginDragFlip:
+    vi.fn<
+      (
+        spec: import('@/types/turn').FlipSpec,
+        front: FakeTexture | null,
+        back: FakeTexture | null,
+        onDone: (committed?: boolean) => void,
+        options?: import('@/types/turn').FlipSheetOptions,
+      ) => boolean
+    >().mockReturnValue(true),
+  endDragFlip: vi.fn<(commit: boolean, baseDuration: number) => void>(),
+  stopFlip: vi.fn<() => void>(),
+  setDragProgress: vi.fn<(progress: number) => void>(),
+  setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
+  getZoom: vi.fn<() => number>().mockReturnValue(1),
+  panBy: vi.fn<(dx: number, dy: number) => void>(),
+  pickPage: vi.fn<(x: number, y: number) => unknown>().mockReturnValue(null),
   setStaticPages: vi.fn<(placements: unknown[], textureOf: (index: number) => unknown) => void>(),
   applyStaticTexture: vi.fn<(index: number, texture: FakeTexture) => void>(),
   elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
@@ -30,9 +48,18 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     container: ref(null),
     containerSize: reactive({ width: 900, height: 600 }),
     webglSupported: ref(true),
+    maxAnisotropy: ref(8),
     setStaticPages: mocks.setStaticPages,
     applyStaticTexture: mocks.applyStaticTexture,
     startFlip: mocks.startFlip,
+    beginDragFlip: mocks.beginDragFlip,
+    setDragProgress: mocks.setDragProgress,
+    endDragFlip: mocks.endDragFlip,
+    stopFlip: mocks.stopFlip,
+    setZoom: mocks.setZoom,
+    getZoom: mocks.getZoom,
+    panBy: mocks.panBy,
+    pickPage: mocks.pickPage,
   }),
 }))
 
@@ -42,6 +69,20 @@ vi.mock('@/lib/textureFactory', () => ({
 }))
 
 describe('App', () => {
+  // 可克隆的假纹理：demo 书含跨页项，需要 clone/repeat/offset
+  function fakeTexture(): FakeTexture & {
+    repeat: { set: () => void }
+    offset: { set: () => void }
+    clone: () => ReturnType<typeof fakeTexture>
+  } {
+    return {
+      dispose: vi.fn<() => void>(),
+      repeat: { set: vi.fn<() => void>() },
+      offset: { set: vi.fn<() => void>() },
+      clone: fakeTexture,
+    }
+  }
+
   function createTestRouter() {
     return createRouter({
       history: createMemoryHistory(),
@@ -53,7 +94,7 @@ describe('App', () => {
   }
 
   it('renders the book view at /book', async () => {
-    mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
     const router = createTestRouter()
     const wrapper = mount(App, {
       global: { plugins: [router] },
@@ -61,11 +102,11 @@ describe('App', () => {
     router.push('/book')
     await flushPromises()
     expect(wrapper.findComponent(VueTurn).exists()).toBe(true)
-    expect(wrapper.find('.indicator').text()).toBe('第 1 / 10 页')
+    expect(wrapper.find('.indicator').text()).toBe('第 1 / 12 页')
   })
 
   it('corrects an invalid route page back to page one', async () => {
-    mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
     const router = createTestRouter()
     mount(App, {
       global: { plugins: [router] },

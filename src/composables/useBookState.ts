@@ -66,6 +66,11 @@ export function useBookState() {
     isFlipping.value = false
   }
 
+  // 取消翻页（拖拽回弹）：页码不变，仅解除翻页中状态
+  function cancelFlip() {
+    isFlipping.value = false
+  }
+
   return {
     numPages,
     currentPage,
@@ -83,5 +88,6 @@ export function useBookState() {
     goToPage,
     startFlip,
     commitFlip,
+    cancelFlip,
   }
 }
