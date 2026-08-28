@@ -419,11 +419,10 @@ export class TurnScene {
   }
 
   // 应用插值进度 p 下的纸叠几何：edgeX 与厚度在 from/to 间线性过渡；
-  // 某一侧状态缺失时按厚度 0 生长/渐隐。
-  // coverMove（封面/封底开合翻页）时，缺失侧的隐含边缘取另一侧的一半——
-  // 合书边缘在 ±半页宽、开书在 ±整页宽，纸叠随书体滑动贴合生长，
-  // 不会悬在终点位置提前出现；普通翻页缺失侧原地生长（取同侧边缘）
-  private applyStacks(p: number, coverMove = false) {
+  // 某一侧状态缺失时按厚度 0 原地生长/渐隐。
+  // computeStackSides 对合书（±半页宽）与开书（±整页宽）已返回正确边缘，
+  // 线性插值与书体滑动同步，无需额外缩放
+  private applyStacks(p: number) {
     const from = this.stackFrom
     const to = this.stackTo
     for (const side of ['left', 'right'] as const) {
@@ -434,9 +433,8 @@ export class TurnScene {
         if (entry) entry.mesh.visible = false
         continue
       }
-      const half = coverMove ? 0.5 : 1
-      const fe = f ? f.edgeX : t!.edgeX * half
-      const te = t ? t.edgeX : f!.edgeX * half
+      const fe = f ? f.edgeX : t!.edgeX
+      const te = t ? t.edgeX : f!.edgeX
       const ft = f?.thickness ?? 0
       const tt = t?.thickness ?? 0
       const e = entry ?? this.ensureStackSide(side)
@@ -997,9 +995,9 @@ export class TurnScene {
     for (const entry of this.staticMeshes.values()) {
       entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
     }
-    // 纸叠厚度/位置与静态页同步插值；封面/封底开合（书体平移）时
-    // 缺失侧按合书边缘生长，纸叠贴合书体滑动
-    this.applyStacks(slideP, sheet.worldFromX !== 0 || sheet.worldToX !== 0)
+    // 纸叠厚度/位置与静态页同步插值；开合翻页的边缘过渡由
+    // from/to 的绝对边缘线性插值完成，与书体滑动同步
+    this.applyStacks(slideP)
     this.deformSheet(sheet, pe)
   }
 

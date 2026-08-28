@@ -67,7 +67,7 @@ const page = ref(1)
 | `zoomEnabled` | `boolean` | `false` | 是否允许滚轮缩放（滚轮按指数步进调节级别） |
 | `dblClickZoom` | `boolean` | `false` | 是否允许双击切换缩放（开启后单击翻页延迟约 260ms 以区分双击） |
 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
-| `stackDepth` | `number` | `0.04` | 纸叠最大厚度占单页宽度的比例（0~0.5） |
+| `stackDepth` | `number` | `0.02` | 纸叠最大厚度占单页宽度的比例（0~0.5） |
 
 ## Events
 

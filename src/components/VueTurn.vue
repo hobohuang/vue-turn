@@ -149,7 +149,7 @@ const props = withDefaults(
     zoomEnabled: false,
     dblClickZoom: false,
     stack: true,
-    stackDepth: 0.04,
+    stackDepth: 0.02,
   },
 )
 
@@ -512,17 +512,22 @@ function applyStacksIdle() {
 }
 
 // 翻页前置布局：纸叠随动画从当前状态过渡到目标状态。
-// 封面/封底开合时合书侧由 computeStackSides 返回空，
-// 纸叠自动从无到有生长/渐隐消失，不会在硬页落定前提前出现
+// 封底开合期间封底硬页在空中翻动，不属于纸叠——它平躺时计入的
+// 那一层在 from/to 中清除，避免动画中右侧出现悬浮细线
 function applyStacksFlip(spec: FlipSpec) {
   if (!props.stack) {
     setStacks(null)
     return
   }
-  setStacks(
-    stackVisualFor(state.currentPage.value),
-    stackVisualFor(state.currentPage.value + spec.delta),
-  )
+  const from = stackVisualFor(state.currentPage.value)
+  const to = stackVisualFor(state.currentPage.value + spec.delta)
+  const last = pageCount.value - 1
+  if (spec.frontIndex === last || spec.backIndex === last) {
+    const side = props.forwardDirection === 'left' ? 'right' : 'left'
+    from[side] = null
+    to[side] = null
+  }
+  setStacks(from, to)
 }
 
 // 纸叠开关/厚度变化：空闲时立即生效（翻页中由结束后 renderStatic 收敛）
