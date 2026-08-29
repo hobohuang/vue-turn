@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => {
     pickPage: vi.fn<(x: number, y: number) => unknown>(),
     setStaticPages: vi.fn<(placements: unknown[], textureOf: (index: number) => unknown) => void>(),
     applyStaticTexture: vi.fn<(index: number, texture: FakeTexture) => void>(),
+    setStacks: vi.fn<() => void>(),
     elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
   }
 })
@@ -66,7 +67,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     getZoom: mocks.getZoom,
     panBy: mocks.panBy,
     pickPage: mocks.pickPage,
-    setStacks: vi.fn<() => void>(),
+    setStacks: mocks.setStacks,
     pickStack: vi.fn<() => null>().mockReturnValue(null),
     setStackHover: vi.fn<() => void>(),
   }),
@@ -90,6 +91,7 @@ interface HostProps {
   pageWidth?: number
   displayedPages?: 'auto' | 1 | 2
   clickToFlip?: boolean
+  peel?: boolean
   modelValue?: number
   defaultPages?: number
 }
@@ -120,6 +122,7 @@ function createHost(props: HostProps = {}) {
               modelValue: page.value,
               displayedPages: props.displayedPages,
               clickToFlip: props.clickToFlip,
+              peel: props.peel,
               'onUpdate:modelValue': (v: number) => {
                 page.value = v
                 bump()
@@ -186,6 +189,7 @@ async function mountTurn(
   extraProps: {
     displayedPages?: 'auto' | 1 | 2
     clickToFlip?: boolean
+    peel?: boolean
     modelValue?: number
   } = {},
 ) {
@@ -1264,17 +1268,35 @@ describe('VueTurn', () => {
   })
 
   it('shows a peeled corner when hovering the page edge', async () => {
-    const wrapper = await mountTurn()
+    const wrapper = await mountTurn(6, { peel: true })
     stubViewportRect(wrapper)
-    // LTR 前进边缘（右缘）悬停：掀起页角
+    const stacksCallsBefore = mocks.setStacks.mock.calls.length
+    // LTR 前进边缘（右缘）悬停：掀起页角，强度随深度渐变（无阶跃跳变）
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 300, buttons: 0 })
     expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
-    expect(mocks.setDragProgress).toHaveBeenLastCalledWith(0.07)
+    // ratio=870/900，深度 0.0333/0.12 → 强度 0.722 × 0.07 ≈ 0.0506
+    const calls = mocks.setDragProgress.mock.calls
+    const progress = calls[calls.length - 1]?.[0] as number
+    expect(progress).toBeCloseTo(0.0506, 3)
+    // 悬停预览不改纸叠布局（纸叠只在真实翻页时过渡）
+    expect(mocks.setStacks.mock.calls.length).toBe(stacksCallsBefore)
+    // 越靠近外缘翘得越高
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 895, clientY: 300, buttons: 0 })
+    const callsAfter = mocks.setDragProgress.mock.calls
+    const stronger = callsAfter[callsAfter.length - 1]?.[0] as number
+    expect(stronger).toBeGreaterThan(progress)
     // 移到中部：折角收回
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 450, clientY: 300, buttons: 0 })
     expect(mocks.endDragFlip).toHaveBeenCalledWith(false, 900)
     await flushPromises()
     expect(wrapper.find('#indicator').text()).toBe('1/6')
+  })
+
+  it('does not peel on hover by default', async () => {
+    const wrapper = await mountTurn()
+    stubViewportRect(wrapper)
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 300, buttons: 0 })
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
   })
 
   it('does not peel when peel is disabled', async () => {

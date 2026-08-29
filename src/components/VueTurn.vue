@@ -143,7 +143,7 @@ const props = withDefaults(
     prefetchWindow: 4,
     resourceTimeout: 5000,
     dragToFlip: true,
-    peel: true,
+    peel: false,
     peelZone: 0.12,
     maxZoom: 3,
     zoomEnabled: false,
@@ -1004,14 +1004,20 @@ function releasePeelNow() {
   endDragFlip(false, safeFlipDuration.value)
 }
 
-function ensurePeel(trigger: FlipDirection) {
-  if (sheetOwner === 'peel' && peelTrigger === trigger) return
+// t 为折角强度 [0,1]（0=条带内缘，1=最外缘），乘以 PEEL_PROGRESS 得实际进度；
+// 同向重复悬停只更新进度，不重建纸张。悬停仅预览页角：
+// 不动相机、不改纸叠布局（纸叠只在真实翻页时过渡）
+function ensurePeel(trigger: FlipDirection, t: number) {
+  const progress = Math.min(1, Math.max(0, t)) * PEEL_PROGRESS
+  if (sheetOwner === 'peel' && peelTrigger === trigger) {
+    setDragProgress(progress)
+    return
+  }
   releasePeelNow()
   const spec = computeFlipSpecFor(trigger)
   if (!spec) return
   // 翻页前置布局：折角悬停不动相机
   setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
-  applyStacksFlip(spec)
   const ok = beginDragFlip(
     spec,
     textures.get(spec.frontIndex) ?? null,
@@ -1022,7 +1028,7 @@ function ensurePeel(trigger: FlipDirection) {
   if (!ok) return
   sheetOwner = 'peel'
   peelTrigger = trigger
-  setDragProgress(PEEL_PROGRESS)
+  setDragProgress(progress)
 }
 
 function updatePeel(event: PointerEvent) {
@@ -1038,12 +1044,14 @@ function updatePeel(event: PointerEvent) {
   const zone = safePeelZone.value
   const forwardTrigger: FlipDirection = ltr ? 'left' : 'right'
   const backwardTrigger: FlipDirection = ltr ? 'right' : 'left'
-  const inForwardZone = ltr ? ratio > 1 - zone : ratio < zone
-  const inBackwardZone = ltr ? ratio < zone : ratio > 1 - zone
-  if (inForwardZone && state.canGoForward.value) {
-    ensurePeel(forwardTrigger)
-  } else if (inBackwardZone && state.canGoBack.value) {
-    ensurePeel(backwardTrigger)
+  // 指针距两侧外缘的深度（0=贴外缘，zone=条带内缘）：折角强度随深度渐变，
+  // 消除进出条带时的阶跃跳变
+  const fwdDepth = ltr ? 1 - ratio : ratio
+  const backDepth = ltr ? ratio : 1 - ratio
+  if (fwdDepth < zone && state.canGoForward.value) {
+    ensurePeel(forwardTrigger, 1 - fwdDepth / zone)
+  } else if (backDepth < zone && state.canGoBack.value) {
+    ensurePeel(backwardTrigger, 1 - backDepth / zone)
   } else {
     releasePeelNow()
   }
@@ -1081,11 +1089,11 @@ function onPointerDown(event: PointerEvent) {
   state.startFlip()
   emit('flip-start', trigger)
   emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
-  // 该方向的折角悬停已创建纸张：直接接管，避免重建
+  // 该方向的折角悬停已创建纸张：直接接管纸张，避免重建；
+  // 纸叠过渡在此补设（悬停预览不动纸叠，真实翻页才过渡）
   if (!(sheetOwner === 'peel' && peelTrigger === trigger)) {
     // 翻页前置布局：相机由拖拽结束动画接管
     setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
-    applyStacksFlip(spec)
     const ok = beginDragFlip(
       spec,
       textures.get(spec.frontIndex) ?? null,
@@ -1100,6 +1108,7 @@ function onPointerDown(event: PointerEvent) {
       return
     }
   }
+  applyStacksFlip(spec)
   sheetOwner = 'drag'
   peelTrigger = null
   drag = {
