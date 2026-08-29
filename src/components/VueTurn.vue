@@ -221,6 +221,7 @@ const {
   pickStack,
   setStackHover,
   startFlip,
+  startFoldFlip,
   beginDragFlip,
   setDragProgress,
   endDragFlip,
@@ -788,14 +789,29 @@ function flip(trigger: FlipDirection) {
     // 懒光栅化：翻页结束后预取新窗口内缺失纹理，再释放窗口外纹理控制显存
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
   }
-  startFlip(
-    spec,
-    textures.get(spec.frontIndex) ?? null,
-    textures.get(spec.backIndex) ?? null,
-    safeFlipDuration.value,
-    onDone,
-    sheetOptions(spec),
-  )
+  // fold 开启时走折页动画（锚点外缘中部、竖直折线扫过整页），场景不可用
+  // 或 fold 关闭回退卷曲动画
+  if (
+    !foldParams.value.enabled ||
+    !startFoldFlip(
+      spec,
+      textures.get(spec.frontIndex) ?? null,
+      textures.get(spec.backIndex) ?? null,
+      safeFlipDuration.value,
+      onDone,
+      sheetOptions(spec),
+      foldBendWorld.value,
+    )
+  ) {
+    startFlip(
+      spec,
+      textures.get(spec.frontIndex) ?? null,
+      textures.get(spec.backIndex) ?? null,
+      safeFlipDuration.value,
+      onDone,
+      sheetOptions(spec),
+    )
+  }
 }
 
 function next() {

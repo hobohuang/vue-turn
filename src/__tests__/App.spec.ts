@@ -50,6 +50,18 @@ const mocks = vi.hoisted(() => ({
   setFoldDragFromClient: vi.fn<(x: number, y: number) => number | null>().mockReturnValue(null),
   setFoldDragAt: vi.fn<(qu: number, qv: number) => number | null>().mockReturnValue(null),
   endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
+  startFoldFlip:
+    vi.fn<
+      (
+        spec: import('@/types/turn').FlipSpec,
+        front: FakeTexture | null,
+        back: FakeTexture | null,
+        duration: number,
+        onDone: (committed?: boolean) => void,
+        options?: import('@/types/turn').FlipSheetOptions,
+        bend?: number,
+      ) => boolean
+    >().mockReturnValue(true),
   setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
   getZoom: vi.fn<() => number>().mockReturnValue(1),
   panBy: vi.fn<(dx: number, dy: number) => void>(),
@@ -70,6 +82,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     applyStaticTexture: mocks.applyStaticTexture,
     setCoverPages: mocks.setCoverPages,
     startFlip: mocks.startFlip,
+    startFoldFlip: mocks.startFoldFlip,
     beginDragFlip: mocks.beginDragFlip,
     setDragProgress: mocks.setDragProgress,
     endDragFlip: mocks.endDragFlip,

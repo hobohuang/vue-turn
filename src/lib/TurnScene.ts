@@ -891,6 +891,43 @@ export class TurnScene {
     )
   }
 
+  // 主动折页翻页（点击翻页/next/prev，fold 开启时替代 startFlip 的卷曲动画）：
+  // 锚点取外缘中部（竖直折线），拖点从外缘扫到对侧完成翻页——折页拖拽的
+  // 自动化版本，复用 settle 动画机制
+  startFoldFlip(
+    spec: FlipSpec,
+    frontTexture: THREE.Texture | null,
+    backTexture: THREE.Texture | null,
+    duration: number,
+    onDone: (committed: boolean) => void,
+    options?: FlipSheetOptions,
+    bend = 0,
+  ): boolean {
+    // 渲染不可用返回 false，由调用方回退 startFlip（其自带同步提交兜底）
+    if (!this.renderer || this.contextLost) return false
+    if (this.sheet) this.removeSheet()
+    this.applyWorldOffsets(spec)
+    const sheet = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
+    if (!sheet) return false
+    sheet.mode = 'drag'
+    sheet.bend = positive(bend, sheet.bend)
+    sheet.fold = { pu: this.sheetWidth, pv: 0, qu: this.sheetWidth, qv: 0 }
+    sheet.progress = 0
+    this.sheet = sheet
+    // 相机复位与 startFlip 一致（缩放/平移复位，级别归 1）
+    this.zoomLevel = 1
+    this.animateCameraTo(
+      this.fitDistance(sheet.toFitWidth + this.stackExtentWidth(this.stackTo)),
+      0,
+      0,
+      positive(duration, 900),
+      performance.now(),
+    )
+    // settle 到完成：拖点动画扫到对侧
+    this.endFoldDrag(true, positive(duration, 900))
+    return true
+  }
+
   // 开始拖拽翻页：返回 false 表示渲染不可用，调用方不应进入拖拽状态
   beginDragFlip(
     spec: FlipSpec,

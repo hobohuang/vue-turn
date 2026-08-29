@@ -113,6 +113,21 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     }
   }
 
+  // 主动折页翻页（fold 开启时的点击/next/prev 动画路径）：
+  // 场景可用返回 true，调用方据此决定是否回退卷曲动画
+  function startFoldFlip(
+    spec: FlipSpec,
+    frontTexture: THREE.Texture | null,
+    backTexture: THREE.Texture | null,
+    duration: number,
+    onDone: (committed: boolean) => void,
+    options?: FlipSheetOptions,
+    bend = 0,
+  ): boolean {
+    if (!scene) return false
+    return scene.startFoldFlip(spec, frontTexture, backTexture, duration, onDone, options, bend)
+  }
+
   // 拖拽翻页：场景可用返回 true，调用方据此进入拖拽状态
   function beginDragFlip(
     spec: FlipSpec,
@@ -194,6 +209,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     pickStack,
     setStackHover,
     startFlip,
+    startFoldFlip,
     beginDragFlip,
     setDragProgress,
     endDragFlip,

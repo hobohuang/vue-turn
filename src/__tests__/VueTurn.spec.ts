@@ -27,6 +27,17 @@ const mocks = vi.hoisted(() => {
         options?: import('@/types/turn').FlipSheetOptions,
       ) => void
     >(),
+    startFoldFlip: vi.fn<
+      (
+        spec: import('@/types/turn').FlipSpec,
+        front: FakeTexture | null,
+        back: FakeTexture | null,
+        duration: number,
+        onDone: (committed?: boolean) => void,
+        options?: import('@/types/turn').FlipSheetOptions,
+        bend?: number,
+      ) => boolean
+    >().mockReturnValue(false),
     beginDragFlip: vi.fn<
       (
         spec: import('@/types/turn').FlipSpec,
@@ -76,6 +87,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     applyStaticTexture: mocks.applyStaticTexture,
     setCoverPages: mocks.setCoverPages,
     startFlip: mocks.startFlip,
+    startFoldFlip: mocks.startFoldFlip,
     beginDragFlip: mocks.beginDragFlip,
     setDragProgress: mocks.setDragProgress,
     endDragFlip: mocks.endDragFlip,
@@ -234,6 +246,8 @@ describe('VueTurn', () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => {
       mocks.done.flip = onDone
     })
+    // 默认：折页动画路径不可用（回退卷曲 startFlip），个别用例按需覆盖
+    mocks.startFoldFlip.mockImplementation(() => false)
     // 默认：拖拽翻页可用，记录回调供 endDragFlip/stopFlip 触发
     mocks.beginDragFlip.mockImplementation((_spec, _front, _back, onDone) => {
       mocks.done.drag = onDone
@@ -384,6 +398,35 @@ describe('VueTurn', () => {
     expect(emitted?.[emitted.length - 1]).toEqual([2])
     const changes = turn.emitted('change')
     expect(changes?.[changes.length - 1]).toEqual([2])
+  })
+
+  it('uses the fold animation for active flips when fold is enabled (soft default)', async () => {
+    // fold 开启（soft 默认）：点击/next/prev 的主动翻页走折页动画而非卷曲
+    mocks.startFoldFlip.mockImplementation(
+      (_spec, _front, _back, _duration, onDone) => {
+        onDone(true)
+        return true
+      },
+    )
+    const wrapper = await mountTurn()
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(mocks.startFoldFlip).toHaveBeenCalledTimes(1)
+    expect(mocks.startFlip).not.toHaveBeenCalled()
+    // 页码正常提交
+    const turn = wrapper.findComponent(VueTurn)
+    const emitted = turn.emitted('update:modelValue')
+    expect(emitted?.[emitted.length - 1]).toEqual([2])
+  })
+
+  it('falls back to the curl animation for active flips when fold is disabled', async () => {
+    // custom 档 + fold=false：主动翻页回退卷曲动画
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(mocks.startFlip).toHaveBeenCalledTimes(1)
+    expect(mocks.startFoldFlip).not.toHaveBeenCalled()
   })
 
   it('emits change on direct jumps too', async () => {
