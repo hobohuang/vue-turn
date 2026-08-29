@@ -749,6 +749,34 @@ describe('VueTurn', () => {
     expect(wrapper.find('#indicator').text()).toBe('1/6')
   })
 
+  it('flips via document keydown when focus is outside the component', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn()
+    // 焦点在组件外（document/body）：点击工具栏按钮后按键的场景
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    // 组件内部目标的 keydown 已由 viewport 处理，document 层不重复翻页
+    await wrapper.find('.viewport').trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('4/6')
+  })
+
+  it('does not hijack keydown from editable elements outside the component', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn()
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    try {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      await flushPromises()
+      // 输入框内的方向键不触发翻页
+      expect(wrapper.find('#indicator').text()).toBe('1/6')
+    } finally {
+      input.remove()
+    }
+  })
+
   it('goToPage returns false when rejected and true when applied', async () => {
     const wrapper = await mountTurn()
     const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance

@@ -358,6 +358,8 @@ const pageSources = computed<PageSource[]>(() => {
 })
 
 const offscreenEl = ref<HTMLElement | null>(null)
+// 组件根元素：document 键盘监听据此排除组件内部目标（已由 viewport 处理）
+const rootEl = ref<HTMLElement | null>(null)
 const pageEls = ref<HTMLElement[]>([])
 const pageCount = ref(0)
 const textures = new Map<number, THREE.Texture>()
@@ -948,6 +950,24 @@ function applyClickFlip(clientX: number, target: HTMLElement) {
 // 键盘翻页：方向键跟随阅读方向；PageUp/PageDown/Space 前进后退；Home/End 跳首末页
 function onKeydown(event: KeyboardEvent) {
   if (!props.keyboard || disabledRef.value) return
+  handleKeydown(event)
+}
+
+// document 级键盘监听：焦点不在书页上（如点击了外部工具栏按钮）时
+// 方向键依然可翻页。组件内部目标已由 viewport 的 @keydown 处理，
+// 此处跳过避免重复；可编辑元素内的按键不劫持
+function onDocKeydown(event: KeyboardEvent) {
+  if (!props.keyboard || disabledRef.value) return
+  const target = event.target as Node | null
+  if (target) {
+    if (rootEl.value?.contains(target)) return
+    const el = target as HTMLElement
+    if (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
+  }
+  handleKeydown(event)
+}
+
+function handleKeydown(event: KeyboardEvent) {
   const forwardKey = props.forwardDirection === 'left' ? 'ArrowRight' : 'ArrowLeft'
   const backwardKey = props.forwardDirection === 'left' ? 'ArrowLeft' : 'ArrowRight'
   switch (event.key) {
@@ -1763,6 +1783,7 @@ function scheduleRaster() {
 }
 
 onMounted(async () => {
+  document.addEventListener('keydown', onDocKeydown)
   state.setDisplayedPages(resolveDisplayedPages())
   // 先同步页数到状态机，再设置初始页：否则初始页码会被 0 页钳制到封面
   // （刷新页面带 /book/:page 深度链接时表现为回到第 1 页）
@@ -1791,6 +1812,7 @@ onUpdated(() => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onDocKeydown)
   disposed = true
   rasterSeq++
   clearClickTimer()
@@ -1847,7 +1869,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="vue-turn">
+  <div ref="rootEl" class="vue-turn">
     <div v-if="!webglSupported" class="webgl-fallback">
       <slot name="fallback">当前环境不支持 WebGL，无法展示 3D 翻页效果。</slot>
     </div>

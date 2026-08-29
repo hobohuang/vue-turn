@@ -214,6 +214,8 @@ interface SheetState {
   duration: number
   onDone: ((committed: boolean) => void) | null
   mode: SheetMode
+  /** 铰点（书脊/页缘）世界 x：纸张组原点，卷曲旋转与折线 s 坐标都以此为基准 */
+  hingeX: number
   /** 卷曲幅度（硬页为 0） */
   curl: number
   /** 折角状态：非 null 时按折角形变渲染（替代书脊卷曲） */
@@ -838,6 +840,7 @@ export class TurnScene {
       baseS,
       baseY,
       sign,
+      hingeX: spec.hingeX,
       worldFromX,
       worldToX,
       startTime: 0,
@@ -1281,7 +1284,8 @@ export class TurnScene {
   private updateSheet(now: number) {
     const sheet = this.sheet
     if (!sheet) return
-    // 折角模式：书页不平移（折角在页内完成），纸叠按折角进度插值
+    // 折角模式：纸叠/静态页/纸张组随折角进度同步插值（封面开合等布局切换
+    // 时书体逐渐平移到目标位），折角形变在页内完成
     if (sheet.fold) {
       if (sheet.mode === 'settle') {
         const t = Math.min(1, (now - sheet.startTime) / sheet.duration)
@@ -1297,6 +1301,12 @@ export class TurnScene {
           this.finishSheet(sheet, sheet.target === 1)
           return
         }
+      }
+      const slideP = sheet.progress
+      sheet.group.position.x =
+        sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
+      for (const entry of this.staticMeshes.values()) {
+        entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
       }
       this.applyStacks(sheet.progress)
       this.deformSheetFold(sheet)
@@ -1325,8 +1335,10 @@ export class TurnScene {
         return
       }
     }
+    // 铰点 + 世界偏移插值：跨页/封面 hingeX=0 与历史行为一致，
+    // 单页模式 hingeX=±半页宽 不再被清零
     sheet.group.position.x =
-      sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
+      sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
     for (const entry of this.staticMeshes.values()) {
       entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
     }
