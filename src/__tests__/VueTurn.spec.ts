@@ -406,17 +406,21 @@ describe('VueTurn', () => {
                   externalPage.value = v
                 },
               },
-              { default: () => pages(6) },
+              { default: () => pages(12) },
             ),
-            h('span', { id: 'indicator' }, `${externalPage.value}/6`),
+            h('span', { id: 'indicator' }, `${externalPage.value}/12`),
           ])
       },
     })
     const wrapper = mount(Host)
     await flushPromises()
-    externalPage.value = 6
+    // 挂载窗口只覆盖当前页附近；远跳后须补生成目标窗口内缺失的纹理，
+    // 否则懒光栅化下目标页拿不到纹理而空白
+    mocks.elementToTexture.mockClear()
+    externalPage.value = 12
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('6/6')
+    expect(wrapper.find('#indicator').text()).toBe('12/12')
+    expect(mocks.elementToTexture).toHaveBeenCalled()
   })
 
   it('keeps working when a page texture fails to rasterize', async () => {

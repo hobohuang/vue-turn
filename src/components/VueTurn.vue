@@ -457,7 +457,7 @@ watch(
     if (state.isFlipping.value) {
       pendingTarget = target
     } else {
-      state.goToPage(target)
+      jumpTo(target)
     }
   },
 )
@@ -469,7 +469,7 @@ watch(
     if (pendingTarget !== null) {
       const target = pendingTarget
       pendingTarget = null
-      state.goToPage(target)
+      jumpTo(target)
     }
     // 翻页期间累积的内容变化，动画结束后补刷窗口内纹理
     if (pendingRaster) {
@@ -695,6 +695,13 @@ function prev() {
   flip(props.forwardDirection === 'left' ? 'right' : 'left')
 }
 
+// 跳转统一出口：切页后目标页可能落在懒光栅化窗口外（静态布局拿到
+// null 纹理而空白），须补生成窗口内纹理并释放窗口外显存
+function jumpTo(target: number) {
+  state.goToPage(target)
+  void rasterizeWindow(false).then(() => releaseOutsideWindow())
+}
+
 // 跳转到指定页：翻页中或页码越界时拒绝并返回 false，调用方可感知跳转是否生效
 function goToPage(page: number): boolean {
   if (disabledRef.value) return false
@@ -707,7 +714,7 @@ function goToPage(page: number): boolean {
     releasePeelNow()
     clearStackHover()
   }
-  state.goToPage(target)
+  jumpTo(target)
   return true
 }
 
