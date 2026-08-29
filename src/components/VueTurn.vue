@@ -1365,6 +1365,52 @@ function onPointerDown(event: PointerEvent) {
   state.startFlip()
   emit('flip-start', trigger)
   emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
+  // fold 开启：书页外（视口空白处）按下也走折页拖拽——方向按视口半区
+  // 判定，锚点取外缘中部（竖直折线），拖点跟手
+  if (foldParams.value.enabled) {
+    // 同方向折边悬停的纸张直接接管；其余情况收起后新建
+    const takeOver =
+      sheetOwner === 'peel' && peelTrigger === trigger && peelIsFold && peelFoldCorner === 0
+    if (!takeOver) {
+      if (sheetOwner === 'peel') releasePeelNow()
+      // 翻页前置布局：相机不动，折页在页内完成
+      setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    }
+    const ok = beginFoldDrag(
+      spec,
+      textures.get(spec.frontIndex) ?? null,
+      textures.get(spec.backIndex) ?? null,
+      pageWidthOf(props.pageAspect),
+      0,
+      foldBendWorld.value,
+      makeSheetDone(spec, trigger),
+      sheetOptions(spec),
+    )
+    if (!ok) {
+      // 渲染不可用：立即回退状态，交互交由点击翻页兜底
+      state.cancelFlip()
+      emit('flip-end', trigger)
+      return
+    }
+    applyStacksFlip(spec)
+    sheetOwner = 'drag'
+    peelTrigger = null
+    peelIsFold = false
+    peelFoldCorner = 0
+    drag = {
+      pointerId: event.pointerId,
+      trigger,
+      startX: event.clientX,
+      lastX: event.clientX,
+      lastT: event.timeStamp,
+      velocity: 0,
+      moved: 0,
+      progress: 0,
+      fold: true,
+    }
+    capturePointer(el, event.pointerId)
+    return
+  }
   // 该方向的折角悬停已创建纸张：直接接管纸张，避免重建；
   // 纸叠过渡在此补设（悬停预览不动纸叠，真实翻页才过渡）
   if (!(sheetOwner === 'peel' && peelTrigger === trigger)) {

@@ -1303,7 +1303,8 @@ describe('VueTurn', () => {
   })
 
   it('stop cancels an in-flight drag at the nearest end', async () => {
-    const wrapper = await mountTurn()
+    // custom 档关闭折页：测普通卷曲拖拽路径
+    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
     const turn = wrapper.findComponent(VueTurn)
     stubViewportRect(wrapper)
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 300 })
@@ -1318,7 +1319,8 @@ describe('VueTurn', () => {
   })
 
   it('drags a page across and commits on release', async () => {
-    const wrapper = await mountTurn()
+    // custom 档关闭折页：测普通卷曲拖拽路径
+    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
     const turn = wrapper.findComponent(VueTurn)
     stubViewportRect(wrapper)
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 300 })
@@ -1337,7 +1339,8 @@ describe('VueTurn', () => {
   })
 
   it('springs back when the drag barely moves', async () => {
-    const wrapper = await mountTurn()
+    // custom 档关闭折页：测普通卷曲拖拽路径
+    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
     const turn = wrapper.findComponent(VueTurn)
     stubViewportRect(wrapper)
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 300 })
@@ -1507,6 +1510,25 @@ describe('VueTurn', () => {
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 520, clientY: 300 })
     expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
     expect(mocks.beginFoldDrag).not.toHaveBeenCalled()
+  })
+
+  it('starts a fold drag when pressing outside the pages with fold enabled', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6)
+    stubViewportRect(wrapper)
+    // 书页外（视口空白处）按下：pickPage 未命中，仍走折页拖拽（非条带卷曲）
+    mocks.pickPage.mockReturnValue(null)
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 550 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+    // 锚点取外缘中部（pickV=0），方向按视口半区（右半 → 前进）
+    expect(mocks.beginFoldDrag.mock.calls[0]?.[4]).toBe(0)
+    expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toEqual([['left']])
+    // 拖动跟手，松手走折角收尾
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 560, clientY: 400 })
+    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(560, 400)
+    await fireViewportPointer(wrapper, 'pointerup', { pointerId: 1, clientX: 560, clientY: 400 })
+    expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
   })
 
   it('does not peel on hover by default', async () => {
