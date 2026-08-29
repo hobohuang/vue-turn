@@ -39,6 +39,8 @@ export interface StackSideVisual {
   edgeX: number
   /** 厚度（世界单位） */
   thickness: number
+  /** 该侧纸叠层数（驱动层理纹理密度：一层纸一条页线） */
+  layers: number
   /** 伸展方向：-1 向左 / +1 向右 */
   dir: 1 | -1
 }

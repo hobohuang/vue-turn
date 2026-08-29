@@ -35,7 +35,9 @@ import type { PagePick } from '@/lib/TurnScene'
 import { computeFlipSpec, pageWidth as pageWidthOf, spreadLayout } from '@/lib/flipSpec'
 import {
   computeStackSides,
+  isCenteredLayout,
   pageAtFraction,
+  STACK_COMPACT,
   stackThickness,
   type StackSide,
 } from '@/lib/pageStack'
@@ -495,12 +497,18 @@ function stackVisualFor(pageIndex: number): StackVisual {
     sheetWidth: width,
   })
   const maxDepth = width * safeStackDepth.value
+  // 合页（居中单页）状态书页全部压紧叠放，条带按压实系数收窄；
+  // 翻开状态的纸叠页边微张，保持蓬松厚度
+  const compact = isCenteredLayout(pageIndex, state.displayedPages.value, pageCount.value)
+    ? STACK_COMPACT
+    : 1
   const toVisual = (side: StackSide | null) =>
     side
       ? {
           edgeX: side.edgeX,
           dir: side.dir,
-          thickness: stackThickness(side.count, pageCount.value, maxDepth),
+          thickness: stackThickness(side.count, pageCount.value, maxDepth) * compact,
+          layers: side.count,
         }
       : null
   return { left: toVisual(sides.left), right: toVisual(sides.right) }

@@ -35,6 +35,23 @@ export interface StackLayoutOptions {
   sheetWidth: number
 }
 
+// 居中单页状态：单页显示模式，或封面/封底朝上（书合着）。
+// 此时书页全部压紧叠放（无翻开页的蓬松感），纸叠厚度应按压实系数收窄
+export function isCenteredLayout(
+  currentPage: number,
+  displayedPages: 1 | 2,
+  numPages: number,
+): boolean {
+  return (
+    displayedPages === 1 ||
+    currentPage === 0 ||
+    (currentPage === numPages - 1 && currentPage % 2 === 1)
+  )
+}
+
+// 合书压实系数：合页时全部书页压紧叠放，条带比翻开状态的单侧蓬松堆更窄
+export const STACK_COMPACT = 0.6
+
 // 计算某页状态下左右纸叠的页面映射。
 // 平躺显示的封面/封底（已作为页面网格渲染）不计入纸叠层数：
 // 封面在 currentPage>0 时已翻到左侧平躺；封底（末索引为奇数）在
@@ -44,10 +61,7 @@ export interface StackLayoutOptions {
 // LTR：已读页堆在左侧、剩余页在右侧；RTL 镜像。
 export function computeStackSides(options: StackLayoutOptions): StackSides {
   const { currentPage, displayedPages, forwardDirection, numPages, sheetWidth } = options
-  const centered =
-    displayedPages === 1 ||
-    currentPage === 0 ||
-    (currentPage === numPages - 1 && currentPage % 2 === 1)
+  const centered = isCenteredLayout(currentPage, displayedPages, numPages)
   const last = centered ? currentPage : Math.min(currentPage + 1, numPages - 1)
   const edge = centered ? sheetWidth / 2 : sheetWidth
 
