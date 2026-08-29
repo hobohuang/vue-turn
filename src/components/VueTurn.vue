@@ -33,6 +33,7 @@ import { useBookState } from '@/composables/useBookState'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import type { PagePick } from '@/lib/TurnScene'
 import { computeFlipSpec, pageWidth as pageWidthOf, spreadLayout } from '@/lib/flipSpec'
+import { resolveLook } from '@/lib/presets'
 import {
   computeStackSides,
   isCenteredLayout,
@@ -53,6 +54,7 @@ import type {
   StackVisual,
   StaticPlacement,
   TurnInstance,
+  TurnPreset,
   ViewportPoint,
 } from '@/types/turn'
 
@@ -66,15 +68,17 @@ const props = withDefaults(
     flipDuration?: number
     /** 初始页码（未提供 modelValue 时生效） */
     startPage?: number
-    /** 翻页网格纵向分段数，越大卷曲越平滑 */
+    /** 观感预设：为 nPolygons/perspective/ambient/gloss/curl 提供成组默认值，显式传入的专业参数仍可覆盖预设 */
+    preset?: TurnPreset
+    /** 翻页网格纵向分段数，越大卷曲越平滑（未传时取 preset 默认值） */
     nPolygons?: number
-    /** 透视参考距离（像素），越小透视越强 */
+    /** 透视参考距离（像素），越小透视越强（未传时取 preset 默认值） */
     perspective?: number
-    /** 环境光强度 */
+    /** 环境光强度（未传时取 preset 默认值） */
     ambient?: number
-    /** 方向光（纸张光泽）强度 */
+    /** 方向光（纸张光泽）强度（未传时取 preset 默认值） */
     gloss?: number
-    /** 卷曲幅度（0 为纯刚体旋转） */
+    /** 卷曲幅度（0 为纯刚体旋转）（未传时取 preset 默认值） */
     curl?: number
     /** 前进方向：left 为从左向右阅读 */
     forwardDirection?: FlipDirection
@@ -127,11 +131,7 @@ const props = withDefaults(
     pageAspect: 0.75,
     flipDuration: 900,
     startPage: 1,
-    nPolygons: 64,
-    perspective: 2400,
-    ambient: 1,
-    gloss: 0.35,
-    curl: 0.8,
+    preset: 'realistic',
     forwardDirection: 'left',
     displayedPages: 'auto',
     pageWidth: 768,
@@ -210,11 +210,14 @@ const {
   pickPage,
 } = useTurnRenderer({
   pageAspect: props.pageAspect,
-  nPolygons: props.nPolygons,
-  perspective: props.perspective,
-  ambient: props.ambient,
-  gloss: props.gloss,
-  curl: props.curl,
+  // 观感参数：preset 提供成组默认值，显式传入的专业参数覆盖预设
+  ...resolveLook(props.preset, {
+    nPolygons: props.nPolygons,
+    perspective: props.perspective,
+    ambient: props.ambient,
+    gloss: props.gloss,
+    curl: props.curl,
+  }),
   fitMargin: props.fitMargin,
   maxPixelRatio: props.maxPixelRatio,
   maxZoom: props.maxZoom,

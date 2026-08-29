@@ -37,14 +37,15 @@ const page = ref(1)
 | Prop | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `modelValue` | `number` | - | 当前页码（从 1 开始），支持 v-model |
-| `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高） |
+| `preset` | `'realistic' \| 'crisp' \| 'soft'` | `'realistic'` | 观感预设：为下列五个专业参数提供成组默认值，显式传入的参数仍可逐项覆盖（详见下文「观感预设」） |
+| `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），常见图书尺寸参考下文「常见图书宽高比」 |
 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒） |
 | `startPage` | `number` | `1` | 初始页码（未提供 modelValue 时生效） |
-| `nPolygons` | `number` | `64` | 翻页网格纵向分段数 |
-| `perspective` | `number` | `2400` | 透视参考距离（像素） |
-| `ambient` | `number` | `1` | 环境光强度 |
-| `gloss` | `number` | `0.35` | 方向光强度 |
-| `curl` | `number` | `0.8` | 卷曲幅度（0 为纯刚体旋转） |
+| `nPolygons` | `number` | 取 preset | 翻页网格纵向分段数，越大卷曲越平滑 |
+| `perspective` | `number` | 取 preset | 透视参考距离（像素），越小透视越强 |
+| `ambient` | `number` | 取 preset | 环境光强度 |
+| `gloss` | `number` | 取 preset | 方向光（纸张光泽）强度 |
+| `curl` | `number` | 取 preset | 卷曲幅度（0 为纯刚体旋转） |
 | `forwardDirection` | `'left' \| 'right'` | `'left'` | 前进方向 |
 | `displayedPages` | `'auto' \| 1 \| 2` | `'auto'` | 显示模式：auto 按容器宽高判定 |
 | `pageWidth` | `number` | `768` | 离屏光栅化宽度（像素） |
@@ -57,7 +58,7 @@ const page = ref(1)
 | `clickDeadZone` | `number` | `0` | 点击翻页中间死区宽度占比（0~0.5）：视口中轴该比例区域内的点击不翻页 |
 | `keyboard` | `boolean` | `true` | 键盘翻页：方向键 / PageUp / PageDown / Space / Home / End（需先聚焦组件；方向键跟随阅读方向） |
 | `ariaLabel` | `string` | `'翻书'` | 视口无障碍标签 |
-| `cacheBust` | `boolean` | `true` | 光栅化时是否给图片加破缓存参数，避免拿到旧图 |
+| `cacheBust` | `boolean` | `true` | 光栅化时是否给图片加破缓存参数，避免拿到旧图（详见下文「cacheBust 使用场景」） |
 | `prefetchWindow` | `number` | `4` | 懒光栅化预取窗口：当前可见页前后各 N 页预生成纹理，窗口外释放（设为 0 关闭懒加载，全量光栅化） |
 | `resourceTimeout` | `number` | `5000` | 光栅化前资源等待超时（毫秒）：等待 `<img>`、CSS background-image、文档字体；超时后放弃等待直接光栅化 |
 | `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
@@ -68,6 +69,48 @@ const page = ref(1)
 | `dblClickZoom` | `boolean` | `false` | 是否允许双击切换缩放（开启后单击翻页延迟约 260ms 以区分双击） |
 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
 | `stackDepth` | `number` | `0.02` | 纸叠最大厚度占单页宽度的比例（0~0.5） |
+
+### 观感预设（preset）
+
+`nPolygons` / `perspective` / `ambient` / `gloss` / `curl` 五个渲染参数较为专业，`preset` 为它们提供成组默认值，选一个即可获得协调的整体观感：
+
+| 预设 | 定位 | nPolygons | perspective | ambient | gloss | curl |
+| --- | --- | --- | --- | --- | --- | --- |
+| `realistic`（默认） | 真实纸感：均衡卷曲与光影，接近真实平装书 | 64 | 2400 | 1 | 0.35 | 0.8 |
+| `crisp` | 干脆硬朗：低卷曲偏刚体、弱光泽、透视略强，适合硬纸板书/儿童绘本 | 32 | 1800 | 1.05 | 0.15 | 0.25 |
+| `soft` | 柔和舒缓：高卷曲慢飘感、光影更平、透视更弱，适合杂志/画册 | 96 | 3200 | 1.2 | 0.25 | 0.95 |
+
+覆盖语义：**预设为默认值，显式传入的专业参数逐项覆盖**。例如 `preset="soft" :curl="0.9"` 其余取 soft 值、仅卷曲改为 0.9；未传 preset 时五个参数均按上表 realistic 值（与历史默认一致，老用法行为不变）。非法 preset 值回退 realistic 并 `console.warn`。
+
+这些参数在组件挂载时读取一次（与此前行为一致），运行中切换 preset 或专业参数不会热更新。
+
+### 常见图书宽高比
+
+`pageAspect` 为单页宽/高（注意是宽除以高，不是开本习惯的高除以宽）。常见成品书的参考值：
+
+| 书籍类型 | 开本尺寸 | 宽高比（宽/高） |
+| --- | --- | --- |
+| 32 开口袋书（文学小说） | 130 × 184 mm | `0.71` |
+| 大众 16 开（畅销书/教材） | 185 × 260 mm | `0.71` |
+| B5（技术书/经管书） | 170 × 240 mm | `0.71` |
+| 标准 A4（杂志/画册） | 210 × 297 mm | `0.71` |
+| 24 开（绘本/图文书） | 150 × 210 mm | `0.71` |
+| 16 开方形画册 | 210 × 210 mm | `1.0` |
+| 6:9 现代小说（西方平装） | 152 × 229 mm | `0.66` |
+| 横版儿童绘本 | 260 × 210 mm | `1.24` |
+
+实际取值以你的设计稿单页尺寸为准（跨页项按双倍宽度光栅化，`pageAspect` 仍按单页传）；多数大众图书集中在 `0.66 ~ 0.75`，这也是组件默认 `0.75` 的由来。
+
+### cacheBust 使用场景
+
+`cacheBust` 控制 `html-to-image` 光栅化时是否给图片 URL 追加时间戳参数（默认 `true`，即 `url?timestamp=...`）强制绕过浏览器缓存，保证同名图片更新后重新拉取。以下场景应设为 `false`：
+
+- **图片内容不可变**：图片 URL 与内容一一对应（如带内容哈希的构建产物 `cover.a3f9c2.png`、CDN 指纹地址），不存在"同名不同图"，跳过破缓存可直接复用缓存，加快光栅化并减少请求。
+- **图片服务端校验签名**：图片 URL 含签名/鉴权参数（如 OSS/七牛的 `?Expires=...&Signature=...`），再追加时间戳会使签名校验失败导致图片 403，必须关闭。
+- **重复光栅化频繁**：翻页窗口反复进出触发同页多次光栅化，或调用 `refresh()`/`refreshPage()` 较多——每次都破缓存意味着每次都完整重新下载，关闭后命中浏览器缓存可显著提速。
+- **离线/内嵌资源**：页面使用 `data:`/`blob:` URL 或 Service Worker 代理的本地资源，破缓存参数无意义甚至可能干扰匹配。
+
+注意：设为 `false` 后，若图片同名但内容已更新（如运营后台替换了同 URL 的图），光栅化可能拿到浏览器缓存的旧图；这种情况需保持 `true`，或改用带版本号的 URL（如 `img.png?v=2`）后关闭 `cacheBust`。
 
 ## Events
 
