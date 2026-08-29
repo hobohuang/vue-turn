@@ -39,12 +39,28 @@ const mocks = vi.hoisted(() => {
     endDragFlip: vi.fn<(commit: boolean, baseDuration: number) => void>(),
     stopFlip: vi.fn<() => void>(),
     setDragProgress: vi.fn<(progress: number) => void>(),
+    beginFoldDrag: vi.fn<
+      (
+        spec: import('@/types/turn').FlipSpec,
+        front: FakeTexture | null,
+        back: FakeTexture | null,
+        pickU: number,
+        pickV: number,
+        bend: number,
+        onDone: (committed?: boolean) => void,
+        options?: import('@/types/turn').FlipSheetOptions,
+      ) => boolean
+    >(),
+    setFoldDragFromClient: vi.fn<(x: number, y: number) => number | null>(),
+    setFoldDragAt: vi.fn<(qu: number, qv: number) => number | null>(),
+    endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
     setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
     getZoom: vi.fn<() => number>(),
     panBy: vi.fn<(dx: number, dy: number) => void>(),
     pickPage: vi.fn<(x: number, y: number) => unknown>(),
     setStaticPages: vi.fn<(placements: unknown[], textureOf: (index: number) => unknown) => void>(),
     applyStaticTexture: vi.fn<(index: number, texture: FakeTexture) => void>(),
+    setCoverPages: vi.fn<(indices: number[]) => void>(),
     setStacks: vi.fn<() => void>(),
     elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
   }
@@ -58,10 +74,15 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     maxAnisotropy: ref(8),
     setStaticPages: mocks.setStaticPages,
     applyStaticTexture: mocks.applyStaticTexture,
+    setCoverPages: mocks.setCoverPages,
     startFlip: mocks.startFlip,
     beginDragFlip: mocks.beginDragFlip,
     setDragProgress: mocks.setDragProgress,
     endDragFlip: mocks.endDragFlip,
+    beginFoldDrag: mocks.beginFoldDrag,
+    setFoldDragFromClient: mocks.setFoldDragFromClient,
+    setFoldDragAt: mocks.setFoldDragAt,
+    endFoldDrag: mocks.endFoldDrag,
     stopFlip: mocks.stopFlip,
     setZoom: mocks.setZoom,
     getZoom: mocks.getZoom,
@@ -1058,7 +1079,7 @@ describe('VueTurn', () => {
     await nextTick()
   }
 
-  it('flips hard pages as rigid sheets without curl', async () => {
+  it('flips cover/back-cover by coverPreset as rigid sheets (default hard)', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     const Host = defineComponent({
       setup() {
@@ -1077,7 +1098,52 @@ describe('VueTurn', () => {
               },
               {
                 default: () => [
-                  h(TurnItem, { hard: true }, { default: () => [h('div', 'cover')] }),
+                  h(TurnItem, null, { default: () => [h('div', 'cover')] }),
+                  ...Array.from({ length: 4 }, (_, i) =>
+                    h(TurnItem, null, { default: () => [h('div', `page ${i + 1}`)] }),
+                  ),
+                ],
+              },
+            ),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
+    // 封面索引 0、封底索引 5（末 item 前 5 页时末项前补空白页）
+    expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 5])
+    inst.next()
+    await flushPromises()
+    // 封面：默认 coverPreset=hard，curl 0 刚体翻转 + 封面档网格密度
+    expect(mocks.startFlip.mock.calls[0]?.[5]).toEqual({ curl: 0, nPolygons: 32 })
+    inst.next()
+    await flushPromises()
+    // 普通内页：无覆盖
+    expect(mocks.startFlip.mock.calls[1]?.[5]).toEqual({})
+  })
+
+  it('coverPreset=soft makes covers curl like soft paper', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const page = ref(1)
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                ref: turnRef,
+                coverPreset: 'soft',
+                modelValue: page.value,
+                'onUpdate:modelValue': (v: number) => {
+                  page.value = v
+                },
+              },
+              {
+                default: () => [
+                  h(TurnItem, null, { default: () => [h('div', 'cover')] }),
                   ...Array.from({ length: 4 }, (_, i) =>
                     h(TurnItem, null, { default: () => [h('div', `page ${i + 1}`)] }),
                   ),
@@ -1092,12 +1158,8 @@ describe('VueTurn', () => {
     const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
     inst.next()
     await flushPromises()
-    // 封面（硬页）：curl 覆盖为 0，整页刚体翻转
-    expect(mocks.startFlip.mock.calls[0]?.[5]).toEqual({ curl: 0 })
-    inst.next()
-    await flushPromises()
-    // 普通页：无卷曲覆盖
-    expect(mocks.startFlip.mock.calls[1]?.[5]).toEqual({})
+    // 封面：soft 档卷曲与网格密度
+    expect(mocks.startFlip.mock.calls[0]?.[5]).toEqual({ curl: 0.8, nPolygons: 64 })
   })
 
   it('cancels flips and jumps when before-flip calls preventDefault', async () => {

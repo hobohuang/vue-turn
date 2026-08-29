@@ -18,6 +18,10 @@ export interface TurnRendererOptions {
   ambient: number
   gloss: number
   curl: number
+  /** 封面/封底灯光组：环境光强度（与内页光影独立） */
+  coverAmbient?: number
+  /** 封面/封底灯光组：方向光强度 */
+  coverGloss?: number
   fitMargin?: number
   maxPixelRatio?: number
   maxZoom?: number
@@ -75,6 +79,11 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     scene?.applyStaticTexture(index, texture)
   }
 
+  // 封面/封底页索引：这些页挂封面图层，由封面灯光组照亮
+  function setCoverPages(indices: number[]) {
+    scene?.setCoverPages(indices)
+  }
+
   // 纸叠：to 省略时吸附到 from（空闲布局），否则随翻页动画插值
   function setStacks(from: StackVisual | null, to?: StackVisual | null) {
     scene?.setStacks(from, to)
@@ -123,6 +132,36 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     scene?.endDragFlip(commit, baseDuration)
   }
 
+  // 折角拖拽：场景可用返回 true；已有同方向拖拽纸张时直接接管
+  function beginFoldDrag(
+    spec: FlipSpec,
+    frontTexture: THREE.Texture | null,
+    backTexture: THREE.Texture | null,
+    pickU: number,
+    pickV: number,
+    bend: number,
+    onDone: (committed: boolean) => void,
+    options?: FlipSheetOptions,
+  ) {
+    return scene
+      ? scene.beginFoldDrag(spec, frontTexture, backTexture, pickU, pickV, bend, onDone, options)
+      : false
+  }
+
+  // 折角拖点跟随指针：返回折角进度，无折角纸张时返回 null
+  function setFoldDragFromClient(clientX: number, clientY: number) {
+    return scene ? scene.setFoldDragFromClient(clientX, clientY) : null
+  }
+
+  // 直接以页宽坐标设置折角拖点（悬停预览用）
+  function setFoldDragAt(qu: number, qv: number) {
+    return scene ? scene.setFoldDragAt(qu, qv) : null
+  }
+
+  function endFoldDrag(commit: boolean, baseDuration: number) {
+    scene?.endFoldDrag(commit, baseDuration)
+  }
+
   function stopFlip() {
     scene?.stopFlip()
   }
@@ -150,6 +189,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     maxAnisotropy,
     setStaticPages,
     applyStaticTexture,
+    setCoverPages,
     setStacks,
     pickStack,
     setStackHover,
@@ -157,6 +197,10 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     beginDragFlip,
     setDragProgress,
     endDragFlip,
+    beginFoldDrag,
+    setFoldDragFromClient,
+    setFoldDragAt,
+    endFoldDrag,
     stopFlip,
     setZoom,
     getZoom,

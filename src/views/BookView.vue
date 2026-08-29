@@ -122,7 +122,7 @@ function onRegionTap(_page: number, region: PageRegion) {
       @zoom-change="onZoomChange"
       @region-tap="onRegionTap"
     >
-      <turn-item hard>
+      <turn-item>
         <div class="demo-page cover">
           <span class="cover-badge">vue-turn</span>
           <h1 class="cover-title">TURN</h1>
@@ -237,7 +237,7 @@ export function curlPoint(s, θ, κ) {
         </div>
       </turn-item>
 
-      <turn-item hard>
+      <turn-item>
         <div class="demo-page cover back-cover">
           <h1 class="cover-title small">FIN</h1>
           <p class="cover-subtitle">感谢阅读</p>

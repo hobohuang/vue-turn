@@ -32,8 +32,8 @@ import TurnItem from '@/components/TurnItem.vue'
 import { useBookState } from '@/composables/useBookState'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import type { PagePick } from '@/lib/TurnScene'
-import { computeFlipSpec, pageWidth as pageWidthOf, spreadLayout } from '@/lib/flipSpec'
-import { resolveLook } from '@/lib/presets'
+import { PAGE_HEIGHT, computeFlipSpec, pageWidth as pageWidthOf, spreadLayout } from '@/lib/flipSpec'
+import { resolveFold, resolveLook } from '@/lib/presets'
 import {
   computeStackSides,
   isCenteredLayout,
@@ -68,8 +68,10 @@ const props = withDefaults(
     flipDuration?: number
     /** 初始页码（未提供 modelValue 时生效） */
     startPage?: number
-    /** 观感预设：为 nPolygons/perspective/ambient/gloss/curl 提供成组默认值，显式传入的专业参数仍可覆盖预设 */
+    /** 观感预设（纸张类型）：soft 普通纸张哑光（默认，可卷曲/折角）、hard 纸板刚体强光泽；为专业参数提供成组默认值，显式传入仍可覆盖 */
     preset?: TurnPreset
+    /** 封面/封底观感预设（默认 hard 纸板）：控制封面与封底的纸张（卷曲/折角/网格密度）与光影（独立灯光组）；perspective 为全局相机参数不按页生效 */
+    coverPreset?: TurnPreset
     /** 翻页网格纵向分段数，越大卷曲越平滑（未传时取 preset 默认值） */
     nPolygons?: number
     /** 透视参考距离（像素），越小透视越强（未传时取 preset 默认值） */
@@ -116,6 +118,8 @@ const props = withDefaults(
     peel?: boolean
     /** 折角提示区域宽度占视口宽度的比例（两侧边缘条带，0~0.5） */
     peelZone?: number
+    /** 角点拖拽折角（turn.js 4 风格）：未传时取 preset 默认（soft 开启，hard 关闭） */
+    fold?: boolean
     /** 最大缩放倍数 */
     maxZoom?: number
     /** 是否允许滚轮缩放 */
@@ -131,7 +135,8 @@ const props = withDefaults(
     pageAspect: 0.75,
     flipDuration: 900,
     startPage: 1,
-    preset: 'realistic',
+    preset: 'soft',
+    coverPreset: 'hard',
     forwardDirection: 'left',
     displayedPages: 'auto',
     pageWidth: 768,
@@ -147,6 +152,8 @@ const props = withDefaults(
     dragToFlip: true,
     peel: false,
     peelZone: 0.12,
+    /** 角点拖拽折角（turn.js 4 风格）：未传时取 preset 默认（soft 开启，hard 关闭） */
+    fold: undefined,
     maxZoom: 3,
     zoomEnabled: false,
     dblClickZoom: false,
@@ -189,6 +196,10 @@ const emit = defineEmits<{
 
 const state = useBookState()
 
+// 封面/封底观感：coverPreset 独立解析（挂载时读取一次，与观感参数一致）。
+// 摄像头 perspective 为全局参数，不按页生效，此处仅取光影与纸张参数
+const coverLook = resolveLook(props.coverPreset, {})
+
 const {
   container,
   containerSize,
@@ -196,6 +207,7 @@ const {
   maxAnisotropy,
   setStaticPages,
   applyStaticTexture,
+  setCoverPages,
   setStacks,
   pickStack,
   setStackHover,
@@ -203,6 +215,10 @@ const {
   beginDragFlip,
   setDragProgress,
   endDragFlip,
+  beginFoldDrag,
+  setFoldDragFromClient,
+  setFoldDragAt,
+  endFoldDrag,
   stopFlip,
   setZoom: setRendererZoom,
   getZoom,
@@ -218,6 +234,9 @@ const {
     gloss: props.gloss,
     curl: props.curl,
   }),
+  // 封面/封底光影：coverPreset 独立灯光组
+  coverAmbient: coverLook.ambient,
+  coverGloss: coverLook.gloss,
   fitMargin: props.fitMargin,
   maxPixelRatio: props.maxPixelRatio,
   maxZoom: props.maxZoom,
@@ -239,7 +258,6 @@ let warnedInvalidChild = false
 interface PageItem {
   vnode: VNode
   spread: boolean
-  hard: boolean
   regions: PageRegion[]
 }
 
@@ -251,12 +269,10 @@ function collectPages(): PageItem[] {
       if (node.type === TurnItem) {
         // 模板无值属性编译为 ""，动态绑定为 true/false，均按真值判定
         const rawSpread = node.props?.spread
-        const rawHard = node.props?.hard
         const regions = node.props?.regions
         result.push({
           vnode: node,
           spread: rawSpread !== undefined && rawSpread !== null && rawSpread !== false,
-          hard: rawHard !== undefined && rawHard !== null && rawHard !== false,
           regions: Array.isArray(regions) ? (regions as PageRegion[]) : [],
         })
       } else if (Array.isArray(node.children)) {
@@ -280,8 +296,8 @@ interface PageSource {
   itemIndex: number
   region: 'full' | 'left' | 'right'
   blank: boolean
-  /** 硬页（纸板页）：整页刚体翻转，无卷曲形变 */
-  hard: boolean
+  /** 封面/封底页：按 coverPreset 观感渲染与翻页（挂封面图层独立光照） */
+  cover: boolean
 }
 
 const pageSources = computed<PageSource[]>(() => {
@@ -289,7 +305,7 @@ const pageSources = computed<PageSource[]>(() => {
   const items = pageItems.value
   if (items.length === 0) return sources
   // 首个 item 视为封面，固定单页居中
-  sources.push({ itemIndex: 0, region: 'full', blank: false, hard: items[0]?.hard ?? false })
+  sources.push({ itemIndex: 0, region: 'full', blank: false, cover: true })
   let pageIndex = 1
   for (let itemIndex = 1; itemIndex < items.length; itemIndex++) {
     const item = items[itemIndex]
@@ -297,14 +313,14 @@ const pageSources = computed<PageSource[]>(() => {
     if (item.spread) {
       // 跨页需从奇数索引（左页）开始；落在偶数索引时插入空白页补位
       if (pageIndex % 2 === 0) {
-        sources.push({ itemIndex: -1, region: 'full', blank: true, hard: false })
+        sources.push({ itemIndex: -1, region: 'full', blank: true, cover: false })
         pageIndex++
       }
-      sources.push({ itemIndex, region: 'left', blank: false, hard: item.hard })
-      sources.push({ itemIndex, region: 'right', blank: false, hard: item.hard })
+      sources.push({ itemIndex, region: 'left', blank: false, cover: false })
+      sources.push({ itemIndex, region: 'right', blank: false, cover: false })
       pageIndex += 2
     } else {
-      sources.push({ itemIndex, region: 'full', blank: false, hard: item.hard })
+      sources.push({ itemIndex, region: 'full', blank: false, cover: false })
       pageIndex++
     }
   }
@@ -315,13 +331,18 @@ const pageSources = computed<PageSource[]>(() => {
   if (sources.length >= 3 && sources.length % 2 === 1) {
     const last = sources[sources.length - 1]!
     if (last.region === 'right') {
-      sources.push({ itemIndex: -1, region: 'full', blank: true, hard: false })
+      sources.push({ itemIndex: -1, region: 'full', blank: true, cover: false })
     } else {
       const insertAt = sources.findIndex((s) => s.itemIndex === last.itemIndex)
       if (insertAt > 0) {
-        sources.splice(insertAt, 0, { itemIndex: -1, region: 'full', blank: true, hard: false })
+        sources.splice(insertAt, 0, { itemIndex: -1, region: 'full', blank: true, cover: false })
       }
     }
+  }
+  // 末个 item 视为封底：其占用的所有页标记为 cover
+  const lastItemIndex = items.length - 1
+  for (const source of sources) {
+    if (source.itemIndex === lastItemIndex) source.cover = true
   }
   return sources
 })
@@ -370,6 +391,49 @@ const safeStackDepth = computed(() => {
   const value = Number(props.stackDepth)
   return Number.isFinite(value) && value > 0 ? Math.min(value, 0.5) : 0.15
 })
+
+// 折角（fold）：enabled 由顶层 fold prop 覆盖预设；bend 为折线圆弧过渡占页宽比例
+const foldParams = computed(() => resolveFold(props.preset, props.fold))
+const foldBendWorld = computed(() => foldParams.value.bend * pageWidthOf(props.pageAspect))
+
+// 折角角区：页面外缘四角 22% 见方（跨页合并网格按半宽折算）
+const FOLD_ZONE = 0.22
+
+// 命中折角角区：返回翻页方向、角点纵向符号（+1 顶角 / -1 底角）与
+// 深入强度 t（0=角区边缘，1=正角点）。仅跨页左右页可折，居中页（封面等）不折。
+function foldCornerAt(
+  clientX: number,
+  clientY: number,
+): { trigger: FlipDirection; cornerV: number; t: number } | null {
+  if (!foldParams.value.enabled) return null
+  const pick = pickPage(clientX, clientY)
+  if (!pick) return null
+  const ltr = props.forwardDirection === 'left'
+  // 命中页在跨页中的左右侧（跨页合并网格按 uv 一分为二）
+  let worldRight: boolean
+  let outerU: number
+  let zoneU = FOLD_ZONE
+  if (pick.spread) {
+    worldRight = pick.u > 0.5
+    outerU = worldRight ? 1 - pick.u : pick.u
+    zoneU = FOLD_ZONE / 2
+  } else {
+    const placement = lastPlacements.find((p) => p.index === pick.index)
+    if (!placement || placement.slot === 'center') return null
+    worldRight = placement.slot === 'right'
+    // 右槽页外缘在纹理 u=1，左槽页在 u=0
+    outerU = worldRight ? 1 - pick.u : pick.u
+  }
+  if (outerU > zoneU) return null
+  // 纵向：pick.v ∈ [0,1]（1 为顶），角在外缘顶/底
+  const outerV = pick.v < 0.5 ? pick.v : 1 - pick.v
+  if (outerV > FOLD_ZONE) return null
+  // 折前进侧的页 = 前进；折后退侧的页 = 后退（LTR 前进侧在世界右）
+  const advancing = ltr ? worldRight : !worldRight
+  const trigger: FlipDirection = advancing ? (ltr ? 'left' : 'right') : ltr ? 'right' : 'left'
+  const t = 1 - Math.max(outerU / zoneU, outerV / FOLD_ZONE)
+  return { trigger, cornerV: pick.v < 0.5 ? -1 : 1, t: Math.min(1, Math.max(0, t)) }
+}
 
 // 懒光栅化窗口：覆盖当前可见页 [currentPage, currentPage+spread) 前后各 W 页
 function computeWindow(): [number, number] {
@@ -523,7 +587,7 @@ function applyStacksIdle() {
 }
 
 // 翻页前置布局：纸叠随动画从当前状态过渡到目标状态。
-// 封底开合期间封底硬页在空中翻动，不属于纸叠——它平躺时计入的
+// 封底开合期间封底页在空中翻动，不属于纸叠——它平躺时计入的
 // 那一层在 from/to 中清除，避免动画中右侧出现悬浮细线
 function applyStacksFlip(spec: FlipSpec) {
   if (!props.stack) {
@@ -583,6 +647,8 @@ function renderStatic() {
   lastPlacements = merged
   // 跨页起始页索引集合：这些索引的静态网格用整页纹理
   const spreadStarts = new Set(merged.filter((p) => p.spread).map((p) => p.index))
+  // 同步封面/封底索引：静态页与后续翻页纸张据此挂封面图层
+  setCoverPages(sources.reduce<number[]>((acc, s, i) => (s.cover ? [...acc, i] : acc), []))
   setStaticPages(merged, (index) => {
     if (spreadStarts.has(index)) {
       const source = sources[index]
@@ -627,11 +693,12 @@ function emitBeforeFlip(direction: FlipDirection | null, from: number, to: numbe
   return !ctx.prevented
 }
 
-// 纸张正反两面任一为硬页时按刚体翻转（无卷曲）
+// 封面/封底按 coverPreset 翻页：正反任一为封面时采用封面档卷曲与网格密度；
+// 光影由场景封面灯光组按面独立照亮，不在此处传递
 function sheetOptions(spec: FlipSpec): FlipSheetOptions {
   const sources = pageSources.value
-  const hard = [spec.frontIndex, spec.backIndex].some((index) => sources[index]?.hard)
-  return hard ? { curl: 0 } : {}
+  const cover = [spec.frontIndex, spec.backIndex].some((index) => sources[index]?.cover)
+  return cover ? { curl: coverLook.curl, nPolygons: coverLook.nPolygons } : {}
 }
 
 function computeFlipSpecFor(trigger: FlipDirection): FlipSpec | null {
@@ -863,10 +930,12 @@ interface DragState {
   startX: number
   lastX: number
   lastT: number
-  /** 沿翻页方向的速度（px/ms） */
+  /** 沿翻页方向的速度（px/ms）；折角模式为进度变化速度（progress/ms） */
   velocity: number
   moved: number
   progress: number
+  /** 折角拖拽：纸角跟随指针，折线随拖点实时变化 */
+  fold?: boolean
 }
 
 interface PanState {
@@ -880,6 +949,8 @@ interface PanState {
 let drag: DragState | null = null
 let pan: PanState | null = null
 let peelTrigger: FlipDirection | null = null
+// 当前折角悬停纸张是否为折角（fold）形变：收起时需走 endFoldDrag 而非 endDragFlip
+let peelIsFold = false
 let sheetOwner: 'drag' | 'peel' | null = null
 let suppressClick = false
 let clickTimer: ReturnType<typeof setTimeout> | null = null
@@ -1017,15 +1088,22 @@ function discardPeel() {
 // 立即收起折角悬停的纸张（同步触发取消收尾）
 function releasePeelNow() {
   if (sheetOwner !== 'peel') return
+  const wasFold = peelIsFold
   sheetOwner = null
   peelTrigger = null
-  endDragFlip(false, safeFlipDuration.value)
+  peelIsFold = false
+  if (wasFold) {
+    endFoldDrag(false, safeFlipDuration.value)
+  } else {
+    endDragFlip(false, safeFlipDuration.value)
+  }
 }
 
 // t 为折角强度 [0,1]（0=条带内缘，1=最外缘），乘以 PEEL_PROGRESS 得实际进度；
 // 同向重复悬停只更新进度，不重建纸张。悬停仅预览页角：
 // 不动相机、不改纸叠布局（纸叠只在真实翻页时过渡）
 function ensurePeel(trigger: FlipDirection, t: number) {
+  peelIsFold = false
   const progress = Math.min(1, Math.max(0, t)) * PEEL_PROGRESS
   if (sheetOwner === 'peel' && peelTrigger === trigger) {
     setDragProgress(progress)
@@ -1075,6 +1153,55 @@ function updatePeel(event: PointerEvent) {
   }
 }
 
+// 折角悬停预览的当前角（+1 顶 / -1 底）：换角需重建纸张
+let peelFoldCorner = 0
+
+// 折角悬停预览：命中页角时纸角按深入强度轻轻折起，提示可抓取。
+// 与 peel 一致：不动相机、不改纸叠布局（真实翻页才过渡）
+function ensureFoldPreview(trigger: FlipDirection, cornerV: number, t: number) {
+  const w = pageWidthOf(props.pageAspect)
+  const pickV = (cornerV * PAGE_HEIGHT) / 2
+  // 拖点自角点沿对角向内偏移，t 越大折得越明显
+  const qu = w - t * 0.16 * w
+  const qv = pickV - t * cornerV * 0.1 * PAGE_HEIGHT
+  if (sheetOwner === 'peel' && peelTrigger === trigger && peelIsFold && peelFoldCorner === cornerV) {
+    setFoldDragAt(qu, qv)
+    return
+  }
+  releasePeelNow()
+  const spec = computeFlipSpecFor(trigger)
+  if (!spec) return
+  // 翻页前置布局：折角悬停不动相机
+  setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+  const ok = beginFoldDrag(
+    spec,
+    textures.get(spec.frontIndex) ?? null,
+    textures.get(spec.backIndex) ?? null,
+    w,
+    pickV,
+    foldBendWorld.value,
+    makeSheetDone(spec, trigger),
+    sheetOptions(spec),
+  )
+  if (!ok) return
+  sheetOwner = 'peel'
+  peelTrigger = trigger
+  peelIsFold = true
+  peelFoldCorner = cornerV
+  setFoldDragAt(qu, qv)
+}
+
+// 悬停折角预览：命中角区返回 true（优先于 peel 边缘条带）
+function updateFoldHover(event: PointerEvent): boolean {
+  if (!foldParams.value.enabled || disabledRef.value || state.isFlipping.value || isZoomed()) {
+    return false
+  }
+  const hit = foldCornerAt(event.clientX, event.clientY)
+  if (!hit) return false
+  ensureFoldPreview(hit.trigger, hit.cornerV, hit.t)
+  return true
+}
+
 // 拖拽进度：按下点起算的位移占视口 60% 宽度为满程（trigger 'left' 指针向左拖）
 function dragProgressFrom(clientX: number, rect: DOMRect, dragState: DragState): number {
   const scale = Math.max(1, rect.width * 0.6)
@@ -1096,6 +1223,59 @@ function onPointerDown(event: PointerEvent) {
     return
   }
   if (!props.dragToFlip || state.isFlipping.value || sheetOwner === 'drag') return
+  // 角点拖拽折角：命中角区优先于书脊拖拽
+  const foldHit = foldCornerAt(event.clientX, event.clientY)
+  if (foldHit) {
+    const spec = computeFlipSpecFor(foldHit.trigger)
+    if (!spec) return
+    if (!emitBeforeFlip(foldHit.trigger, state.page.value, state.page.value + spec.delta)) return
+    clearStackHover()
+    state.startFlip()
+    emit('flip-start', foldHit.trigger)
+    emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
+    const foldW = pageWidthOf(props.pageAspect)
+    const pickV = (foldHit.cornerV * PAGE_HEIGHT) / 2
+    // 同方向折角悬停的纸张直接接管；其余情况收起后新建折角纸张
+    const takeOver = sheetOwner === 'peel' && peelTrigger === foldHit.trigger && peelIsFold
+    if (!takeOver) {
+      if (sheetOwner === 'peel') releasePeelNow()
+      // 翻页前置布局：相机不动，折角在页内完成
+      setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    }
+    const ok = beginFoldDrag(
+      spec,
+      textures.get(spec.frontIndex) ?? null,
+      textures.get(spec.backIndex) ?? null,
+      foldW,
+      pickV,
+      foldBendWorld.value,
+      makeSheetDone(spec, foldHit.trigger),
+      sheetOptions(spec),
+    )
+    if (!ok) {
+      // 渲染不可用：立即回退状态，交互交由点击翻页兜底
+      state.cancelFlip()
+      emit('flip-end', foldHit.trigger)
+      return
+    }
+    applyStacksFlip(spec)
+    sheetOwner = 'drag'
+    peelTrigger = null
+    peelIsFold = false
+    drag = {
+      pointerId: event.pointerId,
+      trigger: foldHit.trigger,
+      startX: event.clientX,
+      lastX: event.clientX,
+      lastT: event.timeStamp,
+      velocity: 0,
+      moved: 0,
+      progress: 0,
+      fold: true,
+    }
+    capturePointer(el, event.pointerId)
+    return
+  }
   const ratio = (event.clientX - rect.left) / rect.width
   const ltr = props.forwardDirection === 'left'
   // 与点击翻页一致：LTR 右半前进、左半后退；RTL 相反
@@ -1159,22 +1339,33 @@ function onPointerMove(event: PointerEvent) {
     if (!rect || rect.width <= 0) return
     const dt = Math.max(1, event.timeStamp - drag.lastT)
     const dx = event.clientX - drag.lastX
-    // 沿翻页方向的速度：trigger 'left' 时向左为正
-    const along = drag.trigger === 'left' ? -dx : dx
-    drag.velocity = 0.75 * drag.velocity + 0.25 * (along / dt)
+    if (drag.fold) {
+      // 折角拖拽：拖点跟随指针，进度按拖点位置换算
+      const prev = drag.progress
+      const p = setFoldDragFromClient(event.clientX, event.clientY)
+      if (p !== null) {
+        drag.velocity = 0.75 * drag.velocity + 0.25 * ((p - prev) / dt)
+        drag.progress = p
+      }
+    } else {
+      // 沿翻页方向的速度：trigger 'left' 时向左为正
+      const along = drag.trigger === 'left' ? -dx : dx
+      drag.velocity = 0.75 * drag.velocity + 0.25 * (along / dt)
+      drag.progress = dragProgressFrom(event.clientX, rect, drag)
+      setDragProgress(drag.progress)
+    }
     drag.lastX = event.clientX
     drag.lastT = event.timeStamp
     drag.moved += Math.abs(dx)
-    drag.progress = dragProgressFrom(event.clientX, rect, drag)
-    setDragProgress(drag.progress)
     return
   }
-  // 无按键悬停：纸叠提示优先于折角提示（两者都在视口边缘区域）
+  // 无按键悬停：纸叠提示 > 折角预览 > 折角条带（peel），依次判定
   if (event.buttons !== 0) return
   if (updateStackHover(event)) {
     releasePeelNow()
     return
   }
+  if (updateFoldHover(event)) return
   updatePeel(event)
 }
 
@@ -1192,6 +1383,13 @@ function onPointerUp(event: PointerEvent) {
   if (rect) {
     emit('released', { x: event.clientX - rect.left, y: event.clientY - rect.top })
   }
+  if (dragState.fold) {
+    // 折角：过阈值或快速甩动完成翻页，否则拖点收回展平
+    const commit =
+      dragState.progress > 0.45 || (dragState.velocity > 0.0025 && dragState.progress > 0.08)
+    endFoldDrag(commit, safeFlipDuration.value)
+    return
+  }
   const progress = rect ? dragProgressFrom(event.clientX, rect, dragState) : dragState.progress
   // 超过阈值，或朝翻页方向的快速甩动，都视为完成翻页
   const commit = progress > 0.45 || (dragState.velocity > 0.5 && progress > 0.08)
@@ -1204,9 +1402,14 @@ function onPointerCancel(event: PointerEvent) {
     return
   }
   if (drag && event.pointerId === drag.pointerId) {
+    const wasFold = drag.fold === true
     drag = null
     suppressClick = true
-    endDragFlip(false, safeFlipDuration.value)
+    if (wasFold) {
+      endFoldDrag(false, safeFlipDuration.value)
+    } else {
+      endDragFlip(false, safeFlipDuration.value)
+    }
   }
 }
 

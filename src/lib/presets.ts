@@ -14,26 +14,50 @@ export interface LookParams {
   curl: number
 }
 
-// 三档观感预设：
-// - realistic 真实纸感（默认）：均衡卷曲与光影，接近真实平装书
-// - crisp 干脆硬朗：低卷曲偏刚体、弱光泽、透视略强，适合硬纸板书/儿童绘本
-// - soft 柔和舒缓：高卷曲慢飘感、光影更平、透视更弱，适合杂志/画册
-export const TURN_PRESETS: Record<TurnPreset, LookParams> = {
-  realistic: { nPolygons: 64, perspective: 2400, ambient: 1, gloss: 0.35, curl: 0.8 },
-  crisp: { nPolygons: 32, perspective: 1800, ambient: 1.05, gloss: 0.15, curl: 0.25 },
-  soft: { nPolygons: 96, perspective: 3200, ambient: 1.2, gloss: 0.25, curl: 0.95 },
+// 折角（fold）参数：是否开启角点拖拽折角及其柔软程度
+export interface FoldParams {
+  /** 是否开启角点拖拽折角（turn.js 4 风格） */
+  enabled: boolean
+  /** 折线圆弧过渡宽度占页宽比例，越大折角越柔软 */
+  bend: number
+}
+
+interface PresetEntry extends LookParams, FoldParams {}
+
+// 两种纸张类型的观感预设：
+// - soft 普通纸张（默认）：哑光（弱方向光）、自然卷曲，开启角点折角拖拽
+// - hard 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角
+export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
+  soft: {
+    nPolygons: 64,
+    perspective: 2400,
+    ambient: 1,
+    gloss: 0.15,
+    curl: 0.8,
+    enabled: true,
+    bend: 0.16,
+  },
+  hard: {
+    nPolygons: 32,
+    perspective: 2400,
+    ambient: 1,
+    gloss: 0.8,
+    curl: 0,
+    enabled: false,
+    bend: 0,
+  },
 }
 
 // 解析观感参数：preset 提供成组默认值，overrides 中显式传入（非 undefined）
-// 的专业参数逐项覆盖预设值。非法 preset 回退 realistic 并警告。
+// 的专业参数逐项覆盖预设值。非法 preset 回退 soft 并警告。
 export function resolveLook(
   preset: TurnPreset | undefined,
   overrides: Partial<LookParams>,
 ): LookParams {
   if (preset && !TURN_PRESETS[preset]) {
-    console.warn(`[vue-turn] 未知 preset "${String(preset)}"，已回退为 realistic`)
+    console.warn(`[vue-turn] 未知 preset "${String(preset)}"，已回退为 soft`)
   }
-  const base = (preset ? TURN_PRESETS[preset] : undefined) ?? TURN_PRESETS.realistic
+  const base = presetBase(preset)
   return {
     nPolygons: overrides.nPolygons ?? base.nPolygons,
     perspective: overrides.perspective ?? base.perspective,
@@ -41,4 +65,14 @@ export function resolveLook(
     gloss: overrides.gloss ?? base.gloss,
     curl: overrides.curl ?? base.curl,
   }
+}
+
+// 解析折角参数：enabled 由顶层 fold prop 显式覆盖预设，bend 取预设值
+export function resolveFold(preset: TurnPreset | undefined, fold?: boolean): FoldParams {
+  const base = presetBase(preset)
+  return { enabled: fold ?? base.enabled, bend: base.bend }
+}
+
+function presetBase(preset: TurnPreset | undefined): PresetEntry {
+  return (preset ? TURN_PRESETS[preset] : undefined) ?? TURN_PRESETS.soft
 }
