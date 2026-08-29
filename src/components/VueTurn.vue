@@ -428,19 +428,27 @@ function foldSideOf(pick: PagePick): { trigger: FlipDirection; worldRight: boole
   return { trigger, worldRight }
 }
 
-// 折页命中（按下用）：fold 开启时命中可翻页的任意位置均返回最近外角——
-// 折角以最近外角为锚点、指针为拖点，抓点距角越远折得越大：
-// 四边条带内为小折角跟手，页面中部为折页拖拽（整页如大折角对折翻页）
+// 折页命中（按下用）：fold 开启时命中可翻页的任意位置均返回命中信息。
+// edge=true（四角区）为折角拖拽：锚点取最近外角，斜折线；
+// edge=false 为折页拖拽：锚点取指针同高度的外页边缘点，竖直折线对折翻页
 function foldPageAt(
   clientX: number,
   clientY: number,
-): { trigger: FlipDirection; cornerV: number } | null {
+): { trigger: FlipDirection; cornerV: number; edge: boolean; v: number } | null {
   if (!foldParams.value.enabled) return null
   const pick = pickPage(clientX, clientY)
   if (!pick) return null
   const side = foldSideOf(pick)
   if (!side) return null
-  return { trigger: side.trigger, cornerV: pick.v < 0.5 ? -1 : 1 }
+  const outerU = side.worldRight ? 1 - pick.u : pick.u
+  const zoneU = pick.spread ? FOLD_ZONE / 2 : FOLD_ZONE
+  const outerV = pick.v < 0.5 ? pick.v : 1 - pick.v
+  return {
+    trigger: side.trigger,
+    cornerV: pick.v < 0.5 ? -1 : 1,
+    edge: outerU <= zoneU && outerV <= FOLD_ZONE,
+    v: pick.v,
+  }
 }
 
 // 折角条带命中（悬停预览用）：返回翻页方向、最近外角（+1 顶 / -1 底）与
@@ -1115,6 +1123,7 @@ function discardPeel() {
   if (sheetOwner === 'peel') {
     sheetOwner = null
     peelTrigger = null
+    peelFoldCorner = 0
   }
 }
 
@@ -1125,6 +1134,7 @@ function releasePeelNow() {
   sheetOwner = null
   peelTrigger = null
   peelIsFold = false
+  peelFoldCorner = 0
   if (wasFold) {
     endFoldDrag(false, safeFlipDuration.value)
   } else {
@@ -1171,7 +1181,7 @@ function updatePeel(event: PointerEvent) {
   if (foldParams.value.enabled) {
     const hit = foldStripAt(event.clientX, event.clientY)
     if (hit) {
-      ensureFoldPreview(hit.trigger, hit.cornerV, hit.t)
+      ensureFoldPreview(hit.trigger, 'corner', hit.t, hit.cornerV)
       return
     }
     releasePeelNow()
@@ -1202,14 +1212,22 @@ function updatePeel(event: PointerEvent) {
 // 折角悬停预览的当前角（+1 顶 / -1 底）：换角需重建纸张
 let peelFoldCorner = 0
 
-// 折角悬停预览：命中折角角区或外缘条带（fold 开启）时，纸角按深入强度
-// 轻轻折起，提示可抓取。不动相机、不改纸叠布局（真实翻页才过渡）
-function ensureFoldPreview(trigger: FlipDirection, cornerV: number, t: number) {
+// 折角悬停预览：命中四边条带（fold 开启）时按深入强度轻轻折起，提示可抓取。
+// mode 'corner' 锚点为最近外角（斜折线，cornerV 由调用方指定顶/底），
+// 'edge' 锚点为指针同高度的外页边缘点（竖直折线）。不动相机、不改纸叠布局
+// （真实翻页才过渡）
+function ensureFoldPreview(
+  trigger: FlipDirection,
+  mode: 'corner' | 'edge',
+  t: number,
+  cornerV: number,
+) {
   const w = pageWidthOf(props.pageAspect)
-  const pickV = (cornerV * PAGE_HEIGHT) / 2
-  // 拖点自角点沿对角向内偏移，t 越大折得越明显
+  const anchorV = mode === 'corner' ? cornerV : 0
+  const pickV = (anchorV * PAGE_HEIGHT) / 2
+  // 拖点自锚点向内偏移，t 越大折得越明显
   const qu = w - t * 0.16 * w
-  const qv = pickV - t * cornerV * 0.1 * PAGE_HEIGHT
+  const qv = mode === 'corner' ? pickV - t * cornerV * 0.1 * PAGE_HEIGHT : 0
   if (sheetOwner === 'peel' && peelTrigger === trigger && peelIsFold && peelFoldCorner === cornerV) {
     setFoldDragAt(qu, qv)
     return
@@ -1259,8 +1277,9 @@ function onPointerDown(event: PointerEvent) {
   }
   if (!props.dragToFlip || state.isFlipping.value || sheetOwner === 'drag') return
   // 折页拖拽：fold 开启时命中页面任意位置（跨页左右页）均走折角变形——
-  // 四边条带内为小折角跟手，页面中部为折页拖拽（外侧页角折至指针处，
-  // 整页如大折角对折翻页）；fold 关闭才走普通整页卷曲拖拽
+  // 四角区为折角拖拽（锚点=最近外角，斜折线）；其余位置为折页拖拽
+  // （锚点=指针同高度的外页边缘点，竖直折线对折翻页）；fold 关闭才走
+  // 普通整页卷曲拖拽
   const foldHit = foldPageAt(event.clientX, event.clientY)
   if (foldHit) {
     const spec = computeFlipSpecFor(foldHit.trigger)
@@ -1271,9 +1290,14 @@ function onPointerDown(event: PointerEvent) {
     emit('flip-start', foldHit.trigger)
     emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
     const foldW = pageWidthOf(props.pageAspect)
-    const pickV = (foldHit.cornerV * PAGE_HEIGHT) / 2
-    // 同方向折角悬停的纸张直接接管；其余情况收起后新建折角纸张
-    const takeOver = sheetOwner === 'peel' && peelTrigger === foldHit.trigger && peelIsFold
+    // 折页拖拽锚点高度取指针 v（页高坐标 v=0 为中），折角拖拽取外角
+    const pickV = foldHit.edge ? (foldHit.cornerV * PAGE_HEIGHT) / 2 : (foldHit.v - 0.5) * PAGE_HEIGHT
+    // 同方向同模式折角悬停的纸张直接接管；其余情况收起后新建折角纸张
+    const takeOver =
+      sheetOwner === 'peel' &&
+      peelTrigger === foldHit.trigger &&
+      peelIsFold &&
+      peelFoldCorner === (foldHit.edge ? foldHit.cornerV : 0)
     if (!takeOver) {
       if (sheetOwner === 'peel') releasePeelNow()
       // 翻页前置布局：相机不动，折角在页内完成
@@ -1299,6 +1323,7 @@ function onPointerDown(event: PointerEvent) {
     sheetOwner = 'drag'
     peelTrigger = null
     peelIsFold = false
+    peelFoldCorner = 0
     drag = {
       pointerId: event.pointerId,
       trigger: foldHit.trigger,
@@ -1346,6 +1371,8 @@ function onPointerDown(event: PointerEvent) {
   applyStacksFlip(spec)
   sheetOwner = 'drag'
   peelTrigger = null
+  peelIsFold = false
+  peelFoldCorner = 0
   drag = {
     pointerId: event.pointerId,
     trigger,

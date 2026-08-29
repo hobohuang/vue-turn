@@ -1435,12 +1435,25 @@ describe('VueTurn', () => {
     mocks.beginFoldDrag.mockReturnValue(true)
     const wrapper = await mountTurn(6)
     stubViewportRect(wrapper)
-    // 跨页右页中部（贴近书脊、纵向居中）：折页拖拽——整页如大折角对折翻页
-    mocks.pickPage.mockReturnValue({ index: 2, u: 0.55, v: 0.5, spread: true })
-    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 520, clientY: 300 })
+    // 跨页右页中部（v=0.75 非角区）：折页拖拽——锚点为指针同高度的外页边缘点
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.55, v: 0.75, spread: true })
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 520, clientY: 150 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
     expect(mocks.beginDragFlip).not.toHaveBeenCalled()
     expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toEqual([['left']])
+    // 锚点高度 = 指针 v 换算的页高坐标：(0.75-0.5)*PAGE_HEIGHT(2) = 0.5
+    expect(mocks.beginFoldDrag.mock.calls[0]?.[4]).toBeCloseTo(0.5, 5)
+  })
+
+  it('anchors at the outer corner when pressing the corner zone', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6)
+    stubViewportRect(wrapper)
+    // 右页右下角区：折角拖拽——锚点取外角（cornerV=-1 → -PAGE_HEIGHT/2 = -1）
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.05, spread: true })
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 870, clientY: 570 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    expect(mocks.beginFoldDrag.mock.calls[0]?.[4]).toBeCloseTo(-1, 5)
   })
 
   it('starts a normal curl drag from the page middle when fold is disabled', async () => {
