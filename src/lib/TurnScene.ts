@@ -194,9 +194,19 @@ export interface PagePick {
   spread: boolean
 }
 
-type SheetMode = 'time' | 'drag' | 'settle'
+/** 折角状态：抓取点 P 与拖点 Q（页宽坐标），折线为其连线的垂直平分线 */
+interface FoldState {
+  pu: number
+  pv: number
+  qu: number
+  qv: number
+}
 
-interface SheetState {
+// 纸张状态为判别联合：卷曲（curl）与折角（fold）两类形变 ×
+// time（时钟驱动）/ drag（指针驱动）/ settle（回弹动画）三种驱动方式。
+// 各变体只携带自身用到的字段，避免单一胖结构体上大量"某模式才有效"
+// 的可空字段；模式转换（如书脊拖拽接管折角纸张）通过重建对象完成
+interface SheetBase {
   group: THREE.Group
   front: THREE.Mesh
   back: THREE.Mesh
@@ -204,36 +214,85 @@ interface SheetState {
   backGeometry: THREE.BufferGeometry
   frontMaterial: THREE.MeshLambertMaterial
   backMaterial: THREE.MeshLambertMaterial
+  /** 初始横向坐标（页宽坐标）：卷曲/折角形变的还原基准 */
   baseS: Float32Array
   /** 初始纵向坐标（折角形变需要还原 y） */
   baseY: Float32Array
   sign: number
   worldFromX: number
   worldToX: number
-  startTime: number
-  duration: number
   onDone: ((committed: boolean) => void) | null
-  mode: SheetMode
   /** 铰点（书脊/页缘）世界 x：纸张组原点，卷曲旋转与折线 s 坐标都以此为基准 */
   hingeX: number
-  /** 卷曲幅度（硬页为 0） */
+  /** 卷曲幅度（硬页为 0）；折角模式不使用 */
   curl: number
-  /** 折角状态：非 null 时按折角形变渲染（替代书脊卷曲） */
-  fold: { pu: number; pv: number; qu: number; qv: number } | null
-  /** 折线圆弧过渡宽度（世界单位） */
+  /** 折线圆弧过渡宽度（世界单位）；卷曲模式不使用 */
   bend: number
-  /** 折角 settle 动画的拖点起止（页宽坐标） */
-  foldFromQ: [number, number] | null
-  foldToQ: [number, number] | null
-  /** drag/settle 当前进度 [0,1] */
+  fromFitWidth: number
+  toFitWidth: number
+}
+
+/** 卷曲翻页动画：进度由时钟驱动 */
+interface CurlTimeSheet extends SheetBase {
+  kind: 'curl'
+  mode: 'time'
+  startTime: number
+  duration: number
+}
+
+/** 卷曲拖拽：进度由指针驱动 */
+interface CurlDragSheet extends SheetBase {
+  kind: 'curl'
+  mode: 'drag'
+  progress: number
+}
+
+/** 卷曲回弹/补完动画 */
+interface CurlSettleSheet extends SheetBase {
+  kind: 'curl'
+  mode: 'settle'
+  startTime: number
+  duration: number
+  /** 当前进度 [0,1] */
   progress: number
   /** settle 起始进度 */
   p0: number
   /** settle 目标进度（0 取消 / 1 完成） */
   target: number
-  fromFitWidth: number
-  toFitWidth: number
 }
+
+/** 折角/折页拖拽：拖点由指针驱动 */
+interface FoldDragSheet extends SheetBase {
+  kind: 'fold'
+  mode: 'drag'
+  fold: FoldState
+  progress: number
+}
+
+/** 折角回弹/补完动画：拖点向目标位移动 */
+interface FoldSettleSheet extends SheetBase {
+  kind: 'fold'
+  mode: 'settle'
+  startTime: number
+  duration: number
+  fold: FoldState
+  progress: number
+  p0: number
+  target: number
+  /** 折角 settle 动画的拖点起止（页宽坐标） */
+  foldFromQ: [number, number]
+  foldToQ: [number, number]
+}
+
+type SheetState =
+  | CurlTimeSheet
+  | CurlDragSheet
+  | CurlSettleSheet
+  | FoldDragSheet
+  | FoldSettleSheet
+
+type CurlSheet = CurlTimeSheet | CurlDragSheet | CurlSettleSheet
+type FoldSheet = FoldDragSheet | FoldSettleSheet
 
 interface StaticEntry {
   mesh: THREE.Mesh
@@ -312,6 +371,10 @@ export class TurnScene {
   private canvasW = 0
   private canvasH = 0
   private rafId = 0
+  // 脏标记：按需渲染。纸张/相机动画进行中每帧渲染；静止时仅在场景
+  // 有变化（布局重建、纹理更新、缩放平移、悬停高亮等）的那一帧渲染，
+  // 避免书本静止时仍 60fps 全量渲染 WebGL 场景
+  private dirty = true
   private disposed = false
 
   constructor(options: TurnSceneOptions) {
@@ -410,6 +473,7 @@ export class TurnScene {
 
   private onContextRestoredHandler = () => {
     this.contextLost = false
+    this.dirty = true
     // 通知调用方重建静态页并重光栅化窗口内纹理
     this.onContextRestored?.()
   }
@@ -419,6 +483,7 @@ export class TurnScene {
     this.canvasW = width
     this.canvasH = height
     this.cameraReady = true
+    this.dirty = true
     this.renderer?.setSize(width, height)
     this.camera.aspect = width / height
     this.fitCamera()
@@ -437,6 +502,8 @@ export class TurnScene {
       y: this.clampPanY(this.camTarget.y, z),
       z,
     }
+    // camTarget 变化会在下一帧 updateCamera 生效，需要补渲染一帧
+    this.dirty = true
   }
 
   private fitDistance(fitWidth: number) {
@@ -461,24 +528,47 @@ export class TurnScene {
     // false 表示这是翻页前置布局（spec.staticPages），相机由翻页动画接管，不重新适配
     refit = true,
   ) {
-    for (const entry of this.staticMeshes.values()) {
-      this.scene.remove(entry.mesh)
-      entry.mesh.geometry.dispose()
-      entry.material.dispose()
-    }
-    this.staticMeshes.clear()
-
     this.pageFitWidth = placements.reduce(
       (width, p) =>
         Math.max(width, p.spread ? this.sheetWidth * 2 : Math.abs(this.slotX(p.slot)) * 2 + this.sheetWidth),
       this.sheetWidth,
     )
     this.recomputeFitWidth()
+    this.dirty = true
 
+    // placement diff 复用：按页索引比对，几何形态（spread）相同的页复用
+    // 现有网格与材质，仅更新纹理与起止位置。该调用频率很高（每次翻页 2 次、
+    // 光栅化完成、peel 悬停进出边缘条带），全量销毁重建会造成 GPU 资源反复
+    // 分配释放；静态页通常只有 1-3 个网格，diff 成本可忽略
+    const kept = new Set<number>()
     for (const p of placements) {
+      const spread = p.spread === true
+      const existing = this.staticMeshes.get(p.index)
+      if (existing && existing.spread === spread) {
+        const texture = textureOf(p.index)
+        if (existing.material.map !== texture) {
+          existing.material.map = texture
+          existing.material.needsUpdate = true
+        }
+        existing.fromX = this.slotX(p.fromSlot ?? p.slot)
+        existing.toX = this.slotX(p.slot)
+        existing.fromIsWorld = p.fromSlot !== undefined
+        existing.mesh.position.set(existing.fromX, 0, STATIC_Z)
+        // 封面图层归属可能随 coverPages 集合变化
+        if (this.coverPages.has(p.index)) existing.mesh.layers.set(COVER_LAYER)
+        else existing.mesh.layers.set(0)
+        kept.add(p.index)
+        continue
+      }
+      if (existing) {
+        this.scene.remove(existing.mesh)
+        existing.mesh.geometry.dispose()
+        existing.material.dispose()
+        this.staticMeshes.delete(p.index)
+      }
       // 跨页项：双倍宽度网格，纹理为整张跨页图
       const geometry = new THREE.PlaneGeometry(
-        p.spread ? this.sheetWidth * 2 : this.sheetWidth,
+        spread ? this.sheetWidth * 2 : this.sheetWidth,
         PAGE_HEIGHT,
       )
       const material = new THREE.MeshLambertMaterial({ color: 0xffffff })
@@ -501,8 +591,17 @@ export class TurnScene {
         toX: this.slotX(p.slot),
         fromIsWorld: p.fromSlot !== undefined,
         index: p.index,
-        spread: p.spread === true,
+        spread,
       })
+      kept.add(p.index)
+    }
+    // 移除新布局中不再出现的页
+    for (const [index, entry] of this.staticMeshes) {
+      if (kept.has(index)) continue
+      this.scene.remove(entry.mesh)
+      entry.mesh.geometry.dispose()
+      entry.material.dispose()
+      this.staticMeshes.delete(index)
     }
     this.fitCamera()
     // 布局变化（封面居中/跨页/单双页切换/跳转）时相机跟随当前布局适配，
@@ -515,6 +614,7 @@ export class TurnScene {
     if (!entry) return
     entry.material.map = texture
     entry.material.needsUpdate = true
+    this.dirty = true
   }
 
   // 封面/封底页索引：布局重建时同步，静态页与翻页纸张据此挂封面图层
@@ -538,6 +638,7 @@ export class TurnScene {
     this.hideStackHighlight()
     // 无纸张动画时立即应用终点（渲染不可用的兜底路径也走到这里）
     if (!this.sheet) this.applyStacks(1)
+    this.dirty = true
   }
 
   // 应用插值进度 p 下的纸叠几何：edgeX 与厚度在 from/to 间线性过渡；
@@ -682,10 +783,14 @@ export class TurnScene {
       0,
       0.003,
     )
+    this.dirty = true
   }
 
   private hideStackHighlight() {
-    if (this.stackHighlight) this.stackHighlight.visible = false
+    if (this.stackHighlight && this.stackHighlight.visible) {
+      this.stackHighlight.visible = false
+      this.dirty = true
+    }
   }
 
   private stackExtentWidth(visual: StackVisual | null): number {
@@ -737,7 +842,7 @@ export class TurnScene {
     }
   }
 
-  // 创建翻页纸张（几何/材质/镜像），time 与 drag 模式共用；
+  // 创建翻页纸张的公共部分（几何/材质/镜像），各模式变体在此基础上扩展；
   // fold 为 true 时提高纵向分段（斜折线需要纵向分辨率）；
   // options 携带封面档覆盖（curl/nPolygons），封面/封底网格挂封面图层独立光照
   private createSheet(
@@ -747,7 +852,7 @@ export class TurnScene {
     onDone: (committed: boolean) => void,
     fold = false,
     options?: FlipSheetOptions,
-  ): SheetState | null {
+  ): SheetBase | null {
     const worldFromX = spec.worldFromX ?? 0
     const worldToX = spec.worldToX ?? 0
     const curl = options?.curl ?? this.curl
@@ -843,18 +948,9 @@ export class TurnScene {
       hingeX: spec.hingeX,
       worldFromX,
       worldToX,
-      startTime: 0,
-      duration: 0,
       onDone,
-      mode: 'time',
       curl,
-      fold: null,
       bend: 0.16 * this.sheetWidth,
-      foldFromQ: null,
-      foldToQ: null,
-      progress: 0,
-      p0: 0,
-      target: 1,
       fromFitWidth,
       toFitWidth,
     }
@@ -876,11 +972,16 @@ export class TurnScene {
     if (this.sheet) this.removeSheet()
 
     this.applyWorldOffsets(spec)
-    const sheet = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
-    if (!sheet) return
+    const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
+    if (!base) return
     const startTime = performance.now()
-    sheet.startTime = startTime
-    sheet.duration = positive(duration, 900)
+    const sheet: CurlTimeSheet = {
+      ...base,
+      kind: 'curl',
+      mode: 'time',
+      startTime,
+      duration: positive(duration, 900),
+    }
     this.sheet = sheet
     // 相机从当前位置动画到目标适配距离（缩放/平移被一并复位，级别归 1）；
     // 适配宽度计入目标态纸叠厚度，条带不被视口裁剪
@@ -896,7 +997,7 @@ export class TurnScene {
 
   // 主动折页翻页（点击翻页/next/prev，fold 开启时替代 startFlip 的卷曲动画）：
   // 锚点取外缘中部（竖直折线），拖点从外缘扫到对侧完成翻页——折页拖拽的
-  // 自动化版本，复用 settle 动画机制
+  // 自动化版本，直接构造 settle 态（拖点从外缘动画到对侧镜像位）
   startFoldFlip(
     spec: FlipSpec,
     frontTexture: THREE.Texture | null,
@@ -910,12 +1011,24 @@ export class TurnScene {
     if (!this.renderer || this.contextLost) return false
     if (this.sheet) this.removeSheet()
     this.applyWorldOffsets(spec)
-    const sheet = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
-    if (!sheet) return false
-    sheet.mode = 'drag'
-    sheet.bend = positive(bend, sheet.bend)
-    sheet.fold = { pu: this.sheetWidth, pv: 0, qu: this.sheetWidth, qv: 0 }
-    sheet.progress = 0
+    const base = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
+    if (!base) return false
+    const settleDuration = positive(duration, 900)
+    const startTime = performance.now()
+    const sheet: FoldSettleSheet = {
+      ...base,
+      kind: 'fold',
+      mode: 'settle',
+      startTime,
+      duration: settleDuration,
+      fold: { pu: this.sheetWidth, pv: 0, qu: this.sheetWidth, qv: 0 },
+      progress: 0,
+      p0: 0,
+      target: 1,
+      foldFromQ: [this.sheetWidth, 0],
+      foldToQ: [-this.sheetWidth, 0],
+      bend: positive(bend, base.bend),
+    }
     this.sheet = sheet
     // 相机复位与 startFlip 一致（缩放/平移复位，级别归 1）
     this.zoomLevel = 1
@@ -923,11 +1036,9 @@ export class TurnScene {
       this.fitDistance(sheet.toFitWidth + this.stackExtentWidth(this.stackTo)),
       0,
       0,
-      positive(duration, 900),
-      performance.now(),
+      settleDuration,
+      startTime,
     )
-    // settle 到完成：拖点动画扫到对侧
-    this.endFoldDrag(true, positive(duration, 900))
     return true
   }
 
@@ -944,11 +1055,9 @@ export class TurnScene {
     if (this.sheet) this.removeSheet()
 
     this.applyWorldOffsets(spec)
-    const sheet = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
-    if (!sheet) return false
-    sheet.mode = 'drag'
-    sheet.progress = 0
-    this.sheet = sheet
+    const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
+    if (!base) return false
+    this.sheet = { ...base, kind: 'curl', mode: 'drag', progress: 0 }
     return true
   }
 
@@ -956,11 +1065,11 @@ export class TurnScene {
   setDragProgress(progress: number) {
     const sheet = this.sheet
     if (!sheet || sheet.mode !== 'drag') return
-    // 书脊拖拽接管折角悬停的纸张：清除折角状态，回落到卷曲形变
-    if (sheet.fold) {
-      sheet.fold = null
-      sheet.foldFromQ = null
-      sheet.foldToQ = null
+    // 书脊拖拽接管折角悬停的纸张：降级为卷曲拖拽（清除折角形变）
+    if (sheet.kind === 'fold') {
+      const { fold: _fold, kind: _kind, ...rest } = sheet
+      this.sheet = { ...rest, kind: 'curl', progress: clamp(progress, 0, 1) }
+      return
     }
     sheet.progress = clamp(progress, 0, 1)
   }
@@ -980,20 +1089,37 @@ export class TurnScene {
     if (!this.renderer || this.contextLost) return false
     const existing = this.sheet
     if (existing && existing.mode === 'drag') {
-      existing.fold = { pu: pickU, pv: pickV, qu: pickU, qv: pickV }
-      existing.bend = positive(bend, existing.bend)
-      existing.progress = 0
+      if (existing.kind === 'fold') {
+        // 同方向折角悬停预览的纸张：直接接管重置拖点
+        existing.fold = { pu: pickU, pv: pickV, qu: pickU, qv: pickV }
+        existing.bend = positive(bend, existing.bend)
+        existing.progress = 0
+        return true
+      }
+      // 卷曲拖拽中的纸张转折角：重建为折角拖拽（沿用几何与纹理）
+      const { kind: _kind, progress: _progress, ...rest } = existing
+      this.sheet = {
+        ...rest,
+        kind: 'fold',
+        mode: 'drag',
+        fold: { pu: pickU, pv: pickV, qu: pickU, qv: pickV },
+        progress: 0,
+        bend: positive(bend, existing.bend),
+      }
       return true
     }
     if (this.sheet) this.removeSheet()
     this.applyWorldOffsets(spec)
-    const sheet = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
-    if (!sheet) return false
-    sheet.mode = 'drag'
-    sheet.fold = { pu: pickU, pv: pickV, qu: pickU, qv: pickV }
-    sheet.bend = positive(bend, sheet.bend)
-    sheet.progress = 0
-    this.sheet = sheet
+    const base = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
+    if (!base) return false
+    this.sheet = {
+      ...base,
+      kind: 'fold',
+      mode: 'drag',
+      fold: { pu: pickU, pv: pickV, qu: pickU, qv: pickV },
+      progress: 0,
+      bend: positive(bend, base.bend),
+    }
     return true
   }
 
@@ -1018,7 +1144,7 @@ export class TurnScene {
   // 返回当前折角进度 [0,1]，无折角纸张时返回 null
   setFoldDragFromClient(clientX: number, clientY: number): number | null {
     const sheet = this.sheet
-    if (!sheet || sheet.mode !== 'drag' || !sheet.fold) return null
+    if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return null
     const world = this.pagePointFromClient(clientX, clientY)
     if (!world) return sheet.progress
     // 页宽坐标：世界 x 减去纸张组原点（书脊铰点 + 布局偏移）；
@@ -1032,7 +1158,7 @@ export class TurnScene {
   // 直接以页宽坐标设置折角拖点（悬停预览用）；返回折角进度
   setFoldDragAt(qu: number, qv: number): number | null {
     const sheet = this.sheet
-    if (!sheet || sheet.mode !== 'drag' || !sheet.fold) return null
+    if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return null
     sheet.fold.qu = clamp(qu, -this.sheetWidth, this.sheetWidth)
     sheet.fold.qv = clamp(qv, -PAGE_HEIGHT / 2, PAGE_HEIGHT / 2)
     sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
@@ -1043,7 +1169,7 @@ export class TurnScene {
   // 否则拖点收回抓取点展平；动画结束统一走 finishSheet 收敛布局
   endFoldDrag(commit: boolean, baseDuration: number) {
     const sheet = this.sheet
-    if (!sheet || !sheet.fold || sheet.mode !== 'drag') return
+    if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return
     const { pu, pv, qu, qv } = sheet.fold
     const target = commit ? 1 : 0
     const toQ: [number, number] = commit ? [-this.sheetWidth, pv] : [pu, pv]
@@ -1051,42 +1177,56 @@ export class TurnScene {
       this.finishSheet(sheet, commit)
       return
     }
-    sheet.mode = 'settle'
-    sheet.p0 = sheet.progress
-    sheet.target = target
-    sheet.foldFromQ = [qu, qv]
-    sheet.foldToQ = toQ
-    sheet.startTime = performance.now()
-    sheet.duration = Math.max(
-      MIN_SETTLE_DURATION,
-      positive(baseDuration, 900) * Math.abs(target - sheet.progress),
-    )
+    const startTime = performance.now()
+    // drag → settle 模式转换：判别联合不可变字段（kind/mode）随对象重建
+    const { kind: _kind, mode: _mode, ...rest } = sheet
+    this.sheet = {
+      ...rest,
+      kind: 'fold',
+      mode: 'settle',
+      startTime,
+      duration: Math.max(
+        MIN_SETTLE_DURATION,
+        positive(baseDuration, 900) * Math.abs(target - sheet.progress),
+      ),
+      p0: sheet.progress,
+      target,
+      foldFromQ: [qu, qv],
+      foldToQ: toQ,
+    }
   }
 
   // 拖拽结束：commit 为 true 动画补完翻页，否则回弹取消
   endDragFlip(commit: boolean, baseDuration: number) {
     const sheet = this.sheet
-    if (!sheet || sheet.mode !== 'drag') return
+    if (!sheet || sheet.kind !== 'curl' || sheet.mode !== 'drag') return
     const target = commit ? 1 : 0
     if (sheet.progress === target) {
       this.finishSheet(sheet, commit)
       return
     }
     const startTime = performance.now()
-    sheet.mode = 'settle'
-    sheet.p0 = sheet.progress
-    sheet.target = target
-    sheet.startTime = startTime
-    sheet.duration = Math.max(
-      MIN_SETTLE_DURATION,
-      positive(baseDuration, 900) * Math.abs(target - sheet.progress),
-    )
+    // drag → settle 模式转换：判别联合不可变字段（kind/mode）随对象重建
+    const { kind: _kind, mode: _mode, ...rest } = sheet
+    const settle: CurlSettleSheet = {
+      ...rest,
+      kind: 'curl',
+      mode: 'settle',
+      startTime,
+      duration: Math.max(
+        MIN_SETTLE_DURATION,
+        positive(baseDuration, 900) * Math.abs(target - sheet.progress),
+      ),
+      p0: sheet.progress,
+      target,
+    }
+    this.sheet = settle
     const fitWidth =
       (commit ? sheet.toFitWidth : sheet.fromFitWidth) +
       this.stackExtentWidth(commit ? this.stackTo : this.stackFrom)
     // 相机复位到适配距离，缩放级别归 1
     this.zoomLevel = 1
-    this.animateCameraTo(this.fitDistance(fitWidth), 0, 0, sheet.duration, startTime)
+    this.animateCameraTo(this.fitDistance(fitWidth), 0, 0, settle.duration, startTime)
   }
 
   // 中断当前翻页并立即收尾：time/settle 按各自终点，drag 按最近端点
@@ -1111,6 +1251,7 @@ export class TurnScene {
     this.zoomLevel = 1
     this.snapCamera(this.fitDistance(fitWidth), 0, 0)
     if (this.sheet === sheet) this.sheet = null
+    this.dirty = true
     this.scene.remove(sheet.group)
     sheet.geometry.dispose()
     sheet.backGeometry.dispose()
@@ -1154,6 +1295,7 @@ export class TurnScene {
       y: this.clampPanY(this.camTarget.y - dyPixels * worldPerPxY, z),
       z,
     }
+    this.dirty = true
   }
 
   // 平移钳制：书本不超出可视范围
@@ -1178,6 +1320,7 @@ export class TurnScene {
     if (duration <= 0) {
       this.camAnim = null
       this.camera.position.set(x, y, z)
+      this.dirty = true
       return
     }
     this.camAnim = {
@@ -1192,6 +1335,7 @@ export class TurnScene {
     this.camAnim = null
     this.camTarget = { x, y, z }
     this.camera.position.set(x, y, z)
+    this.dirty = true
   }
 
   // 射线拾取静态页面：返回命中页与纹理坐标，未命中返回 null
@@ -1227,14 +1371,18 @@ export class TurnScene {
         anim.from.y + (anim.to.y - anim.from.y) * eased,
         anim.from.z + (anim.to.z - anim.from.z) * eased,
       )
-      if (t >= 1) this.camAnim = null
+      // 动画结束帧：camAnim 已清空，显式标脏保证终点帧被渲染
+      if (t >= 1) {
+        this.camAnim = null
+        this.dirty = true
+      }
       return
     }
     this.camera.position.set(this.camTarget.x, this.camTarget.y, this.camTarget.z)
   }
 
   // 纸张卷曲形变：pe 为翻页进度 [0,1]
-  private deformSheet(sheet: SheetState, pe: number) {
+  private deformSheet(sheet: CurlSheet, pe: number) {
     const theta = Math.PI * pe
     const amp = sheet.curl * Math.sin(theta)
     const columns = curledColumns(theta, amp, this.sheetWidth, this.nPolygons)
@@ -1257,9 +1405,8 @@ export class TurnScene {
 
   // 纸张折角形变：折线取抓取点与拖点连线的垂直平分线，P 侧翻折；
   // P≈Q（未折）时顶点还原为初始平面
-  private deformSheetFold(sheet: SheetState) {
+  private deformSheetFold(sheet: FoldSheet) {
     const fold = sheet.fold
-    if (!fold) return
     const crease = computeCrease(fold.pu, fold.pv, fold.qu, fold.qv, sheet.bend)
     const positions = sheet.geometry.attributes.position
     if (!positions) return
@@ -1286,17 +1433,15 @@ export class TurnScene {
     if (!sheet) return
     // 折角模式：纸叠/静态页/纸张组随折角进度同步插值（封面开合等布局切换
     // 时书体逐渐平移到目标位），折角形变在页内完成
-    if (sheet.fold) {
+    if (sheet.kind === 'fold') {
       if (sheet.mode === 'settle') {
         const t = Math.min(1, (now - sheet.startTime) / sheet.duration)
         const eased = easeInOutCubic(t)
         const from = sheet.foldFromQ
         const to = sheet.foldToQ
-        if (from && to) {
-          sheet.fold.qu = from[0] + (to[0] - from[0]) * eased
-          sheet.fold.qv = from[1] + (to[1] - from[1]) * eased
-          sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
-        }
+        sheet.fold.qu = from[0] + (to[0] - from[0]) * eased
+        sheet.fold.qv = from[1] + (to[1] - from[1]) * eased
+        sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
         if (t >= 1) {
           this.finishSheet(sheet, sheet.target === 1)
           return
@@ -1352,6 +1497,7 @@ export class TurnScene {
     const sheet = this.sheet
     if (!sheet) return
     this.sheet = null
+    this.dirty = true
     this.scene.remove(sheet.group)
     sheet.geometry.dispose()
     sheet.backGeometry.dispose()
@@ -1363,8 +1509,12 @@ export class TurnScene {
     if (this.disposed) return
     this.updateSheet(now)
     this.updateCamera(now)
-    if (this.renderer && !this.contextLost) {
+    // 动画进行中每帧渲染；静止时仅在场景有变化（脏标记）时渲染，
+    // 空闲书本不再持续占用 GPU
+    const animating = this.sheet !== null || this.camAnim !== null
+    if ((animating || this.dirty) && this.renderer && !this.contextLost) {
       this.renderer.render(this.scene, this.camera)
+      this.dirty = false
     }
     this.rafId = requestAnimationFrame(this.tick)
   }

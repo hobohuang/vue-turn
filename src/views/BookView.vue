@@ -40,7 +40,8 @@ function applyRoutePage() {
   const value = Array.isArray(raw) ? raw[0] : raw
   const parsed = value === undefined ? NaN : Number(value)
   const valid = Number.isInteger(parsed) && parsed >= 1
-  if (valid && parsed > 1) {
+  if (valid) {
+    // 合法页码（含第 1 页）一律同步，否则 /book/1 导航会被忽略导致书页与 URL 脱钩
     currentPage.value = parsed
     return
   }

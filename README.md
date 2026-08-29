@@ -39,7 +39,7 @@ const page = ref(1)
 | `modelValue` | `number` | - | 当前页码（从 1 开始），支持 v-model |
 | `preset` | `'soft' \| 'hard' \| 'custom'` | `'soft'` | 内页纸张类型：soft 普通纸张哑光（可卷曲/折角）、hard 纸板刚体强光泽、custom 自定义；soft/hard 档位值最高优先级（下列专业参数不生效），仅 custom 档可逐项设置（详见下文「观感预设」） |
 | `coverPreset` | `'soft' \| 'hard' \| 'custom'` | `'hard'` | 封面/封底纸张类型：控制封面的纸张（卷曲/折角/网格密度）与光影（独立灯光组照亮）；`perspective` 为全局相机参数不按页生效；custom 档与内页共用同一组自定义参数（详见下文「封面与封底」） |
-| `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），常见图书尺寸参考下文「常见图书宽高比」 |
+| `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），非法值（NaN/零/负数）回退 0.75；常见图书尺寸参考下文「常见图书宽高比」 |
 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒） |
 | `startPage` | `number` | `1` | 初始页码（未提供 modelValue 时生效） |
 | `nPolygons` | `number` | 取 preset | 翻页网格纵向分段数，越大卷曲越平滑（仅 `preset="custom"` 时生效，回退 64） |
@@ -57,9 +57,9 @@ const page = ref(1)
 | `easing` | `(t: number) => number` | easeInOutCubic | 翻页进度缓动函数 |
 | `clickToFlip` | `boolean` | `true` | 点击视口翻页（跟随阅读方向：LTR 右半前进、左半后退；RTL 相反） |
 | `clickDeadZone` | `number` | `0` | 点击翻页中间死区宽度占比（0~0.5）：视口中轴该比例区域内的点击不翻页 |
-| `keyboard` | `boolean` | `true` | 键盘翻页：方向键 / PageUp / PageDown / Space / Home / End（方向键跟随阅读方向）。监听挂载到 document——焦点不在组件上（如点击外部工具栏按钮后）同样响应；输入框等可编辑元素内的按键不劫持 |
+| `keyboard` | `boolean` | `true` | 键盘翻页：方向键 / PageUp / PageDown / Space / Home / End（方向键跟随阅读方向）。监听挂载到 document——焦点不在组件上时同样响应；按钮/链接/输入框等可交互元素内的按键不劫持（保留原生激活行为）；页面多实例时仅最近交互过的实例响应 |
 | `ariaLabel` | `string` | `'翻书'` | 视口无障碍标签 |
-| `cacheBust` | `boolean` | `true` | 光栅化时是否给图片加破缓存参数，避免拿到旧图（详见下文「cacheBust 使用场景」） |
+| `cacheBust` | `boolean` | `true` | 手动重绘（`refresh`/`refreshPage`）时是否给图片加破缓存参数，避免拿到旧图；懒光栅化与 DOM 变化触发的自动光栅化不破缓存（详见下文「cacheBust 使用场景」） |
 | `prefetchWindow` | `number` | `4` | 懒光栅化预取窗口：当前可见页前后各 N 页预生成纹理，窗口外释放（设为 0 关闭懒加载，全量光栅化） |
 | `resourceTimeout` | `number` | `5000` | 光栅化前资源等待超时（毫秒）：等待 `<img>`、CSS background-image、文档字体；超时后放弃等待直接光栅化 |
 | `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
@@ -106,14 +106,14 @@ const page = ref(1)
 
 ### cacheBust 使用场景
 
-`cacheBust` 控制 `html-to-image` 光栅化时是否给图片 URL 追加时间戳参数（默认 `true`，即 `url?timestamp=...`）强制绕过浏览器缓存，保证同名图片更新后重新拉取。以下场景应设为 `false`：
+`cacheBust` 仅在**手动重绘**（`refresh()` / `refreshPage()`）时控制 `html-to-image` 是否给图片 URL 追加时间戳参数（默认 `true`，即 `url?timestamp=...`）强制绕过浏览器缓存；懒光栅化预取与页面 DOM 变化触发的自动重光栅化始终复用浏览器缓存，不受此参数影响。以下场景应设为 `false`：
 
-- **图片内容不可变**：图片 URL 与内容一一对应（如带内容哈希的构建产物 `cover.a3f9c2.png`、CDN 指纹地址），不存在"同名不同图"，跳过破缓存可直接复用缓存，加快光栅化并减少请求。
+- **图片内容不可变**：图片 URL 与内容一一对应（如带内容哈希的构建产物 `cover.a3f9c2.png`、CDN 指纹地址），不存在"同名不同图"，跳过破缓存可直接复用缓存，加快手动重绘并减少请求。
 - **图片服务端校验签名**：图片 URL 含签名/鉴权参数（如 OSS/七牛的 `?Expires=...&Signature=...`），再追加时间戳会使签名校验失败导致图片 403，必须关闭。
-- **重复光栅化频繁**：翻页窗口反复进出触发同页多次光栅化，或调用 `refresh()`/`refreshPage()` 较多——每次都破缓存意味着每次都完整重新下载，关闭后命中浏览器缓存可显著提速。
+- **频繁手动重绘**：调用 `refresh()`/`refreshPage()` 较多——每次都破缓存意味着每次都完整重新下载，关闭后命中浏览器缓存可显著提速。
 - **离线/内嵌资源**：页面使用 `data:`/`blob:` URL 或 Service Worker 代理的本地资源，破缓存参数无意义甚至可能干扰匹配。
 
-注意：设为 `false` 后，若图片同名但内容已更新（如运营后台替换了同 URL 的图），光栅化可能拿到浏览器缓存的旧图；这种情况需保持 `true`，或改用带版本号的 URL（如 `img.png?v=2`）后关闭 `cacheBust`。
+注意：设为 `false` 后，若图片同名但内容已更新（如运营后台替换了同 URL 的图），手动重绘可能拿到浏览器缓存的旧图；这种情况需保持 `true`，或改用带版本号的 URL（如 `img.png?v=2`）后关闭 `cacheBust`。
 
 ## Events
 
@@ -123,7 +123,7 @@ const page = ref(1)
 | `change` | `page: number` | 页码变化（翻页与跳转均触发） |
 | `flip-start` | `direction: 'left' \| 'right'` | 翻页开始（含拖拽翻页按下） |
 | `flip-end` | `direction: 'left' \| 'right'` | 翻页结束（拖拽回弹取消也会触发，页码不变） |
-| `before-flip` | `context: BeforeFlipContext` | 翻页/跳转前拦截：`context` 含 `from`/`to`/`direction`（直接跳转为 `null`），调用 `context.preventDefault()` 取消本次导航 |
+| `before-flip` | `context: BeforeFlipContext` | 翻页/跳转前拦截：`context` 含 `from`/`to`/`direction`（直接跳转为 `null`），调用 `context.preventDefault()` 取消本次导航；外部修改 `v-model` 同样受拦截，取消时页码回写为当前页 |
 | `first` | - | 翻到第一页（挂载初始页不触发） |
 | `last` | - | 翻到最后一页（挂载初始页不触发） |
 | `pressed` | `point: { x, y }` | 拖拽翻页按下（视口内坐标） |

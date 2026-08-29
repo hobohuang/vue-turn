@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 
 import TurnItem from '@/components/TurnItem.vue'
 import VueTurn from '@/components/VueTurn.vue'
 import type { TurnInstance } from '@/types/turn'
+
+// 组件卸载时会移除 document 级键盘监听并递减实例计数（多实例键盘互斥依赖
+// 该计数），必须每个用例后自动卸载，否则泄漏实例会跨用例干扰互斥判定
+enableAutoUnmount(beforeEach)
 
 type FakeTexture = { dispose: () => void }
 
@@ -227,6 +231,8 @@ async function mountTurn(
     displayedPages?: 'auto' | 1 | 2
     clickToFlip?: boolean
     peel?: boolean
+    fold?: boolean
+    preset?: 'soft' | 'hard' | 'custom'
     modelValue?: number
   } = {},
 ) {
@@ -777,6 +783,27 @@ describe('VueTurn', () => {
     }
   })
 
+  it('only lets the most recently interacted instance respond to document keydown (multi-instance mutex)', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const first = await mountTurn()
+    const second = await mountTurn()
+    // 多实例并存且尚无交互归属：document 按键一律不翻页，避免实例间抢键盘
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await flushPromises()
+    expect(first.find('#indicator').text()).toBe('1/6')
+    expect(second.find('#indicator').text()).toBe('1/6')
+    // 在第二个实例的书页内按键：键盘归属转移给它
+    await second.find('.viewport').trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(second.find('#indicator').text()).toBe('2/6')
+    expect(first.find('#indicator').text()).toBe('1/6')
+    // 此后 document 按键只驱动第二个实例
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await flushPromises()
+    expect(second.find('#indicator').text()).toBe('4/6')
+    expect(first.find('#indicator').text()).toBe('1/6')
+  })
+
   it('goToPage returns false when rejected and true when applied', async () => {
     const wrapper = await mountTurn()
     const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
@@ -1279,6 +1306,42 @@ describe('VueTurn', () => {
     // 直接跳转同样可被拦截
     expect(inst.goToPage(5)).toBe(false)
     expect(inst.page).toBe(1)
+  })
+
+  it('syncs the current page back when an external modelValue jump is intercepted', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const externalPage = ref(1)
+    const updates: number[] = []
+    const Host = defineComponent({
+      setup() {
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                modelValue: externalPage.value,
+                'onUpdate:modelValue': (v: number) => {
+                  externalPage.value = v
+                  updates.push(v)
+                },
+                onBeforeFlip: (ctx: import('@/types/turn').BeforeFlipContext) => {
+                  ctx.preventDefault()
+                },
+              },
+              { default: () => pages(6) },
+            ),
+            h('span', { id: 'indicator' }, `${externalPage.value}/6`),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    // 外部把页码改成 5：被 before-flip 拦截，书页停在原地
+    externalPage.value = 5
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    // 组件回写当前页，把被拒绝的外部页码拉回同步（避免外部残留非法状态）
+    expect(updates).toEqual([1])
   })
 
   it('emits first and last when navigating to the covers', async () => {
