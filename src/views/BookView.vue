@@ -115,6 +115,7 @@ function onRegionTap(_page: number, region: PageRegion) {
       ref="turnRef"
       v-model="currentPage"
       :page-aspect="0.75"
+      :peel="true"
       @change="bump"
       @flip-start="onFlipStart"
       @flip-end="onFlipEnd"

@@ -113,6 +113,8 @@ interface HostProps {
   displayedPages?: 'auto' | 1 | 2
   clickToFlip?: boolean
   peel?: boolean
+  fold?: boolean
+  preset?: 'soft' | 'hard' | 'custom'
   modelValue?: number
   defaultPages?: number
 }
@@ -144,6 +146,8 @@ function createHost(props: HostProps = {}) {
               displayedPages: props.displayedPages,
               clickToFlip: props.clickToFlip,
               peel: props.peel,
+              fold: props.fold,
+              preset: props.preset,
               'onUpdate:modelValue': (v: number) => {
                 page.value = v
                 bump()
@@ -1333,8 +1337,9 @@ describe('VueTurn', () => {
     expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toBeUndefined()
   })
 
-  it('shows a peeled corner when hovering the page edge', async () => {
-    const wrapper = await mountTurn(6, { peel: true })
+  it('shows a peeled corner when hovering the page edge (legacy peel, fold off)', async () => {
+    // custom 档 + fold=false：fold prop 仅在 custom 档生效，关闭折角走旧版整页轻卷
+    const wrapper = await mountTurn(6, { peel: true, preset: 'custom', fold: false })
     stubViewportRect(wrapper)
     const stacksCallsBefore = mocks.setStacks.mock.calls.length
     // LTR 前进边缘（右缘）悬停：掀起页角，强度随深度渐变（无阶跃跳变）
@@ -1356,6 +1361,96 @@ describe('VueTurn', () => {
     expect(mocks.endDragFlip).toHaveBeenCalledWith(false, 900)
     await flushPromises()
     expect(wrapper.find('#indicator').text()).toBe('1/6')
+  })
+
+  it('folds the nearest page corner when hovering the edge strip with fold enabled', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6, { peel: true })
+    stubViewportRect(wrapper)
+    // 跨页右页外缘条带（v=0.3 在纵向中部、非角区）：真实折角预览
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.3, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 260, buttons: 0 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+    expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(1)
+    // 同角深入外缘：同一张纸仅更新拖点（折得更深），不重建纸张
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.99, v: 0.3, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 890, clientY: 260, buttons: 0 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(2)
+    // 移入页面中部（条带外）：折角收回
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.5, v: 0.3, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 450, clientY: 260, buttons: 0 })
+    expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
+  })
+
+  it('folds the top corner when hovering the top edge strip with fold enabled', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6, { peel: true })
+    stubViewportRect(wrapper)
+    // 顶边条带（u 在页面中部、v 贴近顶边）：折起最近的外侧顶角
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.7, v: 0.95, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 650, clientY: 60, buttons: 0 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    // 顶角（cornerV 由 beginFoldDrag 的 pickV 参数传入，+PAGE_HEIGHT/2 为顶）
+    const pickV = mocks.beginFoldDrag.mock.calls[0]?.[4] as number
+    expect(pickV).toBeGreaterThan(0)
+    // 移到页面中部（四边条带外）：折角收回
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.7, v: 0.5, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 650, clientY: 300, buttons: 0 })
+    expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
+  })
+
+  it('does not show fold hover preview when peel is off (fold still enabled)', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6)
+    stubViewportRect(wrapper)
+    // peel 默认关闭：无任何悬停预览（折角拖拽本身不受影响）
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.3, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 260, buttons: 0 })
+    expect(mocks.beginFoldDrag).not.toHaveBeenCalled()
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+  })
+
+  it('starts a fold drag when pressing the edge strip outside the corners', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6)
+    stubViewportRect(wrapper)
+    // 跨页右页外缘条带、纵向中部（非角区）：按下走折角拖拽而非整页卷曲
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.3, spread: true })
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 870, clientY: 260 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toHaveLength(1)
+    // 拖拽中：折角跟随指针（setFoldDragFromClient），非整页进度
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 820, clientY: 240 })
+    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(820, 240)
+    expect(mocks.setDragProgress).not.toHaveBeenCalled()
+    // 松手：按折角路径收尾
+    await fireViewportPointer(wrapper, 'pointerup', { pointerId: 1, clientX: 820, clientY: 240 })
+    expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
+  })
+
+  it('starts a fold drag when pressing the middle of the page with fold enabled', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6)
+    stubViewportRect(wrapper)
+    // 跨页右页中部（贴近书脊、纵向居中）：折页拖拽——整页如大折角对折翻页
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.55, v: 0.5, spread: true })
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 520, clientY: 300 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toEqual([['left']])
+  })
+
+  it('starts a normal curl drag from the page middle when fold is disabled', async () => {
+    // custom 档 + fold=false：中部按下回到普通整页卷曲拖拽（微曲翻页）
+    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
+    stubViewportRect(wrapper)
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.55, v: 0.5, spread: true })
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 520, clientY: 300 })
+    expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
+    expect(mocks.beginFoldDrag).not.toHaveBeenCalled()
   })
 
   it('does not peel on hover by default', async () => {

@@ -68,19 +68,19 @@ const props = withDefaults(
     flipDuration?: number
     /** 初始页码（未提供 modelValue 时生效） */
     startPage?: number
-    /** 观感预设（纸张类型）：soft 普通纸张哑光（默认，可卷曲/折角）、hard 纸板刚体强光泽；为专业参数提供成组默认值，显式传入仍可覆盖 */
+    /** 观感预设（纸张类型）：soft 普通纸张哑光（默认）、hard 纸板刚体强光泽、custom 自定义；soft/hard 档位值最高优先级（下列专业参数不生效），仅 custom 档可逐项设置 */
     preset?: TurnPreset
     /** 封面/封底观感预设（默认 hard 纸板）：控制封面与封底的纸张（卷曲/折角/网格密度）与光影（独立灯光组）；perspective 为全局相机参数不按页生效 */
     coverPreset?: TurnPreset
-    /** 翻页网格纵向分段数，越大卷曲越平滑（未传时取 preset 默认值） */
+    /** 翻页网格纵向分段数，越大卷曲越平滑（仅 preset="custom" 时生效，未传回退 custom 基线 64） */
     nPolygons?: number
-    /** 透视参考距离（像素），越小透视越强（未传时取 preset 默认值） */
+    /** 透视参考距离（像素），越小透视越强（仅 preset="custom" 时生效，未传回退 2400） */
     perspective?: number
-    /** 环境光强度（未传时取 preset 默认值） */
+    /** 环境光强度（仅 preset="custom" 时生效，未传回退 1） */
     ambient?: number
-    /** 方向光（纸张光泽）强度（未传时取 preset 默认值） */
+    /** 方向光（纸张光泽）强度（仅 preset="custom" 时生效，未传回退 0.15） */
     gloss?: number
-    /** 卷曲幅度（0 为纯刚体旋转）（未传时取 preset 默认值） */
+    /** 卷曲幅度（0 为纯刚体旋转）（仅 preset="custom" 时生效，未传回退 0.8） */
     curl?: number
     /** 前进方向：left 为从左向右阅读 */
     forwardDirection?: FlipDirection
@@ -114,12 +114,14 @@ const props = withDefaults(
     resourceTimeout?: number
     /** 是否允许拖拽翻页（按住页面拖动，松手按位置/速度决定完成或回弹） */
     dragToFlip?: boolean
-    /** 是否允许悬停折角提示（指针移入页面边缘时掀起页角） */
+    /** 悬停预览总开关：开启后指针移入页面边缘显示预览——fold 开启时为四边折角预览，关闭时为视口边缘条带整页轻卷 */
     peel?: boolean
-    /** 折角提示区域宽度占视口宽度的比例（两侧边缘条带，0~0.5） */
+    /** 折角提示区域宽度占视口宽度的比例（两侧边缘条带，0~0.5，仅 fold 关闭时的整页卷曲预览使用） */
     peelZone?: number
-    /** 角点拖拽折角（turn.js 4 风格）：未传时取 preset 默认（soft 开启，hard 关闭） */
+    /** 折角交互（turn.js 4 风格）：开启时外缘条带悬停预览与按下拖拽均为真实折角变形；关闭时全部为整页卷曲（仅 preset="custom" 时生效，soft 开启 / hard 关闭） */
     fold?: boolean
+    /** 折角柔软度：折线圆弧过渡宽度占页宽比例，越大越柔软（仅 preset="custom" 时生效，未传回退 0.16） */
+    bend?: number
     /** 最大缩放倍数 */
     maxZoom?: number
     /** 是否允许滚轮缩放 */
@@ -196,9 +198,16 @@ const emit = defineEmits<{
 
 const state = useBookState()
 
-// 封面/封底观感：coverPreset 独立解析（挂载时读取一次，与观感参数一致）。
-// 摄像头 perspective 为全局参数，不按页生效，此处仅取光影与纸张参数
-const coverLook = resolveLook(props.coverPreset, {})
+// 封面/封底观感：coverPreset 独立解析（挂载时读取一次）。soft/hard 取档位值；
+// custom 档与内页共用同一组自定义参数。摄像头 perspective 为全局参数，
+// 不按页生效，此处仅取光影与纸张参数
+const coverLook = resolveLook(props.coverPreset, {
+  nPolygons: props.nPolygons,
+  perspective: props.perspective,
+  ambient: props.ambient,
+  gloss: props.gloss,
+  curl: props.curl,
+})
 
 const {
   container,
@@ -226,7 +235,7 @@ const {
   pickPage,
 } = useTurnRenderer({
   pageAspect: props.pageAspect,
-  // 观感参数：preset 提供成组默认值，显式传入的专业参数覆盖预设
+  // 观感参数：soft/hard 取档位值（显式传入不生效），仅 custom 档采用显式参数
   ...resolveLook(props.preset, {
     nPolygons: props.nPolygons,
     perspective: props.perspective,
@@ -392,47 +401,71 @@ const safeStackDepth = computed(() => {
   return Number.isFinite(value) && value > 0 ? Math.min(value, 0.5) : 0.15
 })
 
-// 折角（fold）：enabled 由顶层 fold prop 覆盖预设；bend 为折线圆弧过渡占页宽比例
-const foldParams = computed(() => resolveFold(props.preset, props.fold))
+// 折角（fold）：soft/hard 档取预设值；仅 custom 档由 fold/bend prop 设置。
+// bend 为折线圆弧过渡占页宽比例
+const foldParams = computed(() => resolveFold(props.preset, props.fold, props.bend))
 const foldBendWorld = computed(() => foldParams.value.bend * pageWidthOf(props.pageAspect))
 
-// 折角角区：页面外缘四角 22% 见方（跨页合并网格按半宽折算）
+// 折角条带：页面四边外缘（左右外缘条带 + 顶/底条带），宽 FOLD_ZONE
+// （跨页合并网格左右按半宽折算）
 const FOLD_ZONE = 0.22
 
-// 命中折角角区：返回翻页方向、角点纵向符号（+1 顶角 / -1 底角）与
-// 深入强度 t（0=角区边缘，1=正角点）。仅跨页左右页可折，居中页（封面等）不折。
-function foldCornerAt(
+// 命中页的翻页方向与左右侧：折前进侧的页 = 前进（LTR 前进侧在世界右），
+// 折后退侧的页 = 后退。仅跨页左右页可折，居中页（封面等）返回 null
+function foldSideOf(pick: PagePick): { trigger: FlipDirection; worldRight: boolean } | null {
+  const ltr = props.forwardDirection === 'left'
+  let worldRight: boolean
+  if (pick.spread) {
+    // 跨页合并网格按 uv 一分为二
+    worldRight = pick.u > 0.5
+  } else {
+    const placement = lastPlacements.find((p) => p.index === pick.index)
+    if (!placement || placement.slot === 'center') return null
+    worldRight = placement.slot === 'right'
+  }
+  const advancing = ltr ? worldRight : !worldRight
+  const trigger: FlipDirection = advancing ? (ltr ? 'left' : 'right') : ltr ? 'right' : 'left'
+  return { trigger, worldRight }
+}
+
+// 折页命中（按下用）：fold 开启时命中可翻页的任意位置均返回最近外角——
+// 折角以最近外角为锚点、指针为拖点，抓点距角越远折得越大：
+// 四边条带内为小折角跟手，页面中部为折页拖拽（整页如大折角对折翻页）
+function foldPageAt(
+  clientX: number,
+  clientY: number,
+): { trigger: FlipDirection; cornerV: number } | null {
+  if (!foldParams.value.enabled) return null
+  const pick = pickPage(clientX, clientY)
+  if (!pick) return null
+  const side = foldSideOf(pick)
+  if (!side) return null
+  return { trigger: side.trigger, cornerV: pick.v < 0.5 ? -1 : 1 }
+}
+
+// 折角条带命中（悬停预览用）：返回翻页方向、最近外角（+1 顶 / -1 底）与
+// 深入强度 t（0=条带内缘，1=外缘；角区两轴叠加取更深值）
+function foldStripAt(
   clientX: number,
   clientY: number,
 ): { trigger: FlipDirection; cornerV: number; t: number } | null {
   if (!foldParams.value.enabled) return null
   const pick = pickPage(clientX, clientY)
   if (!pick) return null
-  const ltr = props.forwardDirection === 'left'
-  // 命中页在跨页中的左右侧（跨页合并网格按 uv 一分为二）
-  let worldRight: boolean
-  let outerU: number
-  let zoneU = FOLD_ZONE
-  if (pick.spread) {
-    worldRight = pick.u > 0.5
-    outerU = worldRight ? 1 - pick.u : pick.u
-    zoneU = FOLD_ZONE / 2
-  } else {
-    const placement = lastPlacements.find((p) => p.index === pick.index)
-    if (!placement || placement.slot === 'center') return null
-    worldRight = placement.slot === 'right'
-    // 右槽页外缘在纹理 u=1，左槽页在 u=0
-    outerU = worldRight ? 1 - pick.u : pick.u
-  }
-  if (outerU > zoneU) return null
-  // 纵向：pick.v ∈ [0,1]（1 为顶），角在外缘顶/底
+  const side = foldSideOf(pick)
+  if (!side) return null
+  // 距外缘的深度：右页外缘在纹理 u=1，左页在 u=0；跨页合并网格按半宽折算
+  const outerU = side.worldRight ? 1 - pick.u : pick.u
+  const zoneU = pick.spread ? FOLD_ZONE / 2 : FOLD_ZONE
+  // 纵向：pick.v ∈ [0,1]（1 为顶），距最近顶/底边的深度
   const outerV = pick.v < 0.5 ? pick.v : 1 - pick.v
-  if (outerV > FOLD_ZONE) return null
-  // 折前进侧的页 = 前进；折后退侧的页 = 后退（LTR 前进侧在世界右）
-  const advancing = ltr ? worldRight : !worldRight
-  const trigger: FlipDirection = advancing ? (ltr ? 'left' : 'right') : ltr ? 'right' : 'left'
-  const t = 1 - Math.max(outerU / zoneU, outerV / FOLD_ZONE)
-  return { trigger, cornerV: pick.v < 0.5 ? -1 : 1, t: Math.min(1, Math.max(0, t)) }
+  // 左右外缘条带与顶/底条带均触发折角；两轴同时命中（角区）取更深强度，
+  // 保证条带→角区连续过渡
+  const tU = outerU <= zoneU ? 1 - outerU / zoneU : 0
+  const tV = outerV <= FOLD_ZONE ? 1 - outerV / FOLD_ZONE : 0
+  const t = Math.max(tU, tV)
+  if (t <= 0) return null
+  return { trigger: side.trigger, cornerV: pick.v < 0.5 ? -1 : 1, t: Math.min(1, t) }
 }
 
 // 懒光栅化窗口：覆盖当前可见页 [currentPage, currentPage+spread) 前后各 W 页
@@ -1099,9 +1132,9 @@ function releasePeelNow() {
   }
 }
 
-// t 为折角强度 [0,1]（0=条带内缘，1=最外缘），乘以 PEEL_PROGRESS 得实际进度；
-// 同向重复悬停只更新进度，不重建纸张。悬停仅预览页角：
-// 不动相机、不改纸叠布局（纸叠只在真实翻页时过渡）
+// 旧版整页弯折条带（fold 关闭 + peel 开启时使用）：
+// t 为条带强度 [0,1]，乘以 PEEL_PROGRESS 得拖拽进度；同向重复悬停只更新
+// 进度，不重建纸张。悬停仅预览页角：不动相机、不改纸叠布局
 function ensurePeel(trigger: FlipDirection, t: number) {
   peelIsFold = false
   const progress = Math.min(1, Math.max(0, t)) * PEEL_PROGRESS
@@ -1128,10 +1161,23 @@ function ensurePeel(trigger: FlipDirection, t: number) {
 }
 
 function updatePeel(event: PointerEvent) {
+  // peel 为悬停预览总开关：关闭时无论 fold 开关均无悬停预览
   if (!props.peel || disabledRef.value || state.isFlipping.value || isZoomed()) {
     releasePeelNow()
     return
   }
+  // fold 开启：页面四边条带悬停为真实折角预览（turn.js 风格）——
+  // 按深入强度折起最近外角
+  if (foldParams.value.enabled) {
+    const hit = foldStripAt(event.clientX, event.clientY)
+    if (hit) {
+      ensureFoldPreview(hit.trigger, hit.cornerV, hit.t)
+      return
+    }
+    releasePeelNow()
+    return
+  }
+  // fold 关闭：视口边缘条带整页轻微卷曲（旧版 peel 行为）
   const el = event.currentTarget as HTMLElement | null
   const rect = el?.getBoundingClientRect()
   if (!rect || rect.width <= 0) return
@@ -1156,8 +1202,8 @@ function updatePeel(event: PointerEvent) {
 // 折角悬停预览的当前角（+1 顶 / -1 底）：换角需重建纸张
 let peelFoldCorner = 0
 
-// 折角悬停预览：命中页角时纸角按深入强度轻轻折起，提示可抓取。
-// 与 peel 一致：不动相机、不改纸叠布局（真实翻页才过渡）
+// 折角悬停预览：命中折角角区或外缘条带（fold 开启）时，纸角按深入强度
+// 轻轻折起，提示可抓取。不动相机、不改纸叠布局（真实翻页才过渡）
 function ensureFoldPreview(trigger: FlipDirection, cornerV: number, t: number) {
   const w = pageWidthOf(props.pageAspect)
   const pickV = (cornerV * PAGE_HEIGHT) / 2
@@ -1191,17 +1237,6 @@ function ensureFoldPreview(trigger: FlipDirection, cornerV: number, t: number) {
   setFoldDragAt(qu, qv)
 }
 
-// 悬停折角预览：命中角区返回 true（优先于 peel 边缘条带）
-function updateFoldHover(event: PointerEvent): boolean {
-  if (!foldParams.value.enabled || disabledRef.value || state.isFlipping.value || isZoomed()) {
-    return false
-  }
-  const hit = foldCornerAt(event.clientX, event.clientY)
-  if (!hit) return false
-  ensureFoldPreview(hit.trigger, hit.cornerV, hit.t)
-  return true
-}
-
 // 拖拽进度：按下点起算的位移占视口 60% 宽度为满程（trigger 'left' 指针向左拖）
 function dragProgressFrom(clientX: number, rect: DOMRect, dragState: DragState): number {
   const scale = Math.max(1, rect.width * 0.6)
@@ -1223,8 +1258,10 @@ function onPointerDown(event: PointerEvent) {
     return
   }
   if (!props.dragToFlip || state.isFlipping.value || sheetOwner === 'drag') return
-  // 角点拖拽折角：命中角区优先于书脊拖拽
-  const foldHit = foldCornerAt(event.clientX, event.clientY)
+  // 折页拖拽：fold 开启时命中页面任意位置（跨页左右页）均走折角变形——
+  // 四边条带内为小折角跟手，页面中部为折页拖拽（外侧页角折至指针处，
+  // 整页如大折角对折翻页）；fold 关闭才走普通整页卷曲拖拽
+  const foldHit = foldPageAt(event.clientX, event.clientY)
   if (foldHit) {
     const spec = computeFlipSpecFor(foldHit.trigger)
     if (!spec) return
@@ -1359,13 +1396,12 @@ function onPointerMove(event: PointerEvent) {
     drag.moved += Math.abs(dx)
     return
   }
-  // 无按键悬停：纸叠提示 > 折角预览 > 折角条带（peel），依次判定
+  // 无按键悬停：纸叠提示 > 边缘预览（peel 总控；fold 开启为四边折角，关闭为整页轻卷）
   if (event.buttons !== 0) return
   if (updateStackHover(event)) {
     releasePeelNow()
     return
   }
-  if (updateFoldHover(event)) return
   updatePeel(event)
 }
 

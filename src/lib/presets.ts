@@ -24,9 +24,10 @@ export interface FoldParams {
 
 interface PresetEntry extends LookParams, FoldParams {}
 
-// 两种纸张类型的观感预设：
+// 纸张类型观感预设：
 // - soft 普通纸张（默认）：哑光（弱方向光）、自然卷曲，开启角点折角拖拽
 // - hard 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角
+// - custom 自定义基线：与 soft 一致，供 custom 档未传参数回退
 export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
   soft: {
     nPolygons: 64,
@@ -46,10 +47,20 @@ export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
     enabled: false,
     bend: 0,
   },
+  custom: {
+    nPolygons: 64,
+    perspective: 2400,
+    ambient: 1,
+    gloss: 0.15,
+    curl: 0.8,
+    enabled: true,
+    bend: 0.16,
+  },
 }
 
-// 解析观感参数：preset 提供成组默认值，overrides 中显式传入（非 undefined）
-// 的专业参数逐项覆盖预设值。非法 preset 回退 soft 并警告。
+// 解析观感参数：soft/hard 档位值为最高优先级，overrides（显式传入的专业参数）
+// 不生效；仅 custom 档逐项采用 overrides，未传项回退 custom 基线。
+// 非法 preset 回退 soft 并警告。
 export function resolveLook(
   preset: TurnPreset | undefined,
   overrides: Partial<LookParams>,
@@ -58,6 +69,15 @@ export function resolveLook(
     console.warn(`[vue-turn] 未知 preset "${String(preset)}"，已回退为 soft`)
   }
   const base = presetBase(preset)
+  if (preset !== 'custom') {
+    return {
+      nPolygons: base.nPolygons,
+      perspective: base.perspective,
+      ambient: base.ambient,
+      gloss: base.gloss,
+      curl: base.curl,
+    }
+  }
   return {
     nPolygons: overrides.nPolygons ?? base.nPolygons,
     perspective: overrides.perspective ?? base.perspective,
@@ -67,10 +87,18 @@ export function resolveLook(
   }
 }
 
-// 解析折角参数：enabled 由顶层 fold prop 显式覆盖预设，bend 取预设值
-export function resolveFold(preset: TurnPreset | undefined, fold?: boolean): FoldParams {
+// 解析折角参数：soft/hard 档取预设值（fold prop 不生效）；仅 custom 档
+// 由 fold/bend prop 显式设置，未传回退 custom 基线
+export function resolveFold(
+  preset: TurnPreset | undefined,
+  fold?: boolean,
+  bend?: number,
+): FoldParams {
   const base = presetBase(preset)
-  return { enabled: fold ?? base.enabled, bend: base.bend }
+  if (preset !== 'custom') {
+    return { enabled: base.enabled, bend: base.bend }
+  }
+  return { enabled: fold ?? base.enabled, bend: bend ?? base.bend }
 }
 
 function presetBase(preset: TurnPreset | undefined): PresetEntry {

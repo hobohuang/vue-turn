@@ -8,11 +8,12 @@ export type EasingFn = (t: number) => number
 // 显示模式：auto 按容器宽高自动判定，1/2 强制单/双页
 export type DisplayMode = 'auto' | 1 | 2
 
-// 观感预设：两种纸张类型，为 nPolygons/perspective/ambient/gloss/curl
-// 提供成组默认值（显式传入的专业参数仍可覆盖预设，见 lib/presets.ts）
+// 观感预设：纸张类型。soft/hard 档位值为最高优先级（显式传入的专业参数不生效），
+// 仅 custom 档可逐项设置 nPolygons/perspective/ambient/gloss/curl/fold/bend（见 lib/presets.ts）
 // - soft 普通纸张（默认）：哑光、可卷曲、支持角点折角
 // - hard 纸板：刚体旋转、强光泽、关闭折角
-export type TurnPreset = 'soft' | 'hard'
+// - custom 自定义：各参数取显式传入值，未传项回退 soft 基线
+export type TurnPreset = 'soft' | 'hard' | 'custom'
 
 export type Slot = 'left' | 'right' | 'center'
 
