@@ -49,9 +49,11 @@ const mocks = vi.hoisted(() => {
         back: FakeTexture | null,
         onDone: (committed?: boolean) => void,
         options?: import('@/types/turn').FlipSheetOptions,
+        preview?: boolean,
       ) => boolean
     >(),
     endDragFlip: vi.fn<(commit: boolean, baseDuration: number) => void>(),
+    activateSheet: vi.fn<() => void>(),
     stopFlip: vi.fn<() => void>(),
     setDragProgress: vi.fn<(progress: number) => void>(),
     beginFoldDrag: vi.fn<
@@ -64,6 +66,7 @@ const mocks = vi.hoisted(() => {
         bend: number,
         onDone: (committed?: boolean) => void,
         options?: import('@/types/turn').FlipSheetOptions,
+        preview?: boolean,
       ) => boolean
     >(),
     setFoldDragFromClient: vi.fn<(x: number, y: number) => number | null>(),
@@ -93,6 +96,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     startFlip: mocks.startFlip,
     startFoldFlip: mocks.startFoldFlip,
     beginDragFlip: mocks.beginDragFlip,
+    activateSheet: mocks.activateSheet,
     setDragProgress: mocks.setDragProgress,
     endDragFlip: mocks.endDragFlip,
     beginFoldDrag: mocks.beginFoldDrag,
@@ -1091,6 +1095,29 @@ describe('VueTurn', () => {
     expect(lastPlacements).toEqual([{ index: 1, slot: 'center', spread: true }])
   })
 
+  it('uses the spread base texture for the merged static mesh', async () => {
+    // 回归：合并跨页网格的纹理应取 spreadFullTextures（itemIndex 为 key）的整图，
+    // 而不是 textures（页索引为 key）里的半图——否则跨页显示半图/闪烁
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    mocks.elementToTexture.mockReset()
+    // 按元素内容标记纹理，便于断言 textureOf 取到的是跨页项的整图基准纹理
+    mocks.elementToTexture.mockImplementation((el) =>
+      Promise.resolve({ ...fakeTexture(), tag: el.textContent ?? '' }),
+    )
+    const wrapper = await mountItems(['full', 'spread', 'full', 'full'])
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    const spreadCalls = mocks.setStaticPages.mock.calls.filter(([placements]) =>
+      (placements as Array<{ spread?: boolean }>).some((p) => p.spread),
+    )
+    expect(spreadCalls.length).toBeGreaterThan(0)
+    const textureOf = spreadCalls[spreadCalls.length - 1]![1] as (index: number) => {
+      tag?: string
+    }
+    // 跨页项是第 2 个 item（"item 2"），合并网格应贴它的整图
+    expect(textureOf(1)).toMatchObject({ tag: 'item 2' })
+  })
+
   it('flips through a spread with regular sheet flips', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     mocks.elementToTexture.mockReset()
@@ -1416,6 +1443,8 @@ describe('VueTurn', () => {
     stubViewportRect(wrapper)
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 300 })
     expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
+    // 真实拖拽不是悬停预览：书体/纸叠随进度联动（preview 非 true）
+    expect(mocks.beginDragFlip.mock.calls[0]?.[5]).not.toBe(true)
     expect(turn.emitted('flip-start')).toEqual([['left']])
     expect(turn.emitted('pressed')).toEqual([[{ x: 700, y: 300 }]])
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 200, clientY: 300 })
@@ -1482,6 +1511,16 @@ describe('VueTurn', () => {
     // LTR 前进边缘（右缘）悬停：掀起页角，强度随深度渐变（无阶跃跳变）
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 300, buttons: 0 })
     expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
+    // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览卷曲形变，
+    // 避免封面开合等场景悬停时整本书随指针抖动
+    expect(mocks.beginDragFlip).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      true,
+    )
     // ratio=870/900，深度 0.0333/0.12 → 强度 0.722 × 0.07 ≈ 0.0506
     const calls = mocks.setDragProgress.mock.calls
     const progress = calls[calls.length - 1]?.[0] as number
@@ -1508,6 +1547,18 @@ describe('VueTurn', () => {
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.3, spread: true })
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 260, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览折角形变
+    expect(mocks.beginFoldDrag).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      true,
+    )
     expect(mocks.beginDragFlip).not.toHaveBeenCalled()
     expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(1)
     // 同角深入外缘：同一张纸仅更新拖点（折得更深），不重建纸张
@@ -1557,6 +1608,8 @@ describe('VueTurn', () => {
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.3, spread: true })
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 870, clientY: 260 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    // 真实拖拽不是悬停预览（preview 非 true）：书体/纸叠随进度联动
+    expect(mocks.beginFoldDrag.mock.calls[0]?.[8]).not.toBe(true)
     expect(mocks.beginDragFlip).not.toHaveBeenCalled()
     expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toHaveLength(1)
     // 拖拽中：折角跟随指针（setFoldDragFromClient），非整页进度

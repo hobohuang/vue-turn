@@ -547,12 +547,14 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     if (!spec) return
     // 翻页前置布局：折角悬停不动相机
     renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    // preview=true：悬停预览不动书体/静态页/纸叠，只预览整页卷曲
     const ok = renderer.beginDragFlip(
       spec,
       textures.get(spec.frontIndex) ?? null,
       textures.get(spec.backIndex) ?? null,
       makeSheetDone(spec, trigger),
       sheetOptions(spec),
+      true,
     )
     if (!ok) return
     sheetOwner = 'peel'
@@ -627,6 +629,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     if (!spec) return
     // 翻页前置布局：折角悬停不动相机
     renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    // preview=true：悬停预览不动书体/静态页/纸叠，只预览折角形变
     const ok = renderer.beginFoldDrag(
       spec,
       textures.get(spec.frontIndex) ?? null,
@@ -636,6 +639,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       foldBendWorld,
       makeSheetDone(spec, trigger),
       sheetOptions(spec),
+      true,
     )
     if (!ok) return
     sheetOwner = 'peel'
@@ -802,6 +806,10 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
         emit('flip-end', trigger)
         return
       }
+    } else {
+      // 接管同方向悬停预览的卷曲纸张（不重建）：转为真实交互，
+      // 恢复书体/静态页/纸叠随拖拽进度联动
+      renderer.activateSheet()
     }
     applyStacksFlip(spec)
     sheetOwner = 'drag'

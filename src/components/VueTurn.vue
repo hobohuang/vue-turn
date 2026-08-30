@@ -392,6 +392,7 @@ const foldBendWorld = foldParams.bend * pageWidthOf(safePageAspect)
 
 const {
   textures,
+  getSpreadFullTexture,
   syncPageCount,
   rasterizeWindow,
   releaseOutsideWindow,
@@ -590,7 +591,8 @@ function renderStatic() {
     if (spreadStarts.has(index)) {
       const source = sources[index]
       if (!source) return null
-      return textures.get(source.itemIndex) ?? null
+      // 跨页整图基准纹理以 itemIndex 为 key（与单页纹理的页索引 key 不同）
+      return getSpreadFullTexture(source.itemIndex)
     }
     return textures.get(index) ?? null
   })

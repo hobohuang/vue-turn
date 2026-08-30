@@ -230,6 +230,8 @@ interface SheetBase {
   bend: number
   fromFitWidth: number
   toFitWidth: number
+  /** 悬停预览纸张：书体平移/静态页滑动/纸叠插值钉在起始态（slideP=0），只预览纸角形变；真实按下接管时清除 */
+  preview?: boolean
 }
 
 /** 卷曲翻页动画：进度由时钟驱动 */
@@ -1042,13 +1044,15 @@ export class TurnScene {
     return true
   }
 
-  // 开始拖拽翻页：返回 false 表示渲染不可用，调用方不应进入拖拽状态
+  // 开始拖拽翻页：返回 false 表示渲染不可用，调用方不应进入拖拽状态。
+  // preview=true 为悬停预览纸张：书体/静态页/纸叠钉在起始态，只预览卷曲形变
   beginDragFlip(
     spec: FlipSpec,
     frontTexture: THREE.Texture | null,
     backTexture: THREE.Texture | null,
     onDone: (committed: boolean) => void,
     options?: FlipSheetOptions,
+    preview = false,
   ): boolean {
     if (!this.renderer || this.contextLost) return false
     // 已有纸张（折角悬停/上一次拖拽）静默替换，不触发其 onDone
@@ -1057,17 +1061,25 @@ export class TurnScene {
     this.applyWorldOffsets(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
     if (!base) return false
-    this.sheet = { ...base, kind: 'curl', mode: 'drag', progress: 0 }
+    this.sheet = { ...base, kind: 'curl', mode: 'drag', progress: 0, preview }
     return true
+  }
+
+  // 悬停预览纸张转为真实交互（按下接管且不重建纸张时调用）：
+  // 清除预览标记，恢复书体平移/静态页滑动/纸叠插值随进度联动
+  activateSheet() {
+    const sheet = this.sheet
+    if (sheet && sheet.preview) sheet.preview = false
   }
 
   // 拖拽进度 [0,1]：0 为未翻，1 为完全翻过
   setDragProgress(progress: number) {
     const sheet = this.sheet
     if (!sheet || sheet.mode !== 'drag') return
-    // 书脊拖拽接管折角悬停的纸张：降级为卷曲拖拽（清除折角形变）
+    // 书脊拖拽接管折角悬停的纸张：降级为卷曲拖拽（清除折角形变）；
+    // 接管即真实交互，一并清除预览标记
     if (sheet.kind === 'fold') {
-      const { fold: _fold, kind: _kind, ...rest } = sheet
+      const { fold: _fold, kind: _kind, preview: _preview, ...rest } = sheet
       this.sheet = { ...rest, kind: 'curl', progress: clamp(progress, 0, 1) }
       return
     }
@@ -1085,19 +1097,22 @@ export class TurnScene {
     bend: number,
     onDone: (committed: boolean) => void,
     options?: FlipSheetOptions,
+    preview = false,
   ): boolean {
     if (!this.renderer || this.contextLost) return false
     const existing = this.sheet
     if (existing && existing.mode === 'drag') {
       if (existing.kind === 'fold') {
-        // 同方向折角悬停预览的纸张：直接接管重置拖点
+        // 同方向折角悬停预览的纸张：直接接管重置拖点。
+        // 接管即真实交互：清除预览标记，恢复书体/纸叠随进度联动
         existing.fold = { pu: pickU, pv: pickV, qu: pickU, qv: pickV }
         existing.bend = positive(bend, existing.bend)
         existing.progress = 0
+        existing.preview = false
         return true
       }
       // 卷曲拖拽中的纸张转折角：重建为折角拖拽（沿用几何与纹理）
-      const { kind: _kind, progress: _progress, ...rest } = existing
+      const { kind: _kind, progress: _progress, preview: _preview, ...rest } = existing
       this.sheet = {
         ...rest,
         kind: 'fold',
@@ -1119,6 +1134,7 @@ export class TurnScene {
       fold: { pu: pickU, pv: pickV, qu: pickU, qv: pickV },
       progress: 0,
       bend: positive(bend, base.bend),
+      preview,
     }
     return true
   }
@@ -1221,6 +1237,8 @@ export class TurnScene {
       target,
     }
     this.sheet = settle
+    // 悬停预览的回弹不动相机（预览从未移动过相机）
+    if (settle.preview) return
     const fitWidth =
       (commit ? sheet.toFitWidth : sheet.fromFitWidth) +
       this.stackExtentWidth(commit ? this.stackTo : this.stackFrom)
@@ -1242,14 +1260,17 @@ export class TurnScene {
     }
   }
 
-  // 立即完成一张纸张：跳到终点、复位相机并触发回调
+  // 立即完成一张纸张：跳到终点、复位相机并触发回调。
+  // 悬停预览纸张不触碰相机/缩放（预览从未移动过它们）
   private finishSheet(sheet: SheetState, committed: boolean) {
-    const fitWidth =
-      (committed ? sheet.toFitWidth : sheet.fromFitWidth) +
-      this.stackExtentWidth(committed ? this.stackTo : this.stackFrom)
-    // 相机复位到适配距离，缩放级别归 1
-    this.zoomLevel = 1
-    this.snapCamera(this.fitDistance(fitWidth), 0, 0)
+    if (!sheet.preview) {
+      const fitWidth =
+        (committed ? sheet.toFitWidth : sheet.fromFitWidth) +
+        this.stackExtentWidth(committed ? this.stackTo : this.stackFrom)
+      // 相机复位到适配距离，缩放级别归 1
+      this.zoomLevel = 1
+      this.snapCamera(this.fitDistance(fitWidth), 0, 0)
+    }
     if (this.sheet === sheet) this.sheet = null
     this.dirty = true
     this.scene.remove(sheet.group)
@@ -1447,13 +1468,14 @@ export class TurnScene {
           return
         }
       }
-      const slideP = sheet.progress
+      // 悬停预览：书体/静态页/纸叠钉在起始态，只有纸角形变跟随进度
+      const slideP = sheet.preview ? 0 : sheet.progress
       sheet.group.position.x =
         sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
       for (const entry of this.staticMeshes.values()) {
         entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
       }
-      this.applyStacks(sheet.progress)
+      this.applyStacks(slideP)
       this.deformSheetFold(sheet)
       return
     }
@@ -1469,12 +1491,14 @@ export class TurnScene {
       }
     } else if (sheet.mode === 'drag') {
       pe = sheet.progress
-      slideP = pe
+      // 悬停预览：只预览卷曲形变，书体/静态页/纸叠钉在起始态
+      slideP = sheet.preview ? 0 : pe
     } else {
       const t = Math.min(1, (now - sheet.startTime) / sheet.duration)
       const eased = easeInOutCubic(t)
       pe = sheet.p0 + (sheet.target - sheet.p0) * eased
-      slideP = pe
+      // 预览回弹同样不动书体
+      slideP = sheet.preview ? 0 : pe
       if (t >= 1) {
         this.finishSheet(sheet, sheet.target === 1)
         return

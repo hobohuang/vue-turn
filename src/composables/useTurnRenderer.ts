@@ -128,15 +128,24 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     return scene.startFoldFlip(spec, frontTexture, backTexture, duration, onDone, options, bend)
   }
 
-  // 拖拽翻页：场景可用返回 true，调用方据此进入拖拽状态
+  // 拖拽翻页：场景可用返回 true，调用方据此进入拖拽状态。
+  // preview=true 为悬停预览：书体/静态页/纸叠钉在起始态
   function beginDragFlip(
     spec: FlipSpec,
     frontTexture: THREE.Texture | null,
     backTexture: THREE.Texture | null,
     onDone: (committed: boolean) => void,
     options?: FlipSheetOptions,
+    preview = false,
   ) {
-    return scene ? scene.beginDragFlip(spec, frontTexture, backTexture, onDone, options) : false
+    return scene
+      ? scene.beginDragFlip(spec, frontTexture, backTexture, onDone, options, preview)
+      : false
+  }
+
+  // 悬停预览纸张转为真实交互（按下接管且不重建纸张时调用）
+  function activateSheet() {
+    scene?.activateSheet()
   }
 
   function setDragProgress(progress: number) {
@@ -147,7 +156,8 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     scene?.endDragFlip(commit, baseDuration)
   }
 
-  // 折角拖拽：场景可用返回 true；已有同方向拖拽纸张时直接接管
+  // 折角拖拽：场景可用返回 true；已有同方向拖拽纸张时直接接管。
+  // preview=true 为悬停预览：书体/静态页/纸叠钉在起始态
   function beginFoldDrag(
     spec: FlipSpec,
     frontTexture: THREE.Texture | null,
@@ -157,9 +167,20 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     bend: number,
     onDone: (committed: boolean) => void,
     options?: FlipSheetOptions,
+    preview = false,
   ) {
     return scene
-      ? scene.beginFoldDrag(spec, frontTexture, backTexture, pickU, pickV, bend, onDone, options)
+      ? scene.beginFoldDrag(
+          spec,
+          frontTexture,
+          backTexture,
+          pickU,
+          pickV,
+          bend,
+          onDone,
+          options,
+          preview,
+        )
       : false
   }
 
@@ -211,6 +232,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     startFlip,
     startFoldFlip,
     beginDragFlip,
+    activateSheet,
     setDragProgress,
     endDragFlip,
     beginFoldDrag,

@@ -368,6 +368,8 @@ export function usePageTextures(options: PageTexturesOptions) {
   return {
     /** 单页纹理（key 为页索引）：翻页/拖拽取用，勿直接修改 */
     textures,
+    /** 跨页整图基准纹理（key 为 itemIndex）：合并跨页静态网格取用 */
+    getSpreadFullTexture: (itemIndex: number) => spreadFullTextures.get(itemIndex) ?? null,
     syncPageCount,
     rasterizeWindow,
     rasterizePages,
