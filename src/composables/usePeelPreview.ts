@@ -1,4 +1,4 @@
-import type { ComputedRef } from 'vue'
+import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
 import type { PagePick } from '@/lib/TurnScene'
@@ -27,6 +27,8 @@ export interface PeelPreviewOptions {
   /** props.forwardDirection（响应式读取） */
   forwardDirection: () => FlipDirection
   state: ReturnType<typeof useBookState>
+  /** 总页数（居中页判定封面/封底用） */
+  pageCount: Ref<number>
   renderer: Pick<
     ReturnType<typeof useTurnRenderer>,
     | 'setStaticPages'
@@ -73,6 +75,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     isDisabled,
     forwardDirection,
     state,
+    pageCount,
     renderer,
     textures,
     safePageAspect,
@@ -124,7 +127,10 @@ export function usePeelPreview(options: PeelPreviewOptions) {
 
   // 旧版整页弯折条带（fold 关闭 + peel 开启时使用）：
   // t 为条带强度 [0,1]，乘以 PEEL_PROGRESS 得拖拽进度；同向重复悬停只更新
-  // 进度，不重建纸张。悬停仅预览页角：不动相机、不改纸叠布局
+  // 进度，不重建纸张。悬停仅预览页角：不动相机、不改纸叠、不替换静态布局
+  // ——静态布局一旦被替换成翻开布局，悬停侧（后退方向的左半边）可能不再
+  // 有静态网格，pickPage 拾取随即 miss → 收起回弹 → 布局恢复 → 再命中，
+  // 形成"折起-恢复"的闪烁循环
   function ensurePeel(trigger: FlipDirection, t: number) {
     const progress = Math.min(1, Math.max(0, t)) * PEEL_PROGRESS
     if (peel && peel.trigger === trigger && !peel.isFold) {
@@ -134,9 +140,8 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     releasePeelNow()
     const spec = computeFlipSpecFor(trigger)
     if (!spec) return
-    // 翻页前置布局：悬停预览不动相机
-    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
     // preview=true：悬停预览不动书体/静态页/纸叠，只预览整页卷曲
+    // （静态布局保持空闲态，命中判定所依赖的网格不随预览变化）
     const ok = renderer.beginDragFlip(
       spec,
       textures.get(spec.frontIndex) ?? null,
@@ -163,7 +168,13 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     if (foldEnabled) {
       const pick: PagePick | null = renderer.pickPage(event.clientX, event.clientY)
       const hit = pick
-        ? foldStripFromPick(pick, getLastPlacements(), forwardDirection())
+        ? foldStripFromPick(
+            pick,
+            getLastPlacements(),
+            forwardDirection(),
+            pageWidth(safePageAspect),
+            pageCount.value,
+          )
         : null
       if (hit) {
         ensureFoldPreview(hit.trigger, hit.t, hit.cornerV)
@@ -210,9 +221,9 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     releasePeelNow()
     const spec = computeFlipSpecFor(trigger)
     if (!spec) return
-    // 翻页前置布局：悬停预览不动相机
-    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
-    // preview=true：悬停预览不动书体/静态页/纸叠，只预览折角形变
+    // preview=true：悬停预览不动书体/静态页/纸叠，只预览折角形变。
+    // 不替换静态布局（见 ensurePeel 注释）：预览命中判定依赖空闲布局的
+    // 静态网格，布局一旦翻转，悬停侧拾取 miss 会引发折起-收起闪烁
     const ok = renderer.beginFoldDrag(
       spec,
       textures.get(spec.frontIndex) ?? null,

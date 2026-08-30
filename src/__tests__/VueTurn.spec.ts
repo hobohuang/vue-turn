@@ -72,7 +72,7 @@ const mocks = vi.hoisted(() => {
         preview?: boolean,
       ) => boolean
     >(),
-    setFoldDragFromClient: vi.fn<(x: number, y: number) => number | null>(),
+    setFoldDragFromClient: vi.fn<(x: number, y: number, lockedV?: number) => number | null>(),
     setFoldDragAt: vi.fn<(qu: number, qv: number) => number | null>(),
     endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
     setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
@@ -1625,6 +1625,33 @@ describe('VueTurn', () => {
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
   })
 
+  it('previews the cover corner on hover without touching the static layout', async () => {
+    // 封面（合书态居中）悬停角区：预览折角，且预览不重设静态布局——
+    // 否则封面开合 spec 的世界偏移会把静态封面挪到侧旁（"另一个封面
+    // 在旁闪烁"的根源）。 mocked 场景下以"未调用 setStaticPages"验证
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6, { peel: true, modelValue: 1 })
+    stubViewportRect(wrapper)
+    mocks.setStaticPages.mockClear()
+    // 封面居中、右下角圆内（LTR 封面外缘在右）：折角预览，方向前进
+    mocks.pickPage.mockReturnValue({ index: 0, u: 0.95, v: 0.1, spread: false })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 520, clientY: 480, buttons: 0 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    // 悬停预览：preview=true（第 9 参）
+    expect(mocks.beginFoldDrag.mock.calls[0]?.[8]).toBe(true)
+    // 预览全程不得重设静态布局（防止世界偏移篡改空闲布局）
+    expect(mocks.setStaticPages).not.toHaveBeenCalled()
+    // 同角深入：仅更新拖点，不重建
+    mocks.pickPage.mockReturnValue({ index: 0, u: 0.99, v: 0.1, spread: false })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 545, clientY: 480, buttons: 0 })
+    expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(2)
+    // 移出角圆：折角收回
+    mocks.pickPage.mockReturnValue({ index: 0, u: 0.6, v: 0.3, spread: false })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 400, clientY: 260, buttons: 0 })
+    expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
+  })
+
   it('does not show fold hover preview when peel is off (fold still enabled)', async () => {
     mocks.beginFoldDrag.mockReturnValue(true)
     const wrapper = await mountTurn(6)
@@ -1636,21 +1663,23 @@ describe('VueTurn', () => {
     expect(mocks.beginDragFlip).not.toHaveBeenCalled()
   })
 
-  it('starts a fold drag when pressing the edge strip outside the corners', async () => {
+  it('starts a fold drag (height locked) when pressing the edge strip outside the corner circle', async () => {
     mocks.beginFoldDrag.mockReturnValue(true)
     const wrapper = await mountTurn(6)
     stubViewportRect(wrapper)
-    // 跨页右页外缘条带、纵向中部（非角区）：按下走折角拖拽而非整页卷曲
+    // 跨页右页外缘条带、纵向中部（外角圆外）：折页拖拽而非整页卷曲
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.3, spread: true })
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 870, clientY: 260 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
+    // 锚点高度 = 指针 v 换算的页高坐标：(0.3-0.5)*PAGE_HEIGHT(2) = -0.4
+    expect(mocks.beginFoldDrag.mock.calls[0]?.[4]).toBeCloseTo(-0.4, 5)
     // 真实拖拽不是悬停预览（preview 非 true）：书体/纸叠随进度联动
     expect(mocks.beginFoldDrag.mock.calls[0]?.[8]).not.toBe(true)
     expect(mocks.beginDragFlip).not.toHaveBeenCalled()
     expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toHaveLength(1)
-    // 拖拽中：折角跟随指针（setFoldDragFromClient），非整页进度
+    // 拖拽中：折角跟随指针，拖点纵向钉在按下高度（lockedV=-0.4），非整页进度
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 820, clientY: 240 })
-    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(820, 240)
+    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(820, 240, -0.4)
     expect(mocks.setDragProgress).not.toHaveBeenCalled()
     // 松手：按折角路径收尾
     await fireViewportPointer(wrapper, 'pointerup', { pointerId: 1, clientX: 820, clientY: 240 })
@@ -1704,9 +1733,9 @@ describe('VueTurn', () => {
     // 锚点取外缘中部（pickV=0），方向按视口半区（右半 → 前进）
     expect(mocks.beginFoldDrag.mock.calls[0]?.[4]).toBe(0)
     expect(wrapper.findComponent(VueTurn).emitted('flip-start')).toEqual([['left']])
-    // 拖动跟手，松手走折角收尾
+    // 拖动跟手（拖点钉在外缘中部高度 lockedV=0），松手走折角收尾
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 560, clientY: 400 })
-    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(560, 400)
+    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(560, 400, 0)
     await fireViewportPointer(wrapper, 'pointerup', { pointerId: 1, clientX: 560, clientY: 400 })
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
   })

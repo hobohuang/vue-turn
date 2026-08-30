@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { FOLD_LIFT, computeCrease, foldPoint, foldProgress } from '@/lib/pageFold'
+import {
+  clampFoldDragToSpine,
+  computeCrease,
+  FOLD_LIFT,
+  foldPoint,
+  foldProgress,
+} from '@/lib/pageFold'
 
 const W = 1.5
 const H = 2
@@ -102,5 +108,52 @@ describe('foldProgress', () => {
     expect(foldProgress(-W, W)).toBe(1)
     expect(foldProgress(0, W)).toBeCloseTo(0.5, 10)
     expect(foldProgress(W * 2, W)).toBe(0) // 向外拖无效
+  })
+})
+
+describe('clampFoldDragToSpine', () => {
+  // 折线与书脊边交点的 y（与实现同式，测试内联验证约束达成）
+  const crossY = (pu: number, pv: number, qu: number, qv: number) =>
+    (qu * qu + qv * qv - pu * pu - pv * pv) / (2 * (qv - pv))
+
+  it('竖直折线（qv=pv，折页拖拽）原样通过', () => {
+    const out = clampFoldDragToSpine(W, 0.3, 0.4, 0.3, H)
+    expect(out.qu).toBe(0.4)
+    expect(out.qv).toBe(0.3)
+  })
+
+  it('折线交点在书脊边外（正常角区折角）原样通过', () => {
+    // 右上角抓取，轻折：交点 y0 = 4.26 > H/2
+    const out = clampFoldDragToSpine(W, H / 2, 1.26, 0.9, H)
+    expect(out.qu).toBe(1.26)
+    expect(out.qv).toBe(0.9)
+  })
+
+  it('上下拉动导致折线切入书脊内侧时收缩 qv 至交点退到页角外', () => {
+    // 抓右上角拉向左下：原始交点 y0≈0.55 落在书脊内侧（|0.55| < 1）
+    const out = clampFoldDragToSpine(W, H / 2, 0.2, -1, H)
+    expect(out.qu).toBe(0.2) // 水平分量（翻页进度）不受影响
+    const y = crossY(W, H / 2, out.qu, out.qv)
+    expect(Math.abs(y)).toBeGreaterThanOrEqual(H / 2 - 1e-3)
+    // qv 向抓取点方向收缩（未拉到底）
+    expect(out.qv).toBeGreaterThan(-1)
+    expect(out.qv).toBeLessThan(H / 2)
+  })
+
+  it('钳制后书脊边顶点不再落入翻折侧', () => {
+    const out = clampFoldDragToSpine(W, H / 2, 0.2, -1, H)
+    const crease = computeCrease(W, H / 2, out.qu, out.qv, BEND)!
+    // 书脊边中点与两端的折线距离均 ≥ 0（不在翻折侧）
+    for (const y of [-H / 2, 0, H / 2]) {
+      // 书脊边 s=0 上的点：d = nx·0 + ny·y − c
+      const d = crease.ny * y - crease.c
+      expect(d).toBeGreaterThanOrEqual(-1e-6)
+    }
+  })
+
+  it('整页翻折目标（Q 为对侧镜像位）不受钳制影响', () => {
+    const out = clampFoldDragToSpine(W, -H / 2, -W, -H / 2, H)
+    expect(out.qu).toBe(-W)
+    expect(out.qv).toBe(-H / 2)
   })
 })

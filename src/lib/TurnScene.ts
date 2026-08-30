@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { CameraRig } from '@/lib/CameraRig'
 import { StackRenderer } from '@/lib/StackRenderer'
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
-import { computeCrease, foldPoint, foldProgress } from '@/lib/pageFold'
+import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress } from '@/lib/pageFold'
 import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
 import type {
   EasingFn,
@@ -733,7 +733,10 @@ export class TurnScene {
     // 已有纸张（折角悬停/上一次拖拽）静默替换，不触发其 onDone
     if (this.sheet) this.removeSheet()
 
-    this.applyWorldOffsets(spec)
+    // 真实拖拽才应用布局切换的世界偏移；悬停预览不动静态网格——
+    // 预览不重设静态布局，若在此叠加偏移会把空闲布局的静态页起点
+    // 篡改到翻开态位置（如封面被挪到侧旁），预览收起时再跳回，形成闪烁
+    if (!preview) this.applyWorldOffsets(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
     if (!base) return false
     this.sheet = { ...base, kind: 'curl', mode: 'drag', progress: 0, preview }
@@ -741,10 +744,15 @@ export class TurnScene {
   }
 
   // 悬停预览纸张转为真实交互（按下接管且不重建纸张时调用）：
-  // 清除预览标记，恢复书体平移/静态页滑动/纸叠插值随进度联动
-  activateSheet() {
+  // 清除预览标记，恢复书体平移/静态页滑动/纸叠插值随进度联动。
+  // spec 为接管的翻页 spec：调用方已用 spec.staticPages 重设静态布局，
+  // 此处补齐布局切换的世界偏移（预览路径不应用偏移，见 beginDragFlip）
+  activateSheet(spec?: FlipSpec) {
     const sheet = this.sheet
-    if (sheet && sheet.preview) sheet.preview = false
+    if (!sheet) return
+    if (!sheet.preview) return
+    sheet.preview = false
+    if (spec) this.applyWorldOffsets(spec)
   }
 
   // 拖拽进度 [0,1]：0 为未翻，1 为完全翻过
@@ -779,11 +787,16 @@ export class TurnScene {
     if (existing && existing.mode === 'drag') {
       if (existing.kind === 'fold') {
         // 同方向折角悬停预览的纸张：直接接管重置拖点。
-        // 接管即真实交互：清除预览标记，恢复书体/纸叠随进度联动
+        // 真实交互（preview=false）时清除预览标记并补齐世界偏移
+        // （调用方已用 spec.staticPages 重设静态布局）；悬停预览间的
+        // 重建保持预览标记与起始态布局
         existing.fold = { pu: pickU, pv: pickV, qu: pickU, qv: pickV }
         existing.bend = positive(bend, existing.bend)
         existing.progress = 0
-        existing.preview = false
+        if (!preview) {
+          existing.preview = false
+          this.applyWorldOffsets(spec)
+        }
         return true
       }
       // 卷曲拖拽中的纸张转折角：重建为折角拖拽（沿用几何与纹理）
@@ -796,10 +809,13 @@ export class TurnScene {
         progress: 0,
         bend: positive(bend, existing.bend),
       }
+      this.applyWorldOffsets(spec)
       return true
     }
     if (this.sheet) this.removeSheet()
-    this.applyWorldOffsets(spec)
+    // 真实拖拽才应用布局切换的世界偏移（悬停预览不动静态网格，
+    // 见 beginDragFlip 同款注释）
+    if (!preview) this.applyWorldOffsets(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
     if (!base) return false
     this.sheet = {
@@ -832,8 +848,10 @@ export class TurnScene {
   }
 
   // 折角拖拽跟随指针：指针投射到页平面后换算为页宽坐标并钳制。
+  // lockedV 给出时拖点纵向钉在该高度（页高坐标）——折页拖拽（非角区）
+  // 锁定按下高度，折线保持竖直对折；省略时纵向自由（角区折角拖拽）。
   // 返回当前折角进度 [0,1]，无折角纸张时返回 null
-  setFoldDragFromClient(clientX: number, clientY: number): number | null {
+  setFoldDragFromClient(clientX: number, clientY: number, lockedV?: number): number | null {
     const sheet = this.sheet
     if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return null
     const world = this.pagePointFromClient(clientX, clientY)
@@ -842,16 +860,25 @@ export class TurnScene {
     // 镜像几何（B）顶点 x = 组原点 - s，方向取反
     let qu = world[0] - sheet.group.position.x
     if (sheet.sign < 0) qu = -qu
-    const qv = world[1]
+    const qv = lockedV ?? world[1]
     return this.setFoldDragAt(qu, qv)
   }
 
-  // 直接以页宽坐标设置折角拖点（悬停预览用）；返回折角进度
+  // 直接以页宽坐标设置折角拖点（悬停预览/拖拽跟随共用入口）；返回折角进度。
+  // 拖点经书脊约束钳制：折线不得切入书脊边内侧，否则装订处的书页会被
+  // 翻折拉离书脊（视觉"撕开"）
   setFoldDragAt(qu: number, qv: number): number | null {
     const sheet = this.sheet
     if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return null
-    sheet.fold.qu = clamp(qu, -this.sheetWidth, this.sheetWidth)
-    sheet.fold.qv = clamp(qv, -PAGE_HEIGHT / 2, PAGE_HEIGHT / 2)
+    const clamped = clampFoldDragToSpine(
+      sheet.fold.pu,
+      sheet.fold.pv,
+      clamp(qu, -this.sheetWidth, this.sheetWidth),
+      clamp(qv, -PAGE_HEIGHT / 2, PAGE_HEIGHT / 2),
+      PAGE_HEIGHT,
+    )
+    sheet.fold.qu = clamped.qu
+    sheet.fold.qv = clamped.qv
     sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
     return sheet.progress
   }
@@ -1054,13 +1081,24 @@ export class TurnScene {
         const to = sheet.foldToQ
         sheet.fold.qu = from[0] + (to[0] - from[0]) * eased
         sheet.fold.qv = from[1] + (to[1] - from[1]) * eased
+        // settle 插值中间态同样受书脊约束（目标端点天然安全，中途保险）
+        const clamped = clampFoldDragToSpine(
+          sheet.fold.pu,
+          sheet.fold.pv,
+          sheet.fold.qu,
+          sheet.fold.qv,
+          PAGE_HEIGHT,
+        )
+        sheet.fold.qu = clamped.qu
+        sheet.fold.qv = clamped.qv
         sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
         if (t >= 1) {
           this.finishSheet(sheet, sheet.target === 1)
           return
         }
       }
-      // 悬停预览：书体/静态页/纸叠钉在起始态，只有纸角形变跟随进度
+      // 悬停预览：书体/静态页/纸叠钉在起始态，只有纸角形变跟随进度；
+      // 真实拖拽/回弹（含封面/封底开合）与内页一致——书体随进度联动
       const slideP = sheet.preview ? 0 : sheet.progress
       sheet.group.position.x =
         sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP

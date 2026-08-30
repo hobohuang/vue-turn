@@ -72,3 +72,44 @@ export function foldProgress(qu: number, width: number): number {
   if (width <= 0) return 0
   return Math.min(1, Math.max(0, (width - qu) / (2 * width)))
 }
+
+// 折线与书脊边（s=0）交点的 y 坐标：折线竖直（qv≈pv，平行于书脊）时
+// 返回 null（不相交）。交点落在书脊边内侧（|y| < height/2）意味着
+// 翻折区域覆盖了书脊边缘的书页——装订处的纸被镜像拉离原位，
+// 视觉上书页与书脊"撕开"
+function spineCrossY(pu: number, pv: number, qu: number, qv: number): number | null {
+  if (Math.abs(qv - pv) < 1e-6) return null
+  return (qu * qu + qv * qv - pu * pu - pv * pv) / (2 * (qv - pv))
+}
+
+/**
+ * 书脊约束下的拖点钳制：折线切入书脊边内侧时，将拖点 Q 沿抓取点方向
+ * 收缩（qv → pv），直到折线与书脊边的交点退到页角以外（|y| ≥ height/2
+ * 或折线竖直）。真实纸张此时被装订线绷住，折角停在极限位——拖点的
+ * 水平分量（翻页进度）不受影响，仅折角高度被约束。
+ * 与 turn.js 4 在折叠角超过 90° 时钳制拖点 y 并重算的策略等价。
+ */
+export function clampFoldDragToSpine(
+  pu: number,
+  pv: number,
+  qu: number,
+  qv: number,
+  height: number,
+): { qu: number; qv: number } {
+  const half = Math.abs(height) / 2
+  const y0 = spineCrossY(pu, pv, qu, qv)
+  if (y0 === null || Math.abs(y0) >= half) return { qu, qv }
+  // 二分收缩 t：qv(t) = pv + (qv−pv)·t，找最大 t 使交点退出书脊内侧。
+  // t→0 时折线退化为竖直（P≈Q 未折），必然安全；y0 随 t 连续且至多一个
+  // 危险区间，16 次迭代精度足够（每次 pointermove 调用，开销可忽略）
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 16; i++) {
+    const mid = (lo + hi) / 2
+    const qvT = pv + (qv - pv) * mid
+    const y = spineCrossY(pu, pv, qu, qvT)
+    if (y === null || Math.abs(y) >= half) lo = mid
+    else hi = mid
+  }
+  return { qu, qv: pv + (qv - pv) * lo }
+}

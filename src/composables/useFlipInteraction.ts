@@ -104,6 +104,9 @@ interface DragState {
   progress: number
   /** 折角拖拽：纸角跟随指针，折线随拖点实时变化 */
   fold?: boolean
+  /** 折页拖拽（非角区）锁定的拖点高度（页高坐标）：拖点钉在按下高度，
+   * 折线保持竖直对折；角区折角拖拽为 null（拖点纵向自由） */
+  lockedV: number | null
 }
 
 interface PanState {
@@ -227,6 +230,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     isDisabled,
     forwardDirection: () => props.forwardDirection ?? 'left',
     state,
+    pageCount,
     renderer,
     textures,
     safePageAspect,
@@ -250,7 +254,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   // ---------------------------------------------------------------------------
 
   // 折页命中（按下用）：fold 开启时命中页面任意位置（跨页左右页）均走折角变形。
-  // 命中判定为纯函数（lib/foldHit.ts），此处只做拾取
+  // 命中判定为纯函数（lib/foldHit.ts，外角圆形判定），此处只做拾取
   function foldPageAt(
     clientX: number,
     clientY: number,
@@ -258,7 +262,13 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     if (!foldEnabled) return null
     const pick: PagePick | null = renderer.pickPage(clientX, clientY)
     if (!pick) return null
-    return foldHitFromPick(pick, getLastPlacements(), props.forwardDirection ?? 'left')
+    return foldHitFromPick(
+      pick,
+      getLastPlacements(),
+      props.forwardDirection ?? 'left',
+      pageWidthOf(safePageAspect),
+      pageCount.value,
+    )
   }
 
   // 热区命中：把拾取到的纹理坐标换算为 item 内容坐标（左上角原点，0~1），
@@ -448,9 +458,11 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     // 该方向的悬停预览已创建纸张：直接接管纸张，避免重建；
     // 纸叠过渡在此补设（悬停预览不动纸叠，真实翻页才过渡）
     const peelState: PeelState | null = getPeel()
-    if (!(sheetOwner === 'peel' && peelState?.trigger === trigger)) {
-      // 翻页前置布局：相机由拖拽结束动画接管
-      renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    const takeOver = sheetOwner === 'peel' && peelState?.trigger === trigger
+    // 翻页前置布局：相机由拖拽结束动画接管。接管悬停预览的纸张时同样
+    // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）
+    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    if (!takeOver) {
       const ok = renderer.beginDragFlip(
         spec,
         textures.get(spec.frontIndex) ?? null,
@@ -466,8 +478,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       }
     } else {
       // 接管同方向悬停预览的卷曲纸张（不重建）：转为真实交互，
-      // 恢复书体/静态页/纸叠随拖拽进度联动
-      renderer.activateSheet()
+      // 恢复书体/静态页/纸叠随拖拽进度联动（并补齐世界偏移）
+      renderer.activateSheet(spec)
     }
     applyStacksFlip(spec)
     sheetOwner = 'drag'
@@ -481,6 +493,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       velocity: 0,
       moved: 0,
       progress: 0,
+      lockedV: null,
     }
     capturePointer(el, event.pointerId)
   }
@@ -533,11 +546,10 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       peelState.trigger === trigger &&
       peelState.isFold &&
       peelState.corner === takeOverCorner
-    if (!takeOver) {
-      if (sheetOwner === 'peel') releasePeelNow()
-      // 翻页前置布局：相机不动，折角在页内完成
-      renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
-    }
+    if (!takeOver && sheetOwner === 'peel') releasePeelNow()
+    // 翻页前置布局：相机不动，折角在页内完成。接管悬停预览的纸张时同样
+    // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）
+    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
     const ok = renderer.beginFoldDrag(
       spec,
       textures.get(spec.frontIndex) ?? null,
@@ -565,6 +577,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       moved: 0,
       progress: 0,
       fold: true,
+      // 折页拖拽（非角区/书页外空白）拖点钉在按下高度，竖直折线对折；
+      // 角区折角拖拽纵向自由（斜折线，受书脊约束钳制）
+      lockedV: takeOverCorner === 0 ? anchorV : null,
     }
     return drag
   }
@@ -587,9 +602,14 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       const dt = Math.max(1, event.timeStamp - drag.lastT)
       const dx = event.clientX - drag.lastX
       if (drag.fold) {
-        // 折角拖拽：拖点跟随指针，进度按拖点位置换算
+        // 折角拖拽：拖点跟随指针，进度按拖点位置换算。
+        // 折页拖拽（lockedV 非空）拖点纵向钉在按下高度，折线保持竖直
         const prev = drag.progress
-        const p = renderer.setFoldDragFromClient(event.clientX, event.clientY)
+        const p = renderer.setFoldDragFromClient(
+          event.clientX,
+          event.clientY,
+          drag.lockedV ?? undefined,
+        )
         if (p !== null) {
           drag.velocity = 0.75 * drag.velocity + 0.25 * ((p - prev) / dt)
           drag.progress = p
