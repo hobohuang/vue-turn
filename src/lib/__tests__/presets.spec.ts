@@ -11,7 +11,7 @@ describe('TURN_PRESETS', () => {
       gloss: 0.15,
       curl: 0.8,
       enabled: true,
-      bend: 0.16,
+      bend: 0.06,
     })
     expect(TURN_PRESETS.hard.curl).toBe(0)
     expect(TURN_PRESETS.hard.gloss).toBeGreaterThan(TURN_PRESETS.soft.gloss)
@@ -22,21 +22,21 @@ describe('TURN_PRESETS', () => {
 
 describe('resolveFold', () => {
   it('soft 开启折角、hard 关闭，fold/bend prop 不生效（档位值最高优先级）', () => {
-    expect(resolveFold('soft')).toEqual({ enabled: true, bend: 0.16 })
+    expect(resolveFold('soft')).toEqual({ enabled: true, bend: 0.06 })
     expect(resolveFold('hard')).toEqual({ enabled: false, bend: 0 })
-    expect(resolveFold('soft', false, 0.3)).toEqual({ enabled: true, bend: 0.16 })
+    expect(resolveFold('soft', false, 0.3)).toEqual({ enabled: true, bend: 0.06 })
     expect(resolveFold('hard', true)).toEqual({ enabled: false, bend: 0 })
   })
 
   it('custom 档由 fold/bend prop 显式设置，未传回退基线', () => {
-    expect(resolveFold('custom')).toEqual({ enabled: true, bend: 0.16 })
-    expect(resolveFold('custom', false)).toEqual({ enabled: false, bend: 0.16 })
+    expect(resolveFold('custom')).toEqual({ enabled: true, bend: 0.06 })
+    expect(resolveFold('custom', false)).toEqual({ enabled: false, bend: 0.06 })
     expect(resolveFold('custom', undefined, 0.3)).toEqual({ enabled: true, bend: 0.3 })
     expect(resolveFold('custom', false, 0)).toEqual({ enabled: false, bend: 0 })
   })
 
   it('未传 preset 回退 soft', () => {
-    expect(resolveFold(undefined)).toEqual({ enabled: true, bend: 0.16 })
+    expect(resolveFold(undefined)).toEqual({ enabled: true, bend: 0.06 })
   })
 })
 

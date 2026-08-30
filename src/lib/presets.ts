@@ -28,6 +28,9 @@ interface PresetEntry extends LookParams, FoldParams {}
 // - soft 普通纸张（默认）：哑光（弱方向光）、自然卷曲，开启角点折角拖拽
 // - hard 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角
 // - custom 自定义基线：与 soft 一致，供 custom 档未传参数回退
+// bend 取窄值（6% 页宽）：折痕接近锐利直线，仅保留一丝纸张弹性圆弧——
+// 过宽的过渡带会让折痕呈宽圆弧柱面（斜拉时纸边弯成弧、"布匹感"，
+// 翻页时整页绕折线鼓起），真实纸张折角的弯曲半径远小于此
 export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
   soft: {
     nPolygons: 64,
@@ -36,7 +39,7 @@ export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
     gloss: 0.15,
     curl: 0.8,
     enabled: true,
-    bend: 0.16,
+    bend: 0.06,
   },
   hard: {
     nPolygons: 32,
@@ -54,7 +57,7 @@ export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
     gloss: 0.15,
     curl: 0.8,
     enabled: true,
-    bend: 0.16,
+    bend: 0.06,
   },
 }
 

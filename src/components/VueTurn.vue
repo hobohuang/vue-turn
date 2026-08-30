@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿<script lang="ts">
+﻿﻿﻿﻿﻿﻿﻿﻿﻿<script lang="ts">
 import { defineComponent, type PropType, type VNode } from 'vue'
 import { cloneVNode } from 'vue'
 
@@ -110,7 +110,7 @@ const props = withDefaults(
     peelZone?: number
     /** 折角交互（turn.js 4 风格）：开启时四角区域悬停预览与按下拖拽均为真实折角变形；关闭时全部为整页卷曲（仅 preset="custom" 时生效，soft 开启 / hard 关闭） */
     fold?: boolean
-    /** 折角柔软度：折线圆弧过渡宽度占页宽比例，越大越柔软（仅 preset="custom" 时生效，未传回退 0.16） */
+    /** 折角柔软度：折线圆弧过渡宽度占页宽比例，越大越柔软（仅 preset="custom" 时生效，未传回退 0.06） */
     bend?: number
     /** 最大缩放倍数 */
     maxZoom?: number

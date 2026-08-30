@@ -19,8 +19,11 @@ const STATIC_Z = -0.01
 const DEFAULT_MAX_PIXEL_RATIO = 2
 // 拖拽松手后回弹/补完动画的最短时长
 const MIN_SETTLE_DURATION = 120
-// 折角纸张的纵向网格分段：折线是斜线，纵向也需要分辨率（普通卷曲 2 段即可）
-const FOLD_ROWS = 16
+// 折角纸张网格分段（横纵同值）：折线可以是斜线，折痕圆弧过渡带必须在
+// 横纵两个方向都被足够多的顶点采样——分段过少时过渡带欠采样，折痕
+// 边缘呈波浪/台阶状（"布匹感"）。96 段下过渡带约含 4 个顶点，折痕
+// 边缘平直；普通卷曲只沿横向变化，纵向 2 段即可（见 createSheet）
+const FOLD_SEGMENTS = 96
 // 封面图层：封面/封底网格与封面灯光组单独一层，灯光按图层隔离，
 // 实现封面（coverPreset）与内页（preset）互不干扰的光影
 const COVER_LAYER = 1
@@ -544,8 +547,10 @@ export class TurnScene {
     const geometry = new THREE.PlaneGeometry(
       this.sheetWidth,
       PAGE_HEIGHT,
-      nPolygons,
-      fold ? FOLD_ROWS : 2,
+      // 折角纸张横向同样需要足够分段（封面 hard 档 nPolygons=32 时
+      // 过渡带横向欠采样，折痕边缘同样会起波浪）
+      fold ? Math.max(nPolygons, FOLD_SEGMENTS) : nPolygons,
+      fold ? FOLD_SEGMENTS : 2,
     )
     const positions = geometry.attributes.position
     const uvs = geometry.attributes.uv
@@ -633,7 +638,8 @@ export class TurnScene {
       worldToX,
       onDone,
       curl,
-      bend: 0.16 * this.sheetWidth,
+      // 折痕圆弧过渡兜底宽度：与 soft/custom 预设一致（6% 页宽，窄折痕）
+      bend: 0.06 * this.sheetWidth,
       fromFitWidth,
       toFitWidth,
     }
