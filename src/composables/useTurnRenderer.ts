@@ -210,6 +210,11 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     return scene ? scene.getZoom() : 1
   }
 
+  // 运行时更新最大缩放倍数（交互参数，非挂载冻结）
+  function setMaxZoom(value: number) {
+    scene?.setMaxZoom(value)
+  }
+
   function panBy(dxPixels: number, dyPixels: number) {
     scene?.panBy(dxPixels, dyPixels)
   }
@@ -241,6 +246,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     endFoldDrag,
     stopFlip,
     setZoom,
+    setMaxZoom,
     getZoom,
     panBy,
     pickPage,

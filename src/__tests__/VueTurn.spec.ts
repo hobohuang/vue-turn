@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => {
     flip: null as null | ((committed: boolean) => void),
     drag: null as null | ((committed: boolean) => void),
   }
+  // 模拟场景缩放状态：setZoom 写入、getZoom 读出
+  // （applyZoom 依赖 getZoom 返回真实值来决定是否派发 zoom-change）
+  let zoomState = 1
   return {
     done,
     startFlip: vi.fn<
@@ -74,6 +77,14 @@ const mocks = vi.hoisted(() => {
     endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
     setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
     getZoom: vi.fn<() => number>(),
+    // 缩放状态访问器（测试内复位/写入，各用例独立）
+    resetZoomState: () => {
+      zoomState = 1
+    },
+    setZoomState: (value: number) => {
+      zoomState = value
+    },
+    readZoomState: (): number => zoomState,
     panBy: vi.fn<(dx: number, dy: number) => void>(),
     pickPage: vi.fn<(x: number, y: number) => unknown>(),
     setStaticPages: vi.fn<(placements: unknown[], textureOf: (index: number) => unknown) => void>(),
@@ -251,6 +262,13 @@ describe('VueTurn', () => {
     vi.clearAllMocks()
     mocks.done.flip = null
     mocks.done.drag = null
+    // 缩放 mock 有状态：setZoom 写入 / getZoom 读出（applyZoom 据此判断
+    // 场景是否真的执行了缩放，未执行时不派发 zoom-change）
+    mocks.resetZoomState()
+    mocks.setZoom.mockImplementation((level: number) => {
+      mocks.setZoomState(level)
+    })
+    mocks.getZoom.mockImplementation(() => mocks.readZoomState())
     mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
     // 默认：记录翻页回调但不调用（模拟翻页进行中）
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => {
@@ -280,7 +298,8 @@ describe('VueTurn', () => {
       mocks.done.flip = null
       cb?.(true)
     })
-    mocks.getZoom.mockReturnValue(1)
+    // getZoom 默认读有状态 zoomState（初始 1）；此处不再 mockReturnValue
+    // 固定值，否则 applyZoom 的前后对比恒等，zoom-change 永不派发
     mocks.pickPage.mockReturnValue(null)
   })
 
@@ -1539,13 +1558,13 @@ describe('VueTurn', () => {
     expect(wrapper.find('#indicator').text()).toBe('1/6')
   })
 
-  it('folds the nearest page corner when hovering the edge strip with fold enabled', async () => {
+  it('folds the nearest page corner when hovering the corner zone with fold enabled', async () => {
     mocks.beginFoldDrag.mockReturnValue(true)
     const wrapper = await mountTurn(6, { peel: true })
     stubViewportRect(wrapper)
-    // 跨页右页外缘条带（v=0.3 在纵向中部、非角区）：真实折角预览
-    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.3, spread: true })
-    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 260, buttons: 0 })
+    // 右下角区（u 贴右外缘、v 贴底边）：折起底角
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.1, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 480, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
     // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览折角形变
     expect(mocks.beginFoldDrag).toHaveBeenLastCalledWith(
@@ -1561,29 +1580,46 @@ describe('VueTurn', () => {
     )
     expect(mocks.beginDragFlip).not.toHaveBeenCalled()
     expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(1)
-    // 同角深入外缘：同一张纸仅更新拖点（折得更深），不重建纸张
-    mocks.pickPage.mockReturnValue({ index: 2, u: 0.99, v: 0.3, spread: true })
-    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 890, clientY: 260, buttons: 0 })
+    // 同角深入角点：同一张纸仅更新拖点（折得更深），不重建纸张
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.99, v: 0.1, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 890, clientY: 480, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
     expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(2)
-    // 移入页面中部（条带外）：折角收回
+    // 移入页面中部（角区外）：折角收回
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.5, v: 0.3, spread: true })
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 450, clientY: 260, buttons: 0 })
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
   })
 
-  it('folds the top corner when hovering the top edge strip with fold enabled', async () => {
+  it('shows no preview when hovering the edge middle with fold enabled (corner-only zones)', async () => {
+    // soft 时只要四角折角预览：边缘中部/顶底边中部不触发任何悬停预览
     mocks.beginFoldDrag.mockReturnValue(true)
     const wrapper = await mountTurn(6, { peel: true })
     stubViewportRect(wrapper)
-    // 顶边条带（u 在页面中部、v 贴近顶边）：折起最近的外侧顶角
+    // 右缘中部（横向在条带内、纵向在中部）：无预览
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.45, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 300, buttons: 0 })
+    expect(mocks.beginFoldDrag).not.toHaveBeenCalled()
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+    // 顶边中部（纵向在条带内、横向在中部）：无预览
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.7, v: 0.95, spread: true })
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 650, clientY: 60, buttons: 0 })
+    expect(mocks.beginFoldDrag).not.toHaveBeenCalled()
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+  })
+
+  it('folds the top corner when hovering the top corner zone with fold enabled', async () => {
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6, { peel: true })
+    stubViewportRect(wrapper)
+    // 右上角区（u 贴右外缘、v 贴顶边）：折起顶角
+    mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.95, spread: true })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 60, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
     // 顶角（cornerV 由 beginFoldDrag 的 pickV 参数传入，+PAGE_HEIGHT/2 为顶）
     const pickV = mocks.beginFoldDrag.mock.calls[0]?.[4] as number
     expect(pickV).toBeGreaterThan(0)
-    // 移到页面中部（四边条带外）：折角收回
+    // 移到页面中部（角区外）：折角收回
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.7, v: 0.5, spread: true })
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 650, clientY: 300, buttons: 0 })
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
@@ -1883,5 +1919,113 @@ describe('VueTurn', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('cancels the delayed click flip when a drag gesture follows the click (dblClickZoom)', async () => {
+    vi.useFakeTimers()
+    try {
+      const Host = defineComponent({
+        setup() {
+          const turnRef = ref<TurnInstance | null>(null)
+          const page = ref(1)
+          return () =>
+            h('div', [
+              h(
+                VueTurn,
+                {
+                  ref: turnRef,
+                  dblClickZoom: true,
+                  modelValue: page.value,
+                  'onUpdate:modelValue': (v: number) => {
+                    page.value = v
+                  },
+                },
+                { default: () => pages(6) },
+              ),
+              h('span', { id: 'indicator' }, `${page.value}/6`),
+            ])
+        },
+      })
+      const wrapper = mount(Host)
+      await flushPromises()
+      const viewport = stubViewportRect(wrapper)
+      // 单击进入延迟判定，随即开始新手势（拖拽/再次按下）：
+      // 新手势应作废延迟翻页 timer，拖拽结束后不得再触发翻页
+      await viewport.trigger('click', { clientX: 700, clientY: 300 })
+      await fireViewportPointer(wrapper, 'pointerdown', {
+        clientX: 700,
+        clientY: 300,
+        button: 0,
+        pointerId: 1,
+      })
+      await fireViewportPointer(wrapper, 'pointermove', {
+        clientX: 660,
+        clientY: 300,
+        pointerId: 1,
+        buttons: 1,
+      })
+      await fireViewportPointer(wrapper, 'pointerup', { clientX: 660, clientY: 300, pointerId: 1 })
+      vi.advanceTimersByTime(400)
+      await flushPromises()
+      expect(mocks.startFlip).not.toHaveBeenCalled()
+      expect(wrapper.find('#indicator').text()).toBe('1/6')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not emit zoom-change when the scene cannot apply the zoom', async () => {
+    const wrapper = await mountTurn()
+    const turn = wrapper.findComponent(VueTurn)
+    const inst = turn.vm as unknown as TurnInstance
+    // 模拟翻页/拖拽进行中：场景忽略 setZoom，级别保持 1
+    mocks.setZoom.mockImplementation(() => {})
+    mocks.getZoom.mockImplementation(() => 1)
+    inst.zoomIn()
+    inst.setZoom(2.5)
+    expect(turn.emitted('zoom-change')).toBeUndefined()
+    expect(inst.zoom).toBe(1)
+  })
+
+  it('re-rasterizes spread pages on refresh instead of reusing the stale promise', async () => {
+    const items = [
+      h(TurnItem, null, { default: () => [h('div', 'cover')] }),
+      h(TurnItem, null, { default: () => [h('div', 'p1')] }),
+      h(TurnItem, { spread: true }, { default: () => [h('div', 'spread')] }),
+      h(TurnItem, null, { default: () => [h('div', 'back')] }),
+    ]
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const page = ref(1)
+        return () =>
+          h(
+            VueTurn,
+            {
+              ref: turnRef,
+              modelValue: page.value,
+              'onUpdate:modelValue': (v: number) => {
+                page.value = v
+              },
+            },
+            { default: () => items },
+          )
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    const turn = wrapper.findComponent(VueTurn)
+    const inst = turn.vm as unknown as TurnInstance
+    // 跨页项（第 3 个 item）对应的离屏页元素
+    const spreadEl = wrapper.findAll('.page-source')[2]?.element as HTMLElement
+    expect(spreadEl).toBeTruthy()
+    const callsFor = (el: HTMLElement) =>
+      mocks.elementToTexture.mock.calls.filter(([arg]) => arg === el).length
+    // 初始批次：左右两页共享同一次整页光栅化
+    expect(callsFor(spreadEl)).toBe(1)
+    await inst.refresh()
+    await flushPromises()
+    // refresh 为新批次：必须重新光栅化，不得复用旧的 resolved promise
+    expect(callsFor(spreadEl)).toBe(2)
   })
 })

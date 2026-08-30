@@ -2,21 +2,11 @@ import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
+import type { PageSource } from '@/lib/pageMapping'
 import { elementToTexture, waitForResources } from '@/lib/textureFactory'
 import type { StaticPlacement } from '@/types/turn'
 
-/**
- * 页源：把 item 序列映射到页索引空间。
- * 普通项占 1 页；跨页项占 2 页（左右各半）。
- * blank 为自动补位的空白页；cover 标记封面/封底页（挂封面图层独立光照）。
- */
-export interface PageSource {
-  itemIndex: number
-  region: 'full' | 'left' | 'right'
-  blank: boolean
-  /** 封面/封底页：按 coverPreset 观感渲染与翻页（挂封面图层独立光照） */
-  cover: boolean
-}
+export type { PageSource }
 
 export interface PageTexturesOptions {
   pageSources: ComputedRef<PageSource[]>
@@ -50,8 +40,11 @@ export function usePageTextures(options: PageTexturesOptions) {
   const textures = new Map<number, THREE.Texture>()
   // 跨页项整页纹理：key 为 item 索引（翻页中左右两页各用半图克隆）
   const spreadFullTextures = new Map<number, THREE.Texture>()
-  // 跨页项整页纹理生成去重：并发请求共享同一 Promise
-  const spreadBasePromises = new Map<number, Promise<THREE.Texture>>()
+  // 跨页项整页纹理生成去重：仅同一光栅化批次（seq 相同）内并发请求共享
+  // 同一 Promise（左右两页同时光栅化）；跨批次不复用——DOM 内容可能已
+  // 变化，必须重新光栅化，否则 refresh/DOM 变化刷新会命中旧的 resolved
+  // promise 拿回旧纹理
+  const spreadBasePromises = new Map<number, { seq: number; promise: Promise<THREE.Texture> }>()
   let disposed = false
   let pendingRaster = false
   let rasterSeq = 0
@@ -142,9 +135,10 @@ export function usePageTextures(options: PageTexturesOptions) {
         options.applyStaticTexture(index, texture)
         return
       }
-      // 跨页半图：整页基准纹理并发去重（左右两页共享同一 Promise）
+      // 跨页半图：整页基准纹理同批次并发去重（左右两页共享同一 Promise）
       const itemIndex = source.itemIndex
-      let basePromise = spreadBasePromises.get(itemIndex)
+      const cached = spreadBasePromises.get(itemIndex)
+      let basePromise = cached && cached.seq === seq ? cached.promise : null
       if (!basePromise) {
         basePromise = elementToTexture(
           el,
@@ -153,17 +147,23 @@ export function usePageTextures(options: PageTexturesOptions) {
           bust && options.cacheBust(),
           options.maxAnisotropy.value,
         )
-        spreadBasePromises.set(itemIndex, basePromise)
+        spreadBasePromises.set(itemIndex, { seq, promise: basePromise })
       }
       let base: THREE.Texture
       try {
         base = await basePromise
       } catch (error) {
-        spreadBasePromises.delete(itemIndex)
+        if (spreadBasePromises.get(itemIndex)?.promise === basePromise) {
+          spreadBasePromises.delete(itemIndex)
+        }
         throw error
       }
       if (disposed || seq !== rasterSeq) {
         if (spreadFullTextures.get(itemIndex) !== base) base.dispose()
+        // 过期结果连同去重条目一并作废，避免后续批次复用已 dispose 的纹理
+        if (spreadBasePromises.get(itemIndex)?.promise === basePromise) {
+          spreadBasePromises.delete(itemIndex)
+        }
         return
       }
       const half = base.clone()

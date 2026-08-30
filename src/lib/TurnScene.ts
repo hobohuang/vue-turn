@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 
+import { CameraRig } from '@/lib/CameraRig'
+import { StackRenderer } from '@/lib/StackRenderer'
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
 import { computeCrease, foldPoint, foldProgress } from '@/lib/pageFold'
 import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
@@ -13,27 +15,8 @@ import type {
 } from '@/types/turn'
 
 const STATIC_Z = -0.01
-// 相机适配边距默认值：视口相对书宽的外扩比例，越大留白越多
-const DEFAULT_FIT_MARGIN = 1.12
 // 渲染像素比默认上限：平衡清晰度与性能
 const DEFAULT_MAX_PIXEL_RATIO = 2
-// 最大缩放倍数默认值
-const DEFAULT_MAX_ZOOM = 3
-// 纸叠条带 z 向厚度（世界单位）：页高 2 时约 1.6%，模拟翻开书页堆的鼓起
-const STACK_DEPTH = 0.032
-// 纸叠几何呈缓坡梯形：外缘（离书远端）高度按此比例收窄，
-// 模拟近大远小的透视——远端纸层在视野中更小更短
-const STACK_TAPER = 0.01
-// 纸叠内缘高度略低于页面：内页通常小于封面，留出的收边让纸叠不像贴纸块
-const STACK_HEIGHT = PAGE_HEIGHT * 0.988
-// 每个纹理单元内的页线数：层理密度按层数映射（一层纸一条页线），
-// repeat.x = 层数 / 此值；层数过多时按厚度上限截断避免糊成噪声
-const STACK_LINES_PER_UNIT = 32
-// 纹理单元数上限：约 200 条页线，超过后混为整体灰调（真实厚书书口即如此）
-const STACK_MAX_UNITS = 6
-// 页线的最小屏幕像素间距：层数过多导致线距小于该值时按比例抽稀，
-// 保证层理在屏幕上可分辨（窄条带下不会被采样糊掉）
-const STACK_MIN_LINE_PX = 2
 // 拖拽松手后回弹/补完动画的最短时长
 const MIN_SETTLE_DURATION = 120
 // 折角纸张的纵向网格分段：折线是斜线，纵向也需要分辨率（普通卷曲 2 段即可）
@@ -51,114 +34,16 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function createRenderer(): THREE.WebGLRenderer | null {
-  const probe = document.createElement('canvas')
-  if (!probe.getContext('webgl2') && !probe.getContext('webgl')) return null
+  // 探测与渲染共用同一 canvas：探测用的 context 无法显式释放，弃置会
+  // 永久占用一个 WebGL context 配额（浏览器上限约 16 个，多实例会加速
+  // 耗尽并触发 context lost）。二次 getContext 返回同一 context
+  const canvas = document.createElement('canvas')
+  if (!canvas.getContext('webgl2') && !canvas.getContext('webgl')) return null
   try {
-    return new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    return new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
   } catch {
     return null
   }
-}
-
-// 程序化生成纸叠层理纹理：暖白纸色底 + 等距页线（一层纸一条线）+
-// 上下边缘阴影。页线为"暗缝 + 亮边"双线：暗缝是纸页间缝隙，
-// 亮边是纸页边缘的反光，两者相间构成可感知的层理。
-// 一个纹理单元含 STACK_LINES_PER_UNIT 条页线，密度由层数驱动，
-// 并按屏幕密度取下限（每线至少 STACK_MIN_LINE_PX 屏幕像素）
-function createStackTexture(): THREE.Texture {
-  const canvas = document.createElement('canvas')
-  canvas.width = 256
-  canvas.height = 64
-  const ctx = canvas.getContext('2d')
-  if (ctx) {
-    // 纸页切口的暖白底色，接近页面白避免色块突兀
-    ctx.fillStyle = '#ede4d3'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    // 等距页线（8px 一条 → 32 条/单元）：3px 深暗缝 + 1px 亮边，
-    // 高对比保证窄条带下仍可分辨（配合禁用 mipmap 的锐利采样）
-    for (let x = 0; x < canvas.width; x += 8) {
-      const lx = x + Math.floor(Math.random() * 2)
-      const tone = 0.3 + Math.random() * 0.22
-      ctx.fillStyle = `rgba(104, 88, 64, ${tone.toFixed(3)})`
-      ctx.fillRect(lx, 0, 3, canvas.height)
-      // 纸页边缘反光亮线，紧贴暗缝右侧
-      ctx.fillStyle = 'rgba(255, 252, 244, 0.55)'
-      ctx.fillRect(lx + 3, 0, 1, canvas.height)
-    }
-    // 少量更深的错位缝：纸堆局部滑移形成的"书口纹"
-    for (let i = 0; i < 4; i++) {
-      const x = Math.floor(Math.random() * canvas.width)
-      ctx.fillStyle = 'rgba(112, 96, 72, 0.32)'
-      ctx.fillRect(x, 0, 2, canvas.height)
-    }
-    // 上下边缘轻微压暗：页堆顶/底边与页面衔接处的柔和阴影
-    const shade = ctx.createLinearGradient(0, 0, 0, canvas.height)
-    shade.addColorStop(0, 'rgba(60, 50, 36, 0.16)')
-    shade.addColorStop(0.12, 'rgba(60, 50, 36, 0)')
-    shade.addColorStop(0.88, 'rgba(60, 50, 36, 0)')
-    shade.addColorStop(1, 'rgba(60, 50, 36, 0.16)')
-    ctx.fillStyle = shade
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-  }
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.colorSpace = THREE.SRGBColorSpace
-  texture.wrapS = THREE.RepeatWrapping
-  // 禁用 mipmap：条带仅数像素宽，mip 链会把细页线平均成色块；
-  // 线距已按屏幕密度抽稀（每线 ≥2px），线性采样无闪烁
-  texture.generateMipmaps = false
-  texture.minFilter = THREE.LinearFilter
-  return texture
-}
-
-// 梯形棱柱纸叠几何：x∈[-0.5,0.5]，x=-0.5 为内缘（贴书，全高），
-// x=+0.5 为外缘（高度按 STACK_TAPER 收窄）。scale.x=thickness 时
-// 几何 +x 端在世界坐标中总是朝外（左右侧均成立）。
-// 每面独立顶点（flat 法线），uv 的 u 轴沿厚度方向，层理纹理各面对齐
-function createStackGeometry(): THREE.BufferGeometry {
-  const h0 = STACK_HEIGHT / 2
-  const h1 = (STACK_HEIGHT * (1 - STACK_TAPER)) / 2
-  const d = STACK_DEPTH / 2
-  // 8 个角点：内缘 A(下前) E(下后) D(上前) H(上后)，外缘 B F C G
-  const A: [number, number, number] = [-0.5, -h0, d]
-  const B: [number, number, number] = [0.5, -h1, d]
-  const C: [number, number, number] = [0.5, h1, d]
-  const D: [number, number, number] = [-0.5, h0, d]
-  const E: [number, number, number] = [-0.5, -h0, -d]
-  const F: [number, number, number] = [0.5, -h1, -d]
-  const G: [number, number, number] = [0.5, h1, -d]
-  const H: [number, number, number] = [-0.5, h0, -d]
-  // 每面：4 顶点（逆时针，法线朝外）+ 对应 uv
-  const faces: Array<{ pts: [number, number, number][]; uvs: [number, number][] }> = [
-    // 正面 +z：层理线沿厚度（u=x）
-    { pts: [A, B, C, D], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]] },
-    // 背面 -z
-    { pts: [E, H, G, F], uvs: [[0, 0], [0, 1], [1, 1], [1, 0]] },
-    // 顶面 +y（内高外低的斜面）：u 沿厚度
-    { pts: [D, C, G, H], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]] },
-    // 底面 -y
-    { pts: [E, F, B, A], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]] },
-    // 外缘端面 +x
-    { pts: [F, B, C, G], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]] },
-    // 内缘端面 -x（通常被书页贴合遮挡）
-    { pts: [E, A, D, H], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]] },
-  ]
-  const positions: number[] = []
-  const uvs: number[] = []
-  for (const face of faces) {
-    const { pts, uvs: faceUvs } = face
-    // quad 拆两个三角形：(0,1,2) + (0,2,3)
-    for (const i of [0, 1, 2, 0, 2, 3]) {
-      const p = pts[i]!
-      const uv = faceUvs[i]!
-      positions.push(p[0], p[1], p[2])
-      uvs.push(uv[0], uv[1])
-    }
-  }
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
-  geometry.computeVertexNormals()
-  return geometry
 }
 
 export interface TurnSceneOptions {
@@ -307,71 +192,35 @@ interface StaticEntry {
   spread: boolean
 }
 
-// 纸叠条带一侧的运行时状态：网格为缩放的梯形棱柱，厚度/位置/层数随翻页插值更新
-interface StackSideMesh {
-  mesh: THREE.Mesh
-  material: THREE.MeshLambertMaterial
-  texture: THREE.Texture
-  edgeX: number
-  thickness: number
-  layers: number
-  dir: 1 | -1
-}
-
-interface CameraTarget {
-  x: number
-  y: number
-  z: number
-}
-
-interface CameraAnim {
-  from: CameraTarget
-  to: CameraTarget
-  start: number
-  duration: number
-}
-
+/**
+ * 3D 翻书场景：静态页网格、翻页纸张形变与渲染循环的编排层。
+ * 相机控制委托 CameraRig，纸叠渲染委托 StackRenderer；
+ * 本类持有页面网格、纸张状态机与射线拾取。
+ */
 export class TurnScene {
   private readonly container: HTMLElement
   private readonly pageAspect: number
   private readonly nPolygons: number
-  private readonly perspective: number
   private readonly curl: number
-  private readonly fitMargin: number
-  private readonly maxZoom: number
   private readonly easing: EasingFn
   private readonly sheetWidth: number
   private readonly renderer: THREE.WebGLRenderer | null
   private contextLost = false
   private readonly onContextRestored?: () => void
   private readonly scene = new THREE.Scene()
-  private readonly camera: THREE.PerspectiveCamera
+  private readonly rig: CameraRig
   private readonly raycaster = new THREE.Raycaster()
+  private readonly stacks: StackRenderer
   private readonly staticMeshes = new Map<number, StaticEntry>()
   // 封面/封底页索引集合：这些页的网格挂到封面图层（封面灯光照亮）
   private readonly coverPages = new Set<number>()
-  // 纸叠条带（左右各一，懒创建）
-  private readonly stackSides: { left: StackSideMesh | null; right: StackSideMesh | null } = {
-    left: null,
-    right: null,
-  }
   private stackFrom: StackVisual | null = null
   private stackTo: StackVisual | null = null
-  private stackGeometry: THREE.BufferGeometry | null = null
-  private stackBaseTexture: THREE.Texture | null = null
-  private stackHighlight: THREE.Mesh | null = null
-  private stackHighlightMaterial: THREE.MeshBasicMaterial | null = null
   private sheet: SheetState | null = null
-  private targetFitWidth: number
   // 页面布局适配宽度（不含纸叠）
   private pageFitWidth: number
-  // 当前缩放级别（1 为未缩放），显式维护，resize/布局变化时按它重新适配相机距离
-  private zoomLevel = 1
-  private camTarget: CameraTarget = { x: 0, y: 0, z: 10 }
-  private camAnim: CameraAnim | null = null
-  private cameraReady = false
-  private canvasW = 0
-  private canvasH = 0
+  // 页面布局 + 纸叠的总适配宽度（推送给相机装配）
+  private targetFitWidth: number
   private rafId = 0
   // 脏标记：按需渲染。纸张/相机动画进行中每帧渲染；静止时仅在场景
   // 有变化（布局重建、纹理更新、缩放平移、悬停高亮等）的那一帧渲染，
@@ -383,10 +232,7 @@ export class TurnScene {
     this.container = options.container
     this.pageAspect = positive(options.pageAspect, 0.75)
     this.nPolygons = Math.round(positive(options.nPolygons ?? 64, 64))
-    this.perspective = positive(options.perspective ?? 2400, 2400)
     this.curl = options.curl ?? 0.8
-    this.fitMargin = positive(options.fitMargin ?? DEFAULT_FIT_MARGIN, DEFAULT_FIT_MARGIN)
-    this.maxZoom = positive(options.maxZoom ?? DEFAULT_MAX_ZOOM, DEFAULT_MAX_ZOOM)
     this.easing = options.easing ?? easeInOutCubic
     this.sheetWidth = pageWidth(this.pageAspect)
     this.pageFitWidth = this.sheetWidth * 2
@@ -406,14 +252,27 @@ export class TurnScene {
       this.renderer.domElement.addEventListener('webglcontextrestored', this.onContextRestoredHandler)
     }
 
-    this.camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100)
-    this.camera.position.set(0, 0, 10)
-    this.camera.lookAt(0, 0, 0)
-    this.scene.add(this.camera)
+    // 相机装配：翻页动画与缩放/平移都经由它驱动相机
+    this.rig = new CameraRig({
+      perspective: options.perspective ?? 2400,
+      fitMargin: options.fitMargin ?? 1.12,
+      maxZoom: options.maxZoom ?? 3,
+      easing: this.easing,
+      initialFitWidth: this.targetFitWidth,
+    })
+    this.scene.add(this.rig.camera)
     // 相机放行封面图层，否则封面网格不渲染
-    this.camera.layers.enable(COVER_LAYER)
+    this.rig.camera.layers.enable(COVER_LAYER)
     // 拾取放行封面图层（射线默认只测图层 0，会漏掉封面网格）
     this.raycaster.layers.enableAll()
+
+    this.stacks = new StackRenderer({
+      scene: this.scene,
+      camera: this.rig.camera,
+      raycaster: this.raycaster,
+      renderer: this.renderer,
+      perspective: options.perspective ?? 2400,
+    })
 
     // 内页灯光组（图层 0）：整本书共用
     this.scene.add(new THREE.AmbientLight(0xffffff, options.ambient ?? 1))
@@ -470,7 +329,9 @@ export class TurnScene {
     }
     this.staticMeshes.clear()
     // 纸叠同样失效，恢复时随 renderStatic 重建
-    this.disposeStacks()
+    this.stacks.dispose()
+    this.stackFrom = null
+    this.stackTo = null
   }
 
   private onContextRestoredHandler = () => {
@@ -482,46 +343,17 @@ export class TurnScene {
 
   resize(width: number, height: number) {
     if (width <= 0 || height <= 0) return
-    this.canvasW = width
-    this.canvasH = height
-    this.cameraReady = true
-    this.dirty = true
     this.renderer?.setSize(width, height)
-    this.camera.aspect = width / height
-    this.fitCamera()
+    this.rig.resize(width, height)
     // 空闲时按当前布局与缩放级别重新适配相机（翻页/缩放动画进行中不打断）
     this.refitCamera()
-  }
-
-  // 空闲时按 targetFitWidth 与 zoomLevel 重新适配相机距离；
-  // 相机动画或翻页进行中、画布尺寸未知时跳过（随后由动画终点或下一次 resize 收敛）
-  private refitCamera() {
-    if (!this.cameraReady || this.camAnim || this.sheet) return
-    const z = this.fitDistance(this.targetFitWidth) / this.zoomLevel
-    if (!Number.isFinite(z) || z <= 0) return
-    this.camTarget = {
-      x: this.clampPanX(this.camTarget.x, z),
-      y: this.clampPanY(this.camTarget.y, z),
-      z,
-    }
-    // camTarget 变化会在下一帧 updateCamera 生效，需要补渲染一帧
     this.dirty = true
   }
 
-  private fitDistance(fitWidth: number) {
-    const vFov = 2 * Math.atan(this.canvasH / (2 * this.perspective))
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (this.canvasW / this.canvasH))
-    return Math.max(
-      (fitWidth * this.fitMargin) / (2 * Math.tan(hFov / 2)),
-      (PAGE_HEIGHT * this.fitMargin) / (2 * Math.tan(vFov / 2)),
-    )
-  }
-
-  private fitCamera() {
-    if (this.canvasW <= 0 || this.canvasH <= 0) return
-    const vFov = 2 * Math.atan(this.canvasH / (2 * this.perspective))
-    this.camera.fov = (vFov * 180) / Math.PI
-    this.camera.updateProjectionMatrix()
+  // 空闲时重适配相机；纸张动画进行中跳过（随后由动画终点收敛）
+  private refitCamera() {
+    if (this.sheet) return
+    if (this.rig.refit()) this.dirty = true
   }
 
   setStaticPages(
@@ -605,7 +437,6 @@ export class TurnScene {
       entry.material.dispose()
       this.staticMeshes.delete(index)
     }
-    this.fitCamera()
     // 布局变化（封面居中/跨页/单双页切换/跳转）时相机跟随当前布局适配，
     // 修复初始封面按跨页宽度适配导致的书本偏小；翻页前置布局不触发
     if (refit) this.refitCamera()
@@ -629,6 +460,7 @@ export class TurnScene {
   private recomputeFitWidth() {
     this.targetFitWidth =
       this.pageFitWidth + (this.stackTo?.left?.thickness ?? 0) + (this.stackTo?.right?.thickness ?? 0)
+    this.rig.setFitWidth(this.targetFitWidth)
   }
 
   // 纸叠条带：贴在可见页面外缘的页层块，厚度随翻页插值变化。
@@ -637,191 +469,40 @@ export class TurnScene {
     this.stackFrom = from
     this.stackTo = to ?? from
     this.recomputeFitWidth()
-    this.hideStackHighlight()
+    this.stacks.setHover(null)
     // 无纸张动画时立即应用终点（渲染不可用的兜底路径也走到这里）
-    if (!this.sheet) this.applyStacks(1)
+    if (!this.sheet) {
+      this.stacks.apply(this.stackFrom, this.stackTo, 1)
+      // 空闲态纸叠厚度变化影响适配宽度，相机距离随之收敛
+      // （否则要等到下一次 resize/翻页才收敛，条带可能被视口裁剪）
+      this.refitCamera()
+    }
     this.dirty = true
   }
 
-  // 应用插值进度 p 下的纸叠几何：edgeX 与厚度在 from/to 间线性过渡；
-  // 某一侧状态缺失时按厚度 0 原地生长/渐隐。
-  // computeStackSides 对合书（±半页宽）与开书（±整页宽）已返回正确边缘，
-  // 线性插值与书体滑动同步，无需额外缩放
-  private applyStacks(p: number) {
-    const from = this.stackFrom
-    const to = this.stackTo
-    for (const side of ['left', 'right'] as const) {
-      const f = from?.[side] ?? null
-      const t = to?.[side] ?? null
-      const entry = this.stackSides[side]
-      if (!f && !t) {
-        if (entry) entry.mesh.visible = false
-        continue
-      }
-      const fe = f ? f.edgeX : t!.edgeX
-      const te = t ? t.edgeX : f!.edgeX
-      const ft = f?.thickness ?? 0
-      const tt = t?.thickness ?? 0
-      const fl = f?.layers ?? t!.layers
-      const tl = t?.layers ?? f!.layers
-      const e = entry ?? this.ensureStackSide(side)
-      e.dir = (t ?? f)!.dir
-      e.edgeX = fe + (te - fe) * p
-      e.thickness = ft + (tt - ft) * p
-      e.layers = fl + (tl - fl) * p
-      e.mesh.visible = e.thickness > 1e-4
-      e.mesh.scale.x = Math.max(e.thickness, 1e-4)
-      // 梯形收窄端（几何 +x）须朝外侧：右侧即世界 +x，左侧绕 y 转 π
-      // 镜像到世界 -x（法线随旋转保持朝外），保证两侧都是"内缘全高、外缘收窄"
-      e.mesh.rotation.y = e.dir === 1 ? 0 : Math.PI
-      e.mesh.position.x = e.edgeX + (e.dir * e.thickness) / 2
-      // 层理密度按层数映射（一层纸一条页线），再按屏幕密度抽稀：
-      // 每线至少 STACK_MIN_LINE_PX 像素，线距过小时按比例减线，
-      // 保证层理在屏幕上可分辨；层数过多时按厚度截断混为灰调
-      const worldPerPx = this.camera.position.z / this.perspective
-      const maxLines =
-        worldPerPx > 0 ? e.thickness / (worldPerPx * STACK_MIN_LINE_PX) : Infinity
-      const lines = Math.min(e.layers, maxLines)
-      const units = Math.min(lines / STACK_LINES_PER_UNIT, STACK_MAX_UNITS)
-      e.texture.repeat.set(Math.max(1e-3, units), 1)
-    }
-  }
-
-  private ensureStackSide(side: 'left' | 'right'): StackSideMesh {
-    const existing = this.stackSides[side]
-    if (existing) return existing
-    if (!this.stackGeometry) {
-      // 梯形棱柱：内缘贴书全高，外缘按 STACK_TAPER 收窄形成缓坡透视
-      this.stackGeometry = createStackGeometry()
-    }
-    if (!this.stackBaseTexture) this.stackBaseTexture = createStackTexture()
-    // 各侧克隆纹理以独立设置 repeat（层理密度随层数变化）；
-    // 各向异性过滤：条带以斜视线观察，斜向采样不糊
-    const texture = this.stackBaseTexture.clone()
-    texture.needsUpdate = true
-    if (this.renderer) texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy()
-    const material = new THREE.MeshLambertMaterial({ color: 0xffffff, map: texture })
-    const mesh = new THREE.Mesh(this.stackGeometry, material)
-    mesh.visible = false
-    this.scene.add(mesh)
-    const entry: StackSideMesh = {
-      mesh,
-      material,
-      texture,
-      edgeX: 0,
-      thickness: 0,
-      layers: 0,
-      dir: side === 'left' ? -1 : 1,
-    }
-    this.stackSides[side] = entry
-    return entry
-  }
-
-  // 射线拾取纸叠：返回命中侧与自内侧算起的厚度比例
-  pickStack(clientX: number, clientY: number): { side: 'left' | 'right'; fraction: number } | null {
-    if (!this.renderer || this.contextLost) return null
-    const rect = this.renderer.domElement.getBoundingClientRect()
-    if (rect.width <= 0 || rect.height <= 0) return null
-    const entries = (['left', 'right'] as const)
-      .map((side) => ({ side, entry: this.stackSides[side] }))
-      .filter(
-        (item): item is { side: 'left' | 'right'; entry: StackSideMesh } =>
-          item.entry !== null && item.entry.mesh.visible && item.entry.thickness > 0,
-      )
-    if (entries.length === 0) return null
-    const ndc = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1,
-    )
-    this.raycaster.setFromCamera(ndc, this.camera)
-    const hits = this.raycaster.intersectObjects(
-      entries.map((item) => item.entry.mesh),
-      false,
-    )
-    const hit = hits[0]
-    if (!hit) return null
-    const found = entries.find((item) => item.entry.mesh === hit.object)
-    if (!found) return null
-    const { entry } = found
-    const fraction = ((hit.point.x - entry.edgeX) * entry.dir) / entry.thickness
-    return { side: found.side, fraction: clamp(fraction, 0, 0.9999) }
-  }
-
-  // 设置纸叠高亮条带（null 清除）
-  setStackHover(hover: StackHover | null) {
-    if (!hover) {
-      this.hideStackHighlight()
-      return
-    }
-    const entry = this.stackSides[hover.side]
-    if (!entry || !entry.mesh.visible || entry.thickness <= 0) {
-      this.hideStackHighlight()
-      return
-    }
-    if (!this.stackHighlight) {
-      this.stackHighlightMaterial = new THREE.MeshBasicMaterial({
-        color: 0x7fa8ff,
-        transparent: true,
-        opacity: 0.38,
-        depthWrite: false,
-      })
-      // 复用纸叠梯形几何：高亮形状与纸叠正面轮廓一致，
-      // 外缘收窄处不会超出梯形边界
-      const geometry = this.stackGeometry ?? createStackGeometry()
-      this.stackHighlight = new THREE.Mesh(geometry, this.stackHighlightMaterial)
-      this.stackHighlight.visible = false
-      this.scene.add(this.stackHighlight)
-    }
-    // 层过薄时保证最小可见高亮宽度
-    const width = Math.max((hover.end - hover.start) * entry.thickness, 0.01)
-    const center = (hover.start + hover.end) / 2
-    this.stackHighlight.visible = true
-    this.stackHighlight.scale.x = width
-    // 与纸叠同向镜像：收窄端朝外侧，高亮轮廓贴合所在侧梯形
-    this.stackHighlight.rotation.y = entry.dir === 1 ? 0 : Math.PI
-    // 几何正面在局部 z=+STACK_DEPTH/2，位置取 0.003 使其浮出纸叠正面
-    this.stackHighlight.position.set(
-      entry.edgeX + entry.dir * center * entry.thickness,
-      0,
-      0.003,
-    )
-    this.dirty = true
-  }
-
-  private hideStackHighlight() {
-    if (this.stackHighlight && this.stackHighlight.visible) {
-      this.stackHighlight.visible = false
-      this.dirty = true
-    }
-  }
-
+  // 某视觉态下纸叠两侧厚度之和（相机适配宽度计入纸叠，条带不被视口裁剪）
   private stackExtentWidth(visual: StackVisual | null): number {
     return (visual?.left?.thickness ?? 0) + (visual?.right?.thickness ?? 0)
   }
 
-  // 释放纸叠资源（上下文丢失/组件销毁时）
-  private disposeStacks() {
-    for (const side of ['left', 'right'] as const) {
-      const entry = this.stackSides[side]
-      if (!entry) continue
-      this.scene.remove(entry.mesh)
-      entry.material.dispose()
-      entry.texture.dispose()
-      this.stackSides[side] = null
-    }
-    if (this.stackHighlight) {
-      this.scene.remove(this.stackHighlight)
-      this.stackHighlight.geometry.dispose()
-      this.stackHighlight = null
-    }
-    this.stackHighlightMaterial?.dispose()
-    this.stackHighlightMaterial = null
-    this.stackGeometry?.dispose()
-    this.stackGeometry = null
-    this.stackBaseTexture?.dispose()
-    this.stackBaseTexture = null
-    this.stackFrom = null
-    this.stackTo = null
+  // 纸张收尾/接管时的目标适配宽度（目标态页面宽度 + 目标态纸叠厚度）
+  private sheetFitWidth(sheet: SheetBase, committed: boolean): number {
+    return (
+      (committed ? sheet.toFitWidth : sheet.fromFitWidth) +
+      this.stackExtentWidth(committed ? this.stackTo : this.stackFrom)
+    )
+  }
+
+  // 射线拾取纸叠（透传 StackRenderer；上下文丢失时不可用）
+  pickStack(clientX: number, clientY: number): { side: 'left' | 'right'; fraction: number } | null {
+    if (this.contextLost) return null
+    return this.stacks.pickStack(clientX, clientY)
+  }
+
+  // 设置纸叠高亮条带（null 清除）
+  setStackHover(hover: StackHover | null) {
+    this.stacks.setHover(hover)
+    this.dirty = true
   }
 
   private slotX(slot: 'left' | 'right' | 'center') {
@@ -987,11 +668,8 @@ export class TurnScene {
     this.sheet = sheet
     // 相机从当前位置动画到目标适配距离（缩放/平移被一并复位，级别归 1）；
     // 适配宽度计入目标态纸叠厚度，条带不被视口裁剪
-    this.zoomLevel = 1
-    this.animateCameraTo(
-      this.fitDistance(sheet.toFitWidth + this.stackExtentWidth(this.stackTo)),
-      0,
-      0,
+    this.rig.resetTo(
+      sheet.toFitWidth + this.stackExtentWidth(this.stackTo),
       sheet.duration,
       startTime,
     )
@@ -1033,11 +711,8 @@ export class TurnScene {
     }
     this.sheet = sheet
     // 相机复位与 startFlip 一致（缩放/平移复位，级别归 1）
-    this.zoomLevel = 1
-    this.animateCameraTo(
-      this.fitDistance(sheet.toFitWidth + this.stackExtentWidth(this.stackTo)),
-      0,
-      0,
+    this.rig.resetTo(
+      sheet.toFitWidth + this.stackExtentWidth(this.stackTo),
       settleDuration,
       startTime,
     )
@@ -1148,7 +823,7 @@ export class TurnScene {
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     )
-    this.raycaster.setFromCamera(ndc, this.camera)
+    this.raycaster.setFromCamera(ndc, this.rig.camera)
     const { origin, direction } = this.raycaster.ray
     if (Math.abs(direction.z) < 1e-6) return null
     const t = -origin.z / direction.z
@@ -1237,14 +912,10 @@ export class TurnScene {
       target,
     }
     this.sheet = settle
-    // 悬停预览的回弹不动相机（预览从未移动过相机）
+    // 悬停预览的回弹不动相机（预览从未移动过相机）；真实拖拽的松手
+    // 相机复位到适配距离（缩放/平移随松手收尾一并复位，级别归 1）
     if (settle.preview) return
-    const fitWidth =
-      (commit ? sheet.toFitWidth : sheet.fromFitWidth) +
-      this.stackExtentWidth(commit ? this.stackTo : this.stackFrom)
-    // 相机复位到适配距离，缩放级别归 1
-    this.zoomLevel = 1
-    this.animateCameraTo(this.fitDistance(fitWidth), 0, 0, settle.duration, startTime)
+    this.rig.resetTo(this.sheetFitWidth(sheet, commit), settle.duration, startTime)
   }
 
   // 中断当前翻页并立即收尾：time/settle 按各自终点，drag 按最近端点
@@ -1264,12 +935,7 @@ export class TurnScene {
   // 悬停预览纸张不触碰相机/缩放（预览从未移动过它们）
   private finishSheet(sheet: SheetState, committed: boolean) {
     if (!sheet.preview) {
-      const fitWidth =
-        (committed ? sheet.toFitWidth : sheet.fromFitWidth) +
-        this.stackExtentWidth(committed ? this.stackTo : this.stackFrom)
-      // 相机复位到适配距离，缩放级别归 1
-      this.zoomLevel = 1
-      this.snapCamera(this.fitDistance(fitWidth), 0, 0)
+      this.rig.resetTo(this.sheetFitWidth(sheet, committed), 0)
     }
     if (this.sheet === sheet) this.sheet = null
     this.dirty = true
@@ -1283,79 +949,25 @@ export class TurnScene {
 
   // 当前缩放级别：1 为未缩放
   getZoom() {
-    return this.zoomLevel
+    return this.rig.getZoom()
+  }
+
+  // 运行时更新最大缩放倍数：当前级别超出新上限时立即收敛
+  setMaxZoom(value: number) {
+    this.rig.setMaxZoom(value)
   }
 
   // 设置缩放级别（钳制到 [1, maxZoom]）；翻页进行中忽略
   setZoom(level: number, animate = true, duration = 200) {
     if (!this.renderer || this.sheet) return
-    const clamped = clamp(Number.isFinite(level) ? level : 1, 1, this.maxZoom)
-    this.zoomLevel = clamped
-    const z = this.fitDistance(this.targetFitWidth) / clamped
-    const x = this.clampPanX(this.camTarget.x, z)
-    const y = this.clampPanY(this.camTarget.y, z)
-    if (animate && duration > 0) {
-      this.animateCameraTo(z, x, y, duration)
-    } else {
-      this.snapCamera(z, x, y)
-    }
+    this.rig.setZoom(level, animate, duration)
+    this.dirty = true
   }
 
   // 按屏幕像素平移相机（放大后拖动查看）；翻页进行中忽略
   panBy(dxPixels: number, dyPixels: number) {
     if (!this.renderer || this.sheet) return
-    if (this.canvasW <= 0 || this.canvasH <= 0) return
-    const z = this.camTarget.z
-    const vFov = (this.camera.fov * Math.PI) / 180
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect)
-    const worldPerPxX = (2 * z * Math.tan(hFov / 2)) / this.canvasW
-    const worldPerPxY = (2 * z * Math.tan(vFov / 2)) / this.canvasH
-    this.camAnim = null
-    this.camTarget = {
-      x: this.clampPanX(this.camTarget.x + dxPixels * worldPerPxX, z),
-      y: this.clampPanY(this.camTarget.y - dyPixels * worldPerPxY, z),
-      z,
-    }
-    this.dirty = true
-  }
-
-  // 平移钳制：书本不超出可视范围
-  private clampPanX(x: number, z: number) {
-    const vFov = (this.camera.fov * Math.PI) / 180
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect)
-    const visibleWidth = 2 * z * Math.tan(hFov / 2)
-    const maxX = Math.max(0, (visibleWidth - this.targetFitWidth) / 2)
-    return clamp(x, -maxX, maxX)
-  }
-
-  private clampPanY(y: number, z: number) {
-    const vFov = (this.camera.fov * Math.PI) / 180
-    const visibleHeight = 2 * z * Math.tan(vFov / 2)
-    const maxY = Math.max(0, (visibleHeight - PAGE_HEIGHT) / 2)
-    return clamp(y, -maxY, maxY)
-  }
-
-  private animateCameraTo(z: number, x: number, y: number, duration: number, startTime?: number) {
-    const start = startTime ?? performance.now()
-    this.camTarget = { x, y, z }
-    if (duration <= 0) {
-      this.camAnim = null
-      this.camera.position.set(x, y, z)
-      this.dirty = true
-      return
-    }
-    this.camAnim = {
-      from: { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z },
-      to: { x, y, z },
-      start,
-      duration,
-    }
-  }
-
-  private snapCamera(z: number, x: number, y: number) {
-    this.camAnim = null
-    this.camTarget = { x, y, z }
-    this.camera.position.set(x, y, z)
+    this.rig.panBy(dxPixels, dyPixels)
     this.dirty = true
   }
 
@@ -1368,7 +980,7 @@ export class TurnScene {
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     )
-    this.raycaster.setFromCamera(ndc, this.camera)
+    this.raycaster.setFromCamera(ndc, this.rig.camera)
     const meshes = Array.from(this.staticMeshes.values()).map((entry) => entry.mesh)
     const hits = this.raycaster.intersectObjects(meshes, false)
     for (const hit of hits) {
@@ -1380,26 +992,6 @@ export class TurnScene {
       }
     }
     return null
-  }
-
-  private updateCamera(now: number) {
-    const anim = this.camAnim
-    if (anim) {
-      const t = Math.min(1, (now - anim.start) / anim.duration)
-      const eased = this.easing(t)
-      this.camera.position.set(
-        anim.from.x + (anim.to.x - anim.from.x) * eased,
-        anim.from.y + (anim.to.y - anim.from.y) * eased,
-        anim.from.z + (anim.to.z - anim.from.z) * eased,
-      )
-      // 动画结束帧：camAnim 已清空，显式标脏保证终点帧被渲染
-      if (t >= 1) {
-        this.camAnim = null
-        this.dirty = true
-      }
-      return
-    }
-    this.camera.position.set(this.camTarget.x, this.camTarget.y, this.camTarget.z)
   }
 
   // 纸张卷曲形变：pe 为翻页进度 [0,1]
@@ -1475,7 +1067,7 @@ export class TurnScene {
       for (const entry of this.staticMeshes.values()) {
         entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
       }
-      this.applyStacks(slideP)
+      this.stacks.apply(this.stackFrom, this.stackTo, slideP)
       this.deformSheetFold(sheet)
       return
     }
@@ -1513,7 +1105,7 @@ export class TurnScene {
     }
     // 纸叠厚度/位置与静态页同步插值；开合翻页的边缘过渡由
     // from/to 的绝对边缘线性插值完成，与书体滑动同步
-    this.applyStacks(slideP)
+    this.stacks.apply(this.stackFrom, this.stackTo, slideP)
     this.deformSheet(sheet, pe)
   }
 
@@ -1532,12 +1124,13 @@ export class TurnScene {
   private tick = (now: number) => {
     if (this.disposed) return
     this.updateSheet(now)
-    this.updateCamera(now)
+    // 相机动画结束帧显式标脏，保证终点帧被渲染
+    if (this.rig.update(now)) this.dirty = true
     // 动画进行中每帧渲染；静止时仅在场景有变化（脏标记）时渲染，
     // 空闲书本不再持续占用 GPU
-    const animating = this.sheet !== null || this.camAnim !== null
+    const animating = this.sheet !== null || this.rig.isAnimating
     if ((animating || this.dirty) && this.renderer && !this.contextLost) {
-      this.renderer.render(this.scene, this.camera)
+      this.renderer.render(this.scene, this.rig.camera)
       this.dirty = false
     }
     this.rafId = requestAnimationFrame(this.tick)
@@ -1554,7 +1147,9 @@ export class TurnScene {
       entry.material.dispose()
     }
     this.staticMeshes.clear()
-    this.disposeStacks()
+    this.stacks.dispose()
+    this.stackFrom = null
+    this.stackTo = null
     if (this.renderer) {
       this.renderer.domElement.removeEventListener('webglcontextlost', this.onContextLost)
       this.renderer.domElement.removeEventListener(

@@ -1,4 +1,4 @@
-﻿﻿<script lang="ts">
+﻿﻿﻿﻿﻿﻿﻿﻿<script lang="ts">
 import { defineComponent, type PropType, type VNode } from 'vue'
 import { cloneVNode } from 'vue'
 
@@ -29,18 +29,12 @@ import {
 import TurnItem from '@/components/TurnItem.vue'
 import { useBookState } from '@/composables/useBookState'
 import { useFlipInteraction } from '@/composables/useFlipInteraction'
-import { usePageTextures, type PageSource } from '@/composables/usePageTextures'
+import { usePageStack } from '@/composables/usePageStack'
+import { usePageTextures } from '@/composables/usePageTextures'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import { pageWidth as pageWidthOf, spreadLayout, computeFlipSpec } from '@/lib/flipSpec'
+import { buildPageSources } from '@/lib/pageMapping'
 import { resolveFold, resolveLook } from '@/lib/presets'
-import {
-  computeStackSides,
-  isCenteredLayout,
-  STACK_COMPACT,
-  stackThickness,
-  type StackSide,
-  type StackSides,
-} from '@/lib/pageStack'
 import type {
   BeforeFlipContext,
   DisplayMode,
@@ -49,7 +43,6 @@ import type {
   FlipSheetOptions,
   FlipSpec,
   PageRegion,
-  StackVisual,
   StaticPlacement,
   TurnInstance,
   TurnPreset,
@@ -111,11 +104,11 @@ const props = withDefaults(
     resourceTimeout?: number
     /** 是否允许拖拽翻页（按住页面拖动，松手按位置/速度决定完成或回弹） */
     dragToFlip?: boolean
-    /** 悬停预览总开关：开启后指针移入页面边缘显示预览——fold 开启时为四边折角预览，关闭时为视口边缘条带整页轻卷 */
+    /** 悬停预览总开关：开启后显示悬停预览——fold 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷 */
     peel?: boolean
     /** 折角提示区域宽度占视口宽度的比例（两侧边缘条带，0~0.5，仅 fold 关闭时的整页卷曲预览使用） */
     peelZone?: number
-    /** 折角交互（turn.js 4 风格）：开启时外缘条带悬停预览与按下拖拽均为真实折角变形；关闭时全部为整页卷曲（仅 preset="custom" 时生效，soft 开启 / hard 关闭） */
+    /** 折角交互（turn.js 4 风格）：开启时四角区域悬停预览与按下拖拽均为真实折角变形；关闭时全部为整页卷曲（仅 preset="custom" 时生效，soft 开启 / hard 关闭） */
     fold?: boolean
     /** 折角柔软度：折线圆弧过渡宽度占页宽比例，越大越柔软（仅 preset="custom" 时生效，未传回退 0.16） */
     bend?: number
@@ -199,6 +192,35 @@ const safePageAspect = Number.isFinite(props.pageAspect) && props.pageAspect > 0
   ? props.pageAspect
   : 0.75
 
+// 数值 prop 校验：非法值（NaN/非有限/非正）回退默认值
+function positiveProp(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+const safeFlipDuration = computed(() => positiveProp(props.flipDuration, 900))
+const safePageWidth = computed(() => positiveProp(props.pageWidth, 768))
+const safePixelRatio = computed(() => positiveProp(props.pixelRatio, 1))
+const safePrefetchWindow = computed(() =>
+  Number.isFinite(props.prefetchWindow) && props.prefetchWindow >= 0
+    ? Math.floor(props.prefetchWindow)
+    : 4,
+)
+const safeResourceTimeout = computed(() =>
+  Number.isFinite(props.resourceTimeout) && props.resourceTimeout >= 0 ? props.resourceTimeout : 5000,
+)
+const safeMaxZoom = computed(() =>
+  Number.isFinite(props.maxZoom) && props.maxZoom > 1 ? props.maxZoom : 3,
+)
+const safePeelZone = computed(() => {
+  const value = Number(props.peelZone)
+  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 0.5) : 0.12
+})
+const safeStackDepth = computed(() => {
+  const value = Number(props.stackDepth)
+  // 非法值回退默认值 0.02（与 prop 默认值一致，而非任意常数）
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 0.5) : 0.02
+})
+
 const state = useBookState()
 
 // 封面/封底观感：coverPreset 独立解析（挂载时读取一次）。soft/hard 取档位值；
@@ -227,7 +249,9 @@ const renderer = useTurnRenderer({
   coverGloss: coverLook.gloss,
   fitMargin: props.fitMargin,
   maxPixelRatio: props.maxPixelRatio,
-  maxZoom: props.maxZoom,
+  // 传入校验后的值并 watch 同步：maxZoom 为交互参数（非挂载冻结的观感
+  // 参数），运行时修改应生效，避免交互层钳制与场景钳制漂移
+  maxZoom: safeMaxZoom.value,
   easing: props.easing,
   onContextRestored: () => {
     // 上下文恢复后重建静态页并强制重光栅化窗口内纹理
@@ -290,55 +314,9 @@ function collectPages(): PageItem[] {
 
 const pageItems = computed(collectPages)
 
-// 页源：把 item 序列映射到页索引空间。
-// 普通项占 1 页；跨页项占 2 页（左右各半），未对齐到奇数索引时自动插入空白页补位。
-// 封面（首个 item）固定占第 0 页，spread 标记不生效。
-const pageSources = computed<PageSource[]>(() => {
-  const sources: PageSource[] = []
-  const items = pageItems.value
-  if (items.length === 0) return sources
-  // 首个 item 视为封面，固定单页居中
-  sources.push({ itemIndex: 0, region: 'full', blank: false, cover: true })
-  let pageIndex = 1
-  for (let itemIndex = 1; itemIndex < items.length; itemIndex++) {
-    const item = items[itemIndex]
-    if (!item) continue
-    if (item.spread) {
-      // 跨页需从奇数索引（左页）开始；落在偶数索引时插入空白页补位
-      if (pageIndex % 2 === 0) {
-        sources.push({ itemIndex: -1, region: 'full', blank: true, cover: false })
-        pageIndex++
-      }
-      sources.push({ itemIndex, region: 'left', blank: false, cover: false })
-      sources.push({ itemIndex, region: 'right', blank: false, cover: false })
-      pageIndex += 2
-    } else {
-      sources.push({ itemIndex, region: 'full', blank: false, cover: false })
-      pageIndex++
-    }
-  }
-  // 总页数为奇数（末页索引为偶数）时补一张空白页保证总数为偶数，
-  // 否则封底合上动画（要求末索引为奇数）退化为常规翻页：backIndex 越界、末页悬在左槽。
-  // 末项为跨页时补在书末（补在跨页前会破坏其奇数起始对齐）；
-  // 否则补在末项之前，让用户的封底仍落在最后一个索引（视觉上如真实书籍的衬页）。
-  if (sources.length >= 3 && sources.length % 2 === 1) {
-    const last = sources[sources.length - 1]!
-    if (last.region === 'right') {
-      sources.push({ itemIndex: -1, region: 'full', blank: true, cover: false })
-    } else {
-      const insertAt = sources.findIndex((s) => s.itemIndex === last.itemIndex)
-      if (insertAt > 0) {
-        sources.splice(insertAt, 0, { itemIndex: -1, region: 'full', blank: true, cover: false })
-      }
-    }
-  }
-  // 末个 item 视为封底：其占用的所有页标记为 cover
-  const lastItemIndex = items.length - 1
-  for (const source of sources) {
-    if (source.itemIndex === lastItemIndex) source.cover = true
-  }
-  return sources
-})
+// 页源映射：封面固定第 0 页、跨页奇数对齐、奇数总页数补空白、末项标封底
+// （纯函数实现见 lib/pageMapping.ts，含各规则的单测）
+const pageSources = computed(() => buildPageSources(pageItems.value))
 
 const offscreenEl = ref<HTMLElement | null>(null)
 // 组件根元素：document 键盘监听据此排除组件内部目标（已由 viewport 处理）
@@ -350,34 +328,9 @@ const pageCount = ref(0)
 // v-model 跳转目标：翻页中推迟到动画结束
 let pendingTarget: number | null = null
 
-const safeFlipDuration = computed(() =>
-  Number.isFinite(props.flipDuration) && props.flipDuration > 0 ? props.flipDuration : 900,
-)
-const safePageWidth = computed(() =>
-  Number.isFinite(props.pageWidth) && props.pageWidth > 0 ? props.pageWidth : 768,
-)
-const safePixelRatio = computed(() =>
-  Number.isFinite(props.pixelRatio) && props.pixelRatio > 0 ? props.pixelRatio : 1,
-)
-const safePrefetchWindow = computed(() =>
-  Number.isFinite(props.prefetchWindow) && props.prefetchWindow >= 0
-    ? Math.floor(props.prefetchWindow)
-    : 4,
-)
-const safeResourceTimeout = computed(() =>
-  Number.isFinite(props.resourceTimeout) && props.resourceTimeout >= 0 ? props.resourceTimeout : 5000,
-)
-const safeMaxZoom = computed(() =>
-  Number.isFinite(props.maxZoom) && props.maxZoom > 1 ? props.maxZoom : 3,
-)
-const safePeelZone = computed(() => {
-  const value = Number(props.peelZone)
-  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 0.5) : 0.12
-})
-const safeStackDepth = computed(() => {
-  const value = Number(props.stackDepth)
-  // 非法值回退默认值 0.02（与 prop 默认值一致，而非任意常数）
-  return Number.isFinite(value) && value > 0 ? Math.min(value, 0.5) : 0.02
+// maxZoom 运行时变化同步到场景（挂载时已传 safeMaxZoom 初始值）
+watch(safeMaxZoom, (value) => {
+  renderer.setMaxZoom(value)
 })
 
 // 折角（fold）参数挂载时读取一次（运行时修改不生效，与场景观感参数策略一致）：
@@ -480,73 +433,18 @@ let lastPlacements: StaticPlacement[] = []
 
 // ---------------------------------------------------------------------------
 // 纸叠：书本左右两侧的页层厚度条带（厚度随翻页在两侧间转移）
+// （渲染几何与翻页过渡的计算见 composables/usePageStack.ts）
 // ---------------------------------------------------------------------------
 
-// 纸叠页面映射的统一计算入口：stackVisualFor（渲染几何）与
-// currentStackSides（悬停命中换算页码）共用，避免两处参数漂移
-function stackSidesFor(pageIndex: number): StackSides {
-  return computeStackSides({
-    currentPage: pageIndex,
-    displayedPages: state.displayedPages.value,
-    forwardDirection: props.forwardDirection,
-    numPages: pageCount.value,
-    sheetWidth: pageWidthOf(safePageAspect),
-  })
-}
-
-// 某页状态下的纸叠渲染几何
-function stackVisualFor(pageIndex: number): StackVisual {
-  const width = pageWidthOf(safePageAspect)
-  const sides = stackSidesFor(pageIndex)
-  const maxDepth = width * safeStackDepth.value
-  // 合页（居中单页）状态书页全部压紧叠放，条带按压实系数收窄；
-  // 翻开状态的纸叠页边微张，保持蓬松厚度
-  const compact = isCenteredLayout(pageIndex, state.displayedPages.value, pageCount.value)
-    ? STACK_COMPACT
-    : 1
-  const toVisual = (side: StackSide | null) =>
-    side
-      ? {
-          edgeX: side.edgeX,
-          dir: side.dir,
-          thickness: stackThickness(side.count, pageCount.value, maxDepth) * compact,
-          layers: side.count,
-        }
-      : null
-  return { left: toVisual(sides.left), right: toVisual(sides.right) }
-}
-
-// 空闲布局：纸叠吸附到当前页状态
-function applyStacksIdle() {
-  setStacks(props.stack ? stackVisualFor(state.currentPage.value) : null)
-}
-
-// 翻页前置布局：纸叠随动画从当前状态过渡到目标状态。
-// 封底开合期间封底页在空中翻动，不属于纸叠——它平躺时计入的
-// 那一层在 from/to 中清除，避免动画中右侧出现悬浮细线
-function applyStacksFlip(spec: FlipSpec) {
-  if (!props.stack) {
-    setStacks(null)
-    return
-  }
-  const from = stackVisualFor(state.currentPage.value)
-  const to = stackVisualFor(state.currentPage.value + spec.delta)
-  const last = pageCount.value - 1
-  if (spec.frontIndex === last || spec.backIndex === last) {
-    const side = props.forwardDirection === 'left' ? 'right' : 'left'
-    from[side] = null
-    to[side] = null
-  }
-  setStacks(from, to)
-}
-
-// 纸叠开关/厚度变化：空闲时立即生效（翻页中由结束后 renderStatic 收敛）
-watch([() => props.stack, safeStackDepth], () => {
-  if (!state.isFlipping.value) applyStacksIdle()
+const { applyStacksIdle, applyStacksFlip, currentStackSides } = usePageStack({
+  state,
+  pageCount,
+  safePageAspect,
+  safeStackDepth,
+  stackEnabled: () => props.stack,
+  forwardDirection: () => props.forwardDirection,
+  setStacks,
 })
-
-// 当前布局下的纸叠页面映射（悬停命中换算页码用）
-const currentStackSides = computed(() => stackSidesFor(state.currentPage.value))
 
 function renderStatic() {
   if (state.isFlipping.value) return

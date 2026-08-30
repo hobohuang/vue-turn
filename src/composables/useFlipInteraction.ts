@@ -1,10 +1,14 @@
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
 import type { PagePick } from '@/lib/TurnScene'
-import { PAGE_HEIGHT, pageWidth as pageWidthOf } from '@/lib/flipSpec'
-import { pageAtFraction, type StackSide, type StackSides } from '@/lib/pageStack'
+import { foldHitFromPick } from '@/lib/foldHit'
+import { pageWidth as pageWidthOf } from '@/lib/flipSpec'
+import { PAGE_HEIGHT } from '@/lib/flipSpec'
+import { pageAtFraction } from '@/lib/pageStack'
+import type { PageSource } from '@/lib/pageMapping'
+import type { StackSides } from '@/lib/pageStack'
 import type {
   FlipDirection,
   FlipSheetOptions,
@@ -15,19 +19,12 @@ import type {
 } from '@/types/turn'
 
 import type { useBookState } from './useBookState'
-import type { PageSource } from './usePageTextures'
+import { useKeyboardNav } from './useKeyboardNav'
+import { usePeelPreview, type PeelState } from './usePeelPreview'
+import { useStackHover } from './useStackHover'
 import type { useTurnRenderer } from './useTurnRenderer'
+import { useZoomPan } from './useZoomPan'
 
-// document 级键盘监听的多实例互斥：页面上有多个 vue-turn 时，
-// 仅最近交互过的实例响应 document 级按键，避免一次方向键所有书同时翻页
-let docKeyboardOwner: object | null = null
-let turnInstanceCount = 0
-
-// 折角条带：页面四边外缘（左右外缘条带 + 顶/底条带）
-// （跨页合并网格左右按半宽折算）
-const FOLD_ZONE = 0.22
-// 整页轻卷悬停的最大进度
-const PEEL_PROGRESS = 0.07
 // 双击缩放开启时，单击翻页延迟判定的窗口期
 const CLICK_DISAMBIGUATION_MS = 260
 
@@ -64,7 +61,7 @@ export interface FlipInteractionOptions {
   renderer: ReturnType<typeof useTurnRenderer>
   textures: Map<number, THREE.Texture>
   pageCount: Ref<number>
-  containerSize: { width: number; height: number }
+  containerSize: { width: number }
   webglSupported: Ref<boolean>
   rootEl: Ref<HTMLElement | null>
   /** 本实例标识：多实例时最近交互过的实例获得 document 级键盘响应权 */
@@ -117,8 +114,9 @@ interface PanState {
 }
 
 /**
- * 指针交互状态机：点击/拖拽/折角悬停/平移缩放、键盘翻页、纸叠悬停。
- * 编排层（VueTurn.vue）提供翻页编排回调（next/prev/goToPage/renderStatic 等），
+ * 指针交互状态机：点击/拖拽翻页与手势路由的编排层。
+ * 键盘翻页（useKeyboardNav）、纸叠悬停（useStackHover）、缩放控制
+ * （useZoomPan）与悬停预览（usePeelPreview）为独立子模块，经此处装配；
  * 本层不感知 v-model 与路由。
  */
 export function useFlipInteraction(options: FlipInteractionOptions) {
@@ -146,8 +144,6 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     sheetOptions,
     computeFlipSpecFor,
     emitBeforeFlip,
-    next,
-    prev,
     goToPage,
     renderStatic,
     applyStacksFlip,
@@ -156,155 +152,113 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   } = options
 
   const disabledRef = ref(false)
+  const isDisabled = () => disabledRef.value
 
-  // sheetOwner：当前场景中拖拽纸张的归属（'drag' 需要状态机收尾，'peel' 仅折角悬停）。
-  // peelState：悬停预览状态（方向/是否折角形变/当前角 +1 顶 -1 底），
-  // 不变式 peelState !== null ⟺ sheetOwner === 'peel'，接管拖拽或收起时整体置 null
+  // sheetOwner：当前场景中拖拽纸张的归属（'drag' 需要状态机收尾，'peel' 仅悬停预览）。
+  // 不变式：peel 预览激活 ⟺ sheetOwner === 'peel'（peel 状态由 usePeelPreview 持有）
   let drag: DragState | null = null
   let pan: PanState | null = null
-  let peelState: { trigger: FlipDirection; isFold: boolean; corner: number } | null = null
   let sheetOwner: 'drag' | 'peel' | null = null
   let suppressClick = false
   let clickTimer: ReturnType<typeof setTimeout> | null = null
 
   // ---------------------------------------------------------------------------
-  // 纸叠悬停：命中层高亮 + 页码提示，点击跳转对应页
+  // 子模块装配：键盘 / 纸叠悬停 / 缩放 / 悬停预览
   // ---------------------------------------------------------------------------
 
-  const stackHover = ref<{ page: number; x: number; y: number } | null>(null)
-  let lastStackHoverPage: number | null = null
-
-  // 悬停层提示位置：跟随指针并钳制在视口内
-  const stackTooltipStyle = computed(() => {
-    const hover = stackHover.value
-    if (!hover) return {}
-    const x = Math.min(hover.x + 16, Math.max(0, containerSize.width - 84))
-    return { left: `${x}px`, top: `${hover.y}px` }
+  const { onKeydown, claimKeyboardOwnership } = useKeyboardNav({
+    keyboardEnabled: () => props.keyboard === true,
+    isDisabled,
+    forwardDirection: () => props.forwardDirection ?? 'left',
+    rootEl,
+    instanceToken,
+    pageCount,
+    next: options.next,
+    prev: options.prev,
+    goToPage,
   })
 
-  // 命中比例 → 页索引与高亮条带（层过薄时保证最小可见宽度）
-  function stackBand(side: StackSide, fraction: number) {
-    const layer = Math.min(side.count - 1, Math.max(0, Math.floor(fraction * side.count)))
-    let start = layer / side.count
-    let end = (layer + 1) / side.count
-    const minBand = 0.12
-    if (end - start < minBand) {
-      const center = (start + end) / 2
-      start = Math.max(0, center - minBand / 2)
-      end = Math.min(1, center + minBand / 2)
+  const { stackHover, stackTooltipStyle, updateStackHover, clearStackHover } = useStackHover({
+    stackEnabled: () => props.stack === true,
+    isDisabled,
+    isFlipping: state.isFlipping,
+    webglSupported,
+    renderer,
+    containerSize,
+    currentStackSides,
+    emit: (event, page, point) => emit(event, page, point),
+  })
+
+  const { isZoomed, onWheel, onDblClick, zoomIn, zoomOut, toggleZoom, setZoomLevel } = useZoomPan({
+    zoomEnabled: () => props.zoomEnabled === true,
+    dblClickZoom: () => props.dblClickZoom === true,
+    isDisabled,
+    isFlipping: state.isFlipping,
+    // 拖拽/悬停预览占用场景时缩放让路
+    isBusy: () => drag !== null || pan !== null || sheetOwner !== null,
+    renderer,
+    safeMaxZoom,
+    emit: (event, level) => emit(event, level),
+  })
+
+  // 纸张完成/取消的统一收尾：拖拽提交或回弹后恢复状态机，悬停预览仅恢复布局。
+  // 注意：onDone 读取的是调用时的 sheetOwner（而非创建回调时的快照），
+  // 这让悬停预览（peel）→ 按下接管（drag）无需更换回调即可正确收尾
+  function makeSheetDone(spec: FlipSpec, trigger: FlipDirection) {
+    return (committed: boolean) => {
+      const owner = sheetOwner
+      sheetOwner = null
+      clearPeel()
+      if (owner === 'drag') {
+        if (committed) state.commitFlip(spec.delta)
+        else state.cancelFlip()
+        renderStatic()
+        emit('flip-end', trigger)
+        void rasterizeWindow(false).then(() => releaseOutsideWindow())
+      } else {
+        // 悬停预览收起：恢复静态布局
+        renderStatic()
+      }
     }
-    return { page: side.first + side.step * layer, start, end }
   }
 
-  // 悬停纸叠：命中返回 true（调用方据此抑制折角悬停）
-  function updateStackHover(event: PointerEvent): boolean {
-    if (!props.stack || disabledRef.value || state.isFlipping.value || !webglSupported.value) {
-      clearStackHover()
-      return false
-    }
-    const hit = renderer.pickStack(event.clientX, event.clientY)
-    if (!hit) {
-      clearStackHover()
-      return false
-    }
-    const side = hit.side === 'left' ? currentStackSides.value.left : currentStackSides.value.right
-    if (!side || side.count <= 0) {
-      clearStackHover()
-      return false
-    }
-    const band = stackBand(side, hit.fraction)
-    const el = event.currentTarget as HTMLElement | null
-    const rect = el?.getBoundingClientRect()
-    const point: ViewportPoint = {
-      x: rect ? event.clientX - rect.left : 0,
-      y: rect ? event.clientY - rect.top : 0,
-    }
-    stackHover.value = { page: band.page + 1, x: point.x, y: point.y }
-    renderer.setStackHover({ side: hit.side, start: band.start, end: band.end })
-    // 仅在命中页变化时派发事件，避免高频触发
-    if (lastStackHoverPage !== band.page + 1) {
-      lastStackHoverPage = band.page + 1
-      emit('stack-hover', band.page + 1, point)
-    }
-    return true
-  }
-
-  function clearStackHover() {
-    if (!stackHover.value && lastStackHoverPage === null) return
-    stackHover.value = null
-    lastStackHoverPage = null
-    renderer.setStackHover(null)
-    emit('stack-hover', null)
-  }
+  const { updatePeel, releasePeelNow, discardPeel, getPeel, clearPeel } = usePeelPreview({
+    peelEnabled: () => props.peel === true,
+    isDisabled,
+    forwardDirection: () => props.forwardDirection ?? 'left',
+    state,
+    renderer,
+    textures,
+    safePageAspect,
+    safePeelZone,
+    safeFlipDuration,
+    foldEnabled,
+    foldBendWorld,
+    getLastPlacements,
+    computeFlipSpecFor,
+    sheetOptions,
+    makeSheetDone,
+    isPeelOwner: () => sheetOwner === 'peel',
+    setPeelOwner: (value) => {
+      sheetOwner = value ? 'peel' : null
+    },
+    isZoomed,
+  })
 
   // ---------------------------------------------------------------------------
   // 折角命中与热区
   // ---------------------------------------------------------------------------
 
-  // 命中页的翻页方向与左右侧：折前进侧的页 = 前进（LTR 前进侧在世界右），
-  // 折后退侧的页 = 后退。仅跨页左右页可折，居中页（封面等）返回 null
-  function foldSideOf(pick: PagePick): { trigger: FlipDirection; worldRight: boolean } | null {
-    const ltr = props.forwardDirection === 'left'
-    let worldRight: boolean
-    if (pick.spread) {
-      // 跨页合并网格按 uv 一分为二
-      worldRight = pick.u > 0.5
-    } else {
-      const placement = getLastPlacements().find((p) => p.index === pick.index)
-      if (!placement || placement.slot === 'center') return null
-      worldRight = placement.slot === 'right'
-    }
-    const advancing = ltr ? worldRight : !worldRight
-    const trigger: FlipDirection = advancing ? (ltr ? 'left' : 'right') : ltr ? 'right' : 'left'
-    return { trigger, worldRight }
-  }
-
-  // 折页命中（按下用）：fold 开启时命中可翻页的任意位置均返回命中信息。
-  // edge=true（四角区）为折角拖拽：锚点取最近外角，斜折线；
-  // edge=false 为折页拖拽：锚点取指针同高度的外页边缘点，竖直折线对折翻页
+  // 折页命中（按下用）：fold 开启时命中页面任意位置（跨页左右页）均走折角变形。
+  // 命中判定为纯函数（lib/foldHit.ts），此处只做拾取
   function foldPageAt(
     clientX: number,
     clientY: number,
   ): { trigger: FlipDirection; cornerV: number; edge: boolean; v: number } | null {
     if (!foldEnabled) return null
-    const pick = renderer.pickPage(clientX, clientY)
+    const pick: PagePick | null = renderer.pickPage(clientX, clientY)
     if (!pick) return null
-    const side = foldSideOf(pick)
-    if (!side) return null
-    const outerU = side.worldRight ? 1 - pick.u : pick.u
-    const zoneU = pick.spread ? FOLD_ZONE / 2 : FOLD_ZONE
-    const outerV = pick.v < 0.5 ? pick.v : 1 - pick.v
-    return {
-      trigger: side.trigger,
-      cornerV: pick.v < 0.5 ? -1 : 1,
-      edge: outerU <= zoneU && outerV <= FOLD_ZONE,
-      v: pick.v,
-    }
-  }
-
-  // 折角条带命中（悬停预览用）：返回翻页方向、最近外角（+1 顶 / -1 底）与
-  // 深入强度 t（0=条带内缘，1=外缘；角区两轴叠加取更深值）
-  function foldStripAt(
-    clientX: number,
-    clientY: number,
-  ): { trigger: FlipDirection; cornerV: number; t: number } | null {
-    if (!foldEnabled) return null
-    const pick = renderer.pickPage(clientX, clientY)
-    if (!pick) return null
-    const side = foldSideOf(pick)
-    if (!side) return null
-    // 距外缘的深度：右页外缘在纹理 u=1，左页在 u=0；跨页合并网格按半宽折算
-    const outerU = side.worldRight ? 1 - pick.u : pick.u
-    const zoneU = pick.spread ? FOLD_ZONE / 2 : FOLD_ZONE
-    // 纵向：pick.v ∈ [0,1]（1 为顶），距最近顶/底边的深度
-    const outerV = pick.v < 0.5 ? pick.v : 1 - pick.v
-    // 左右外缘条带与顶/底条带均触发折角；两轴同时命中（角区）取更深强度，
-    // 保证条带→角区连续过渡
-    const tU = outerU <= zoneU ? 1 - outerU / zoneU : 0
-    const tV = outerV <= FOLD_ZONE ? 1 - outerV / FOLD_ZONE : 0
-    const t = Math.max(tU, tV)
-    if (t <= 0) return null
-    return { trigger: side.trigger, cornerV: pick.v < 0.5 ? -1 : 1, t: Math.min(1, t) }
+    return foldHitFromPick(pick, getLastPlacements(), props.forwardDirection ?? 'left')
   }
 
   // 热区命中：把拾取到的纹理坐标换算为 item 内容坐标（左上角原点，0~1），
@@ -339,12 +293,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   }
 
   // ---------------------------------------------------------------------------
-  // 点击翻页 / 键盘
+  // 点击翻页
   // ---------------------------------------------------------------------------
-
-  function isZoomed() {
-    return renderer.getZoom() > 1.01
-  }
 
   function clearClickTimer() {
     if (clickTimer !== null) {
@@ -424,228 +374,15 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     const rightSide = ratio > 0.5
     const forward = props.forwardDirection === 'left' ? rightSide : !rightSide
     if (forward) {
-      next()
+      options.next()
     } else {
-      prev()
-    }
-  }
-
-  // 键盘翻页：方向键跟随阅读方向；PageUp/PageDown/Space 前进后退；Home/End 跳首末页
-  function onKeydown(event: KeyboardEvent) {
-    if (!props.keyboard || disabledRef.value) return
-    // 组件内按键即声明本实例为 document 键盘的响应者（多实例互斥）
-    docKeyboardOwner = instanceToken
-    handleKeydown(event)
-  }
-
-  // document 级键盘监听：焦点不在书页上（如点击了外部工具栏按钮）时
-  // 方向键依然可翻页。组件内部目标已由 viewport 的 @keydown 处理，
-  // 此处跳过避免重复；可交互元素（按钮/链接/输入框等）内的按键不劫持，
-  // 保留其原生激活行为；多实例时仅最近交互过的实例响应
-  function onDocKeydown(event: KeyboardEvent) {
-    if (!props.keyboard || disabledRef.value) return
-    if (turnInstanceCount > 1 && docKeyboardOwner !== instanceToken) return
-    const target = event.target as Node | null
-    if (target) {
-      if (rootEl.value?.contains(target)) return
-      const el = target as HTMLElement
-      if (
-        el.isContentEditable ||
-        ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'SUMMARY'].includes(el.tagName)
-      ) {
-        return
-      }
-    }
-    handleKeydown(event)
-  }
-
-  function handleKeydown(event: KeyboardEvent) {
-    const forwardKey = props.forwardDirection === 'left' ? 'ArrowRight' : 'ArrowLeft'
-    const backwardKey = props.forwardDirection === 'left' ? 'ArrowLeft' : 'ArrowRight'
-    switch (event.key) {
-      case forwardKey:
-      case 'PageDown':
-      case ' ':
-        event.preventDefault()
-        next()
-        break
-      case backwardKey:
-      case 'PageUp':
-        event.preventDefault()
-        prev()
-        break
-      case 'Home':
-        event.preventDefault()
-        goToPage(1)
-        break
-      case 'End':
-        event.preventDefault()
-        goToPage(pageCount.value)
-        break
-      default:
-        break
+      options.prev()
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 拖拽翻页 / 折角悬停
+  // 拖拽翻页
   // ---------------------------------------------------------------------------
-
-  // 纸张完成/取消的统一收尾：拖拽提交或回弹后恢复状态机，折角悬停仅恢复布局。
-  // 注意：onDone 读取的是调用时的 sheetOwner（而非创建回调时的快照），
-  // 这让折角悬停（peel）→ 按下接管（drag）无需更换回调即可正确收尾
-  function makeSheetDone(spec: FlipSpec, trigger: FlipDirection) {
-    return (committed: boolean) => {
-      const owner = sheetOwner
-      sheetOwner = null
-      peelState = null
-      if (owner === 'drag') {
-        if (committed) state.commitFlip(spec.delta)
-        else state.cancelFlip()
-        renderStatic()
-        emit('flip-end', trigger)
-        void rasterizeWindow(false).then(() => releaseOutsideWindow())
-      } else {
-        // 折角悬停收起：恢复静态布局
-        renderStatic()
-      }
-    }
-  }
-
-  // 丢弃折角悬停（不触发收尾动画，供 startFlip 即将静默替换纸张时使用）
-  function discardPeel() {
-    if (sheetOwner === 'peel') {
-      sheetOwner = null
-      peelState = null
-    }
-  }
-
-  // 立即收起折角悬停的纸张（同步触发取消收尾）
-  function releasePeelNow() {
-    if (sheetOwner !== 'peel' || !peelState) return
-    const wasFold = peelState.isFold
-    sheetOwner = null
-    peelState = null
-    if (wasFold) {
-      renderer.endFoldDrag(false, safeFlipDuration.value)
-    } else {
-      renderer.endDragFlip(false, safeFlipDuration.value)
-    }
-  }
-
-  // 旧版整页弯折条带（fold 关闭 + peel 开启时使用）：
-  // t 为条带强度 [0,1]，乘以 PEEL_PROGRESS 得拖拽进度；同向重复悬停只更新
-  // 进度，不重建纸张。悬停仅预览页角：不动相机、不改纸叠布局
-  function ensurePeel(trigger: FlipDirection, t: number) {
-    const progress = Math.min(1, Math.max(0, t)) * PEEL_PROGRESS
-    if (peelState && peelState.trigger === trigger && !peelState.isFold) {
-      renderer.setDragProgress(progress)
-      return
-    }
-    releasePeelNow()
-    const spec = computeFlipSpecFor(trigger)
-    if (!spec) return
-    // 翻页前置布局：折角悬停不动相机
-    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
-    // preview=true：悬停预览不动书体/静态页/纸叠，只预览整页卷曲
-    const ok = renderer.beginDragFlip(
-      spec,
-      textures.get(spec.frontIndex) ?? null,
-      textures.get(spec.backIndex) ?? null,
-      makeSheetDone(spec, trigger),
-      sheetOptions(spec),
-      true,
-    )
-    if (!ok) return
-    sheetOwner = 'peel'
-    peelState = { trigger, isFold: false, corner: 0 }
-    renderer.setDragProgress(progress)
-  }
-
-  function updatePeel(event: PointerEvent) {
-    // peel 为悬停预览总开关：关闭时无论 fold 开关均无悬停预览
-    if (!props.peel || disabledRef.value || state.isFlipping.value || isZoomed()) {
-      releasePeelNow()
-      return
-    }
-    // fold 开启：页面四边条带悬停为真实折角预览（turn.js 风格）——
-    // 按深入强度折起最近外角
-    if (foldEnabled) {
-      const hit = foldStripAt(event.clientX, event.clientY)
-      if (hit) {
-        ensureFoldPreview(hit.trigger, 'corner', hit.t, hit.cornerV)
-        return
-      }
-      releasePeelNow()
-      return
-    }
-    // fold 关闭：视口边缘条带整页轻微卷曲（旧版 peel 行为）
-    const el = event.currentTarget as HTMLElement | null
-    const rect = el?.getBoundingClientRect()
-    if (!rect || rect.width <= 0) return
-    const ratio = (event.clientX - rect.left) / rect.width
-    const ltr = props.forwardDirection === 'left'
-    const zone = safePeelZone.value
-    const forwardTrigger: FlipDirection = ltr ? 'left' : 'right'
-    const backwardTrigger: FlipDirection = ltr ? 'right' : 'left'
-    // 指针距两侧外缘的深度（0=贴外缘，zone=条带内缘）：折角强度随深度渐变，
-    // 消除进出条带时的阶跃跳变
-    const fwdDepth = ltr ? 1 - ratio : ratio
-    const backDepth = ltr ? ratio : 1 - ratio
-    if (fwdDepth < zone && state.canGoForward.value) {
-      ensurePeel(forwardTrigger, 1 - fwdDepth / zone)
-    } else if (backDepth < zone && state.canGoBack.value) {
-      ensurePeel(backwardTrigger, 1 - backDepth / zone)
-    } else {
-      releasePeelNow()
-    }
-  }
-
-  // 折角悬停预览的当前角（+1 顶 / -1 底）由 peelState.corner 承载：
-  // 同方向、同折角模式、同角的重复悬停只更新拖点，否则重建纸张
-
-  // 折角悬停预览：命中四边条带（fold 开启）时按深入强度轻轻折起，提示可抓取。
-  // mode 'corner' 锚点为最近外角（斜折线，cornerV 由调用方指定顶/底），
-  // 'edge' 锚点为指针同高度的外页边缘点（竖直折线）。不动相机、不改纸叠布局
-  // （真实翻页才过渡）
-  function ensureFoldPreview(
-    trigger: FlipDirection,
-    mode: 'corner' | 'edge',
-    t: number,
-    cornerV: number,
-  ) {
-    const w = pageWidthOf(safePageAspect)
-    const anchorV = mode === 'corner' ? cornerV : 0
-    const pickV = (anchorV * PAGE_HEIGHT) / 2
-    // 拖点自锚点向内偏移，t 越大折得越明显
-    const qu = w - t * 0.16 * w
-    const qv = mode === 'corner' ? pickV - t * cornerV * 0.1 * PAGE_HEIGHT : 0
-    if (peelState && peelState.trigger === trigger && peelState.isFold && peelState.corner === cornerV) {
-      renderer.setFoldDragAt(qu, qv)
-      return
-    }
-    releasePeelNow()
-    const spec = computeFlipSpecFor(trigger)
-    if (!spec) return
-    // 翻页前置布局：折角悬停不动相机
-    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
-    // preview=true：悬停预览不动书体/静态页/纸叠，只预览折角形变
-    const ok = renderer.beginFoldDrag(
-      spec,
-      textures.get(spec.frontIndex) ?? null,
-      textures.get(spec.backIndex) ?? null,
-      w,
-      pickV,
-      foldBendWorld,
-      makeSheetDone(spec, trigger),
-      sheetOptions(spec),
-      true,
-    )
-    if (!ok) return
-    sheetOwner = 'peel'
-    peelState = { trigger, isFold: true, corner: cornerV }
-    renderer.setFoldDragAt(qu, qv)
-  }
 
   // 拖拽进度：按下点起算的位移占视口 60% 宽度为满程（trigger 'left' 指针向左拖）
   function dragProgressFrom(clientX: number, rect: DOMRect, dragState: DragState): number {
@@ -658,10 +395,14 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   function onPointerDown(event: PointerEvent) {
     if (disabledRef.value || event.button !== 0) return
     // 组件内按下即声明 document 键盘响应权（多实例互斥）
-    docKeyboardOwner = instanceToken
+    claimKeyboardOwnership()
     // 清掉上一手势可能残留的 suppressClick：pointercancel 后浏览器不派发
     // click，该标记不会被消费，残留会吞掉下一次正常点击
     suppressClick = false
+    // 新手势开始即作废单击延迟翻页判定（dblClickZoom）：否则"单击后立即
+    // 拖拽"时无 click 派发消费 suppressClick，迟到的 timer 会在拖拽结束后
+    // 绕过 click 入口额外触发一次翻页
+    clearClickTimer()
     const el = event.currentTarget as HTMLElement | null
     if (!el) return
     const rect = el.getBoundingClientRect()
@@ -679,58 +420,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     // 普通整页卷曲拖拽
     const foldHit = foldPageAt(event.clientX, event.clientY)
     if (foldHit) {
-      const spec = computeFlipSpecFor(foldHit.trigger)
-      if (!spec) return
-      if (!emitBeforeFlip(foldHit.trigger, state.page.value, state.page.value + spec.delta)) return
-      clearStackHover()
-      state.startFlip()
-      emit('flip-start', foldHit.trigger)
-      emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
-      const foldW = pageWidthOf(safePageAspect)
-      // 折页拖拽锚点高度取指针 v（页高坐标 v=0 为中），折角拖拽取外角
-      const pickV = foldHit.edge ? (foldHit.cornerV * PAGE_HEIGHT) / 2 : (foldHit.v - 0.5) * PAGE_HEIGHT
-      // 同方向同模式折角悬停的纸张直接接管；其余情况收起后新建折角纸张
-      const takeOver =
-        peelState !== null &&
-        peelState.trigger === foldHit.trigger &&
-        peelState.isFold &&
-        peelState.corner === (foldHit.edge ? foldHit.cornerV : 0)
-      if (!takeOver) {
-        if (sheetOwner === 'peel') releasePeelNow()
-        // 翻页前置布局：相机不动，折角在页内完成
-        renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
-      }
-      const ok = renderer.beginFoldDrag(
-        spec,
-        textures.get(spec.frontIndex) ?? null,
-        textures.get(spec.backIndex) ?? null,
-        foldW,
-        pickV,
-        foldBendWorld,
-        makeSheetDone(spec, foldHit.trigger),
-        sheetOptions(spec),
-      )
-      if (!ok) {
-        // 渲染不可用：立即回退状态，交互交由点击翻页兜底
-        state.cancelFlip()
-        emit('flip-end', foldHit.trigger)
-        return
-      }
-      applyStacksFlip(spec)
-      sheetOwner = 'drag'
-      peelState = null
-      drag = {
-        pointerId: event.pointerId,
-        trigger: foldHit.trigger,
-        startX: event.clientX,
-        lastX: event.clientX,
-        lastT: event.timeStamp,
-        velocity: 0,
-        moved: 0,
-        progress: 0,
-        fold: true,
-      }
-      capturePointer(el, event.pointerId)
+      beginFoldDragGesture(event, el, rect, foldHit)
       return
     }
     const ratio = (event.clientX - rect.left) / rect.width
@@ -747,49 +437,17 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     // fold 开启：书页外（视口空白处）按下也走折页拖拽——方向按视口半区
     // 判定，锚点取外缘中部（竖直折线），拖点跟手
     if (foldEnabled) {
-      // 同方向折边悬停的纸张直接接管；其余情况收起后新建
-      const takeOver =
-        peelState !== null && peelState.trigger === trigger && peelState.isFold && peelState.corner === 0
-      if (!takeOver) {
-        if (sheetOwner === 'peel') releasePeelNow()
-        // 翻页前置布局：相机不动，折页在页内完成
-        renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+      const drag2 = startFoldDragGesture(event, spec, trigger, 0)
+      if (drag2) {
+        applyStacksFlip(spec)
+        sheetOwner = 'drag'
+        capturePointer(el, event.pointerId)
       }
-      const ok = renderer.beginFoldDrag(
-        spec,
-        textures.get(spec.frontIndex) ?? null,
-        textures.get(spec.backIndex) ?? null,
-        pageWidthOf(safePageAspect),
-        0,
-        foldBendWorld,
-        makeSheetDone(spec, trigger),
-        sheetOptions(spec),
-      )
-      if (!ok) {
-        // 渲染不可用：立即回退状态，交互交由点击翻页兜底
-        state.cancelFlip()
-        emit('flip-end', trigger)
-        return
-      }
-      applyStacksFlip(spec)
-      sheetOwner = 'drag'
-      peelState = null
-      drag = {
-        pointerId: event.pointerId,
-        trigger,
-        startX: event.clientX,
-        lastX: event.clientX,
-        lastT: event.timeStamp,
-        velocity: 0,
-        moved: 0,
-        progress: 0,
-        fold: true,
-      }
-      capturePointer(el, event.pointerId)
       return
     }
-    // 该方向的折角悬停已创建纸张：直接接管纸张，避免重建；
+    // 该方向的悬停预览已创建纸张：直接接管纸张，避免重建；
     // 纸叠过渡在此补设（悬停预览不动纸叠，真实翻页才过渡）
+    const peelState: PeelState | null = getPeel()
     if (!(sheetOwner === 'peel' && peelState?.trigger === trigger)) {
       // 翻页前置布局：相机由拖拽结束动画接管
       renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
@@ -813,7 +471,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     }
     applyStacksFlip(spec)
     sheetOwner = 'drag'
-    peelState = null
+    clearPeel()
     drag = {
       pointerId: event.pointerId,
       trigger,
@@ -825,6 +483,90 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       progress: 0,
     }
     capturePointer(el, event.pointerId)
+  }
+
+  // 折角拖拽手势（命中页面四角区或页面中部）：before-flip 通过后
+  // 创建/接管折角纸张并进入 drag 状态。失败时同步回退状态
+  function beginFoldDragGesture(
+    event: PointerEvent,
+    el: HTMLElement,
+    rect: DOMRect,
+    foldHit: { trigger: FlipDirection; cornerV: number; edge: boolean; v: number },
+  ): boolean {
+    const spec = computeFlipSpecFor(foldHit.trigger)
+    if (!spec) return false
+    if (!emitBeforeFlip(foldHit.trigger, state.page.value, state.page.value + spec.delta)) {
+      return false
+    }
+    clearStackHover()
+    state.startFlip()
+    emit('flip-start', foldHit.trigger)
+    emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
+    // 折页拖拽锚点高度取指针 v（页高坐标 v=0 为中），折角拖拽取外角
+    const anchorV = foldHit.edge
+      ? (foldHit.cornerV * PAGE_HEIGHT) / 2
+      : (foldHit.v - 0.5) * PAGE_HEIGHT
+    const drag2 = startFoldDragGesture(event, spec, foldHit.trigger, anchorV, foldHit)
+    if (drag2) {
+      applyStacksFlip(spec)
+      sheetOwner = 'drag'
+      capturePointer(el, event.pointerId)
+    }
+    return drag2 !== null
+  }
+
+  // 创建或接管折角纸张，进入 drag 状态（返回 DragState；失败时已同步回退）。
+  // takeOverCorner：同方向同角悬停预览可直接接管的角标记（0 为竖直折线折页）
+  function startFoldDragGesture(
+    event: PointerEvent,
+    spec: FlipSpec,
+    trigger: FlipDirection,
+    anchorV: number,
+    foldHit?: { cornerV: number; edge: boolean },
+  ): DragState | null {
+    const foldW = pageWidthOf(safePageAspect)
+    const takeOverCorner = foldHit ? (foldHit.edge ? foldHit.cornerV : 0) : 0
+    const peelState: PeelState | null = getPeel()
+    // 同方向同模式悬停预览的纸张直接接管；其余情况收起后新建折角纸张
+    const takeOver =
+      peelState !== null &&
+      peelState.trigger === trigger &&
+      peelState.isFold &&
+      peelState.corner === takeOverCorner
+    if (!takeOver) {
+      if (sheetOwner === 'peel') releasePeelNow()
+      // 翻页前置布局：相机不动，折角在页内完成
+      renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    }
+    const ok = renderer.beginFoldDrag(
+      spec,
+      textures.get(spec.frontIndex) ?? null,
+      textures.get(spec.backIndex) ?? null,
+      foldW,
+      anchorV,
+      foldBendWorld,
+      makeSheetDone(spec, trigger),
+      sheetOptions(spec),
+    )
+    if (!ok) {
+      // 渲染不可用：立即回退状态，交互交由点击翻页兜底
+      state.cancelFlip()
+      emit('flip-end', trigger)
+      return null
+    }
+    clearPeel()
+    drag = {
+      pointerId: event.pointerId,
+      trigger,
+      startX: event.clientX,
+      lastX: event.clientX,
+      lastT: event.timeStamp,
+      velocity: 0,
+      moved: 0,
+      progress: 0,
+      fold: true,
+    }
+    return drag
   }
 
   function onPointerMove(event: PointerEvent) {
@@ -864,7 +606,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       drag.moved += Math.abs(dx)
       return
     }
-    // 无按键悬停：纸叠提示 > 边缘预览（peel 总控；fold 开启为四边折角，关闭为整页轻卷）
+    // 无按键悬停：纸叠提示 > 角区折角预览（peel 总控；fold 开启为四角折角，关闭为整页轻卷）
     if (event.buttons !== 0) return
     if (updateStackHover(event)) {
       releasePeelNow()
@@ -925,50 +667,6 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   }
 
   // ---------------------------------------------------------------------------
-  // 缩放
-  // ---------------------------------------------------------------------------
-
-  // 滚轮缩放：级别按指数随滚轮增量变化
-  function onWheel(event: WheelEvent) {
-    if (!props.zoomEnabled || disabledRef.value) return
-    if (state.isFlipping.value || drag || sheetOwner !== null) return
-    event.preventDefault()
-    applyZoom(renderer.getZoom() * Math.exp(-event.deltaY * 0.0016))
-  }
-
-  // 双击切换缩放（dblClickZoom 开启时，单击翻页延迟判定避免误触）
-  function onDblClick() {
-    if (!props.dblClickZoom || disabledRef.value) return
-    clearClickTimer()
-    if (state.isFlipping.value) return
-    applyZoom(isZoomed() ? 1 : safeMaxZoom.value)
-  }
-
-  function applyZoom(level: number, animate = true) {
-    const value = Number.isFinite(level) ? level : 1
-    const clamped = Math.min(Math.max(value, 1), safeMaxZoom.value)
-    renderer.setZoom(clamped, animate)
-    emit('zoom-change', clamped)
-  }
-
-  // 缩放实例方法
-  function zoomIn() {
-    applyZoom(safeMaxZoom.value)
-  }
-
-  function zoomOut() {
-    applyZoom(1)
-  }
-
-  function toggleZoom() {
-    applyZoom(isZoomed() ? 1 : safeMaxZoom.value)
-  }
-
-  function setZoomLevel(level: number) {
-    applyZoom(level)
-  }
-
-  // ---------------------------------------------------------------------------
   // 中断与禁用
   // ---------------------------------------------------------------------------
 
@@ -986,7 +684,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     if (sheetOwner === 'peel') {
       // 场景不可用导致未收尾时的兜底
       sheetOwner = null
-      peelState = null
+      clearPeel()
       renderStatic()
     }
   }
@@ -995,21 +693,13 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   function disable(value = true) {
     disabledRef.value = value !== false
     if (disabledRef.value) {
-      // 收起折角悬停，避免禁用后残留掀起的页角
+      // 收起悬停预览，避免禁用后残留掀起的页角
       releasePeelNow()
       clearClickTimer()
     }
   }
 
-  onMounted(() => {
-    turnInstanceCount++
-    document.addEventListener('keydown', onDocKeydown)
-  })
-
   onBeforeUnmount(() => {
-    document.removeEventListener('keydown', onDocKeydown)
-    turnInstanceCount--
-    if (docKeyboardOwner === instanceToken) docKeyboardOwner = null
     clearClickTimer()
   })
 
