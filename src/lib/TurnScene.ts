@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { CameraRig } from '@/lib/CameraRig'
 import { StackRenderer } from '@/lib/StackRenderer'
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
-import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress } from '@/lib/pageFold'
+import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from '@/lib/pageFold'
 import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
 import type {
   EasingFn,
@@ -638,8 +638,8 @@ export class TurnScene {
       worldToX,
       onDone,
       curl,
-      // 折痕圆弧过渡兜底宽度：与 soft/custom 预设一致（6% 页宽，窄折痕）
-      bend: 0.06 * this.sheetWidth,
+      // 折缝圆弧兜底宽度：与 soft/custom 预设一致（4% 页宽窄圆角）
+      bend: 0.04 * this.sheetWidth,
       fromFitWidth,
       toFitWidth,
     }
@@ -1050,10 +1050,21 @@ export class TurnScene {
   }
 
   // 纸张折角形变：折线取抓取点与拖点连线的垂直平分线，P 侧翻折；
-  // P≈Q（未折）时顶点还原为初始平面
+  // P≈Q（未折）时顶点还原为初始平面。
+  // 折缝圆弧与微开角随翻页进度压平（进度→1 时 bend/tilt→0）：
+  // 折角小时折缝圆润、翻起平面微翘；整页翻过落页时纸摊平贴合底面，
+  // 与 renderStatic 接管的静态布局无缝衔接（无落页跳变）
   private deformSheetFold(sheet: FoldSheet) {
     const fold = sheet.fold
-    const crease = computeCrease(fold.pu, fold.pv, fold.qu, fold.qv, sheet.bend)
+    const settle = 1 - Math.min(1, Math.max(0, sheet.progress))
+    const crease = computeCrease(
+      fold.pu,
+      fold.pv,
+      fold.qu,
+      fold.qv,
+      sheet.bend * settle,
+      FOLD_TILT * settle,
+    )
     const positions = sheet.geometry.attributes.position
     if (!positions) return
     for (let i = 0; i < positions.count; i++) {

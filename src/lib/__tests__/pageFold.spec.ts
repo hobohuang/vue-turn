@@ -6,7 +6,10 @@ import {
   FOLD_LIFT,
   foldPoint,
   foldProgress,
+  FOLD_TILT,
 } from '@/lib/pageFold'
+
+const TILT_SIN = Math.sin(FOLD_TILT)
 
 const W = 1.5
 const H = 2
@@ -39,27 +42,47 @@ describe('foldPoint', () => {
     expect(p.z).toBeCloseTo(0, 10)
   })
 
-  it('翻折区顶点镜像：抓取点 P 落在拖点 Q 上', () => {
+  it('翻折区顶点：翻起页翻过折线盖住底面（P 落在 Q 附近并抬升）', () => {
+    // 生产默认折缝弧长（0.04 × 页宽 1.5）
+    const B = 0.06
     const Q = { u: 0.3, v: -0.2 }
-    const crease = computeCrease(W, -H / 2, Q.u, Q.v, BEND)!
+    const crease = computeCrease(W, -H / 2, Q.u, Q.v, B)!
     const p = foldPoint(W, -H / 2, crease)
-    expect(p.x).toBeCloseTo(Q.u, 6)
-    expect(p.y).toBeCloseTo(Q.v, 6)
-    expect(p.z).toBeCloseTo(FOLD_LIFT, 6)
+    const dP = crease.nx * W + crease.ny * -H / 2 - crease.c
+    const a = -dP
+    expect(a).toBeGreaterThan(B)
+    // 回归守卫：翻起页必须翻过折线（输出带符号距离 > 0）——
+    // 位移公式符号错误时整页被压缩回折线 −a 侧（"折页不显示"）
+    const dOut = crease.nx * p.x + crease.ny * p.y - crease.c
+    expect(dOut).toBeGreaterThan(0)
+    // 独立推导（弧末端切线延伸）：dOut = (a−B)·cosθ − R·sinθ
+    const R = B / (Math.PI - FOLD_TILT)
+    const sinT = Math.sin(FOLD_TILT)
+    const cosT = Math.cos(FOLD_TILT)
+    expect(dOut).toBeCloseTo((a - B) * cosT - R * sinT, 6)
+    // P 落在 Q 附近（镜像 + 弧滞后 O(bend) 量级，不得被压回折线）
+    expect(Math.hypot(p.x - Q.u, p.y - Q.v)).toBeLessThan(3 * B)
+    // 高度 = 弧顶 R(1+cosθ) + (a−B)·sinθ + LIFT（不塌、单调爬升）
+    expect(p.z).toBeCloseTo(R * (1 + cosT) + (a - B) * sinT + FOLD_LIFT, 6)
+    expect(p.z).toBeGreaterThan(FOLD_LIFT)
   })
 
-  it('深度翻折顶点为折线镜像且微抬', () => {
+  it('折缝弧段 z 单调升至弧顶（不塌回平面，无双折痕）', () => {
     const crease = computeCrease(W, -H / 2, 0.3, -0.2, BEND)!
-    // 取一个远超 bend 带的翻折侧顶点（折线附近取距折线 > bend 的点）
-    const s = W
-    const y = -H / 2
-    const d = crease.nx * s + crease.ny * y - crease.c
-    expect(d).toBeLessThan(-BEND)
-    const p = foldPoint(s, y, crease)
-    // 镜像点仍在折线另一侧对称位置
-    const dMirror = crease.nx * p.x + crease.ny * p.y - crease.c
-    expect(dMirror).toBeCloseTo(-d, 6)
-    expect(p.z).toBeCloseTo(FOLD_LIFT, 10)
+    const R = BEND / (Math.PI - FOLD_TILT)
+    // 沿法向扫描弧段 [0, bend]，z 必须单调不降
+    let prevZ = -1
+    const mid = { x: (W + 0.3) / 2, y: (-H / 2 - 0.2) / 2 }
+    for (let i = 0; i <= 20; i++) {
+      const a = (i / 20) * BEND
+      const s = mid.x - a * crease.nx
+      const y = mid.y - a * crease.ny
+      const p = foldPoint(s, y, crease)
+      expect(p.z).toBeGreaterThanOrEqual(prevZ - 1e-9)
+      prevZ = p.z
+    }
+    // 弧顶高度 ≈ 2R（tilt 小时），明显高于纯垫高
+    expect(prevZ).toBeGreaterThan(R * 1.9)
   })
 
   it('bend 带边界连续过渡（无跳变）', () => {
@@ -83,22 +106,44 @@ describe('foldPoint', () => {
     expect(maxStep).toBeLessThan(BEND * 0.2)
   })
 
-  it('bend=0 时为锐利折线（无圆弧带）', () => {
+  it('bend=0 时为锐利折线（无圆弧带）且翻起部分微翘', () => {
     const crease = computeCrease(W, -H / 2, 0.3, -0.2, 0)!
     const p = foldPoint(W, -H / 2, crease)
-    expect(p.x).toBeCloseTo(0.3, 6)
-    expect(p.z).toBeCloseTo(FOLD_LIFT, 10)
+    expect(p.x).toBeCloseTo(0.3, 2)
+    // 微开角抬升：a·sinθ + FOLD_LIFT
+    const d = crease.nx * W + crease.ny * -H / 2 - crease.c
+    expect(p.z).toBeCloseTo(-d * TILT_SIN + FOLD_LIFT, 6)
   })
 
-  it('整页折过（Q 为对侧镜像位）时折线即书脊', () => {
-    const crease = computeCrease(W, -H / 2, -W, -H / 2, BEND)!
-    // 书脊 u=0 上各点到折线距离为 0（原位不动），外缘全部镜像到负侧
-    const spine = foldPoint(0, 0.5, crease)
+  it('翻起平面为刚性倾斜：同距折线等高，高度随距离线性增长（无鼓包）', () => {
+    const crease = computeCrease(W, -H / 2, 0.3, -0.2, 0)!
+    // 取翻折侧同一法向距离 a 的多个点（折线平行线上）：z 应相等
+    // （绕折线刚体旋转的等高线是折线的平行线，而非任何鼓起弧面）
+    const a = 0.6
+    // 垂足取 P、Q 中点（垂直平分线过中点），沿折线方向偏移 t
+    const mid = { x: (W + 0.3) / 2, y: (-H / 2 - 0.2) / 2 }
+    for (const t of [-0.5, 0, 0.5]) {
+      const foot = { x: mid.x + t * -crease.ny, y: mid.y + t * crease.nx }
+      const s = foot.x - a * crease.nx
+      const y = foot.y - a * crease.ny
+      const p = foldPoint(s, y, crease)
+      expect(p.z).toBeCloseTo(a * TILT_SIN + FOLD_LIFT, 6)
+    }
+  })
+
+  it('整页折过（Q 为对侧镜像位）时折线即书脊；落页压平后回到镜像位', () => {
+    // 折缝压平（bend=0，对应翻页进度→1 的落页态）：外缘回到镜像位 −W
+    const flat = computeCrease(W, -H / 2, -W, -H / 2, 0)!
+    const spine = foldPoint(0, 0.5, flat)
     expect(spine.x).toBeCloseTo(0, 10)
-    const outer = foldPoint(W, -H / 2, crease)
-    expect(outer.x).toBeCloseTo(-W, 6)
-    const outerMid = foldPoint(W, 0, crease)
-    expect(outerMid.x).toBeCloseTo(-W, 6)
+    const outer = foldPoint(W, -H / 2, flat)
+    expect(outer.x).toBeCloseTo(-W, 2)
+    expect(outer.z).toBeCloseTo(W * Math.sin(FOLD_TILT) + FOLD_LIFT, 4)
+    // 未压平时（折角中段）：外缘因弧卷起向折线收拢（真实纸性滞后）
+    const crease = computeCrease(W, -H / 2, -W, -H / 2, BEND)!
+    const folded = foldPoint(W, -H / 2, crease)
+    expect(folded.x).toBeGreaterThan(-W)
+    expect(folded.x).toBeLessThan(0)
   })
 })
 

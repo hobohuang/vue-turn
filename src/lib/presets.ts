@@ -28,9 +28,11 @@ interface PresetEntry extends LookParams, FoldParams {}
 // - soft 普通纸张（默认）：哑光（弱方向光）、自然卷曲，开启角点折角拖拽
 // - hard 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角
 // - custom 自定义基线：与 soft 一致，供 custom 档未传参数回退
-// bend 取窄值（6% 页宽）：折痕接近锐利直线，仅保留一丝纸张弹性圆弧——
-// 过宽的过渡带会让折痕呈宽圆弧柱面（斜拉时纸边弯成弧、"布匹感"，
-// 翻页时整页绕折线鼓起），真实纸张折角的弯曲半径远小于此
+// bend 默认 0.04（4% 页宽）：折缝处的窄圆弧圆角——真实纸张折弯处被
+// 压出的那段小圆弧，与微开角（FOLD_TILT）组合后整条折缝读作"一条略带
+// 厚度的折痕"：弧带内 z 单调升到翘起的翻起平面，不再"塌回"平面形成
+// 第二条平行折线（旧版 ψ→π 的弧先升后降，降回处即第二折痕）。
+// 带过宽（≥0.1）会独立成"圆柱"、两侧各显一条折线（布匹感）
 export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
   soft: {
     nPolygons: 64,
@@ -39,7 +41,7 @@ export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
     gloss: 0.15,
     curl: 0.8,
     enabled: true,
-    bend: 0.06,
+    bend: 0.04,
   },
   hard: {
     nPolygons: 32,
@@ -57,7 +59,7 @@ export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
     gloss: 0.15,
     curl: 0.8,
     enabled: true,
-    bend: 0.06,
+    bend: 0.04,
   },
 }
 

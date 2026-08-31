@@ -5,14 +5,22 @@
 // 折角翻起后与下层页面的微小抬升，避免 z-fighting
 export const FOLD_LIFT = 0.012
 
+// 折痕微开角（弧度，约 4.6°）：翻起平面绕折线的翘起角，与折缝圆弧
+// （bend，computeCrease 参数）组合成"一条略带厚度的折痕"：弧段圆润
+// 卷起（真实纸张折缝的圆角），弧末端相切接入微翘的翻起平面——高度差
+// 与法线变化让折缝在光影和透视下可分辨。调用方随翻页进度把二者压平
+export const FOLD_TILT = 0.08
+
 export interface FoldCrease {
   /** 折线法向（单位向量，指向未翻折侧） */
   nx: number
   ny: number
   /** 折线方程 nx·x + ny·y = c */
   c: number
-  /** 折线附近的圆弧过渡宽度（世界单位） */
+  /** 折缝圆弧的弧长（世界单位）；0 = 无圆角的锐利折痕 */
   bend: number
+  /** 翻起平面绕折线的微开角（弧度）；0 = 翻起部分平贴底面 */
+  tilt: number
 }
 
 export interface FoldPointResult {
@@ -21,13 +29,16 @@ export interface FoldPointResult {
   z: number
 }
 
-// 由抓取点 P(pu,pv)、拖点 Q(qu,qv) 计算折线；P≈Q（未折）返回 null
+// 由抓取点 P(pu,pv)、拖点 Q(qu,qv) 计算折线；P≈Q（未折）返回 null。
+// bend 为折缝圆弧的弧长，tilt 为翻起平面的微开角（调用方随翻页进度
+// 压平二者：进度→1 时 bend/tilt→0，纸摊平落页无跳变）
 export function computeCrease(
   pu: number,
   pv: number,
   qu: number,
   qv: number,
-  bend: number,
+  bend = 0,
+  tilt = FOLD_TILT,
 ): FoldCrease | null {
   const dx = qu - pu
   const dy = qv - pv
@@ -38,31 +49,58 @@ export function computeCrease(
     ny: dy / len,
     c: (qu * qu + qv * qv - pu * pu - pv * pv) / (2 * len),
     bend,
+    tilt,
   }
 }
 
 // 单顶点折角变换：s 为自书脊起算的页宽坐标 [0,W]，y 为页高坐标 [-H/2,H/2]。
-// - 未翻折侧（含折线）原位不动；
-// - 折线附近 bend 带内：绕折线方向按距离比例旋转 0→π，形成圆弧过渡；
-// - 超出 bend 带：镜像翻折平摊，微抬 FOLD_LIFT。
+// 纸跨过折线（d<0 侧）的剖面：底平面 → 折缝圆弧（弧长守恒，转过
+// Φ = π − tilt）→ 翻起平面（绕折线翘 tilt 角延伸）。
+// - 未翻折侧（d≥0）原位不动；
+// - bend = 0：无圆角，镜像后绕折线刚性翘 tilt（跟手精确）；
+// - bend > 0：a≤bend 段走半径 R = bend/Φ 的圆弧（z 单调升至弧顶，
+//   旧式 z = a·sinψ 把直线距离当弧长用，ψ 过 90° 后 z 回落——
+//   "塌回平面"形成第二条平行折线，即布匹感的根源）；a>bend 段
+//   自弧末端相切接入翘面（切线斜率一致，无第二条折线）。
+// 翻起纸角的 footprint 因弧的卷起略向折线收拢（滞后约 bend 量级），
+// 与真实纸张一致；调用方随翻页进度把 bend/tilt 压向 0，落页摊平。
 export function foldPoint(s: number, y: number, crease: FoldCrease): FoldPointResult {
   const d = crease.nx * s + crease.ny * y - crease.c
   if (d >= 0) return { x: s, y, z: 0 }
   const a = -d
-  const { bend } = crease
-  if (bend <= 0 || a >= bend) {
+  const { bend, tilt, nx, ny } = crease
+  const sinT = Math.sin(tilt)
+  const cosT = Math.cos(tilt)
+  // 以下 offset 均为相对原始顶点（位于折线 −a 侧）的位移：目标带符号
+  // 距离减 (−a)。原始顶点带符号距离为 −a，位移 = 目标 + a
+  if (bend <= 0) {
+    // 纯镜像 + 绕折线翘 tilt：目标 = a·cosT，位移 = a(1+cosT)，抬升 a·sinT
     return {
-      x: s - 2 * d * crease.nx,
-      y: y - 2 * d * crease.ny,
-      z: FOLD_LIFT,
+      x: s + a * (1 + cosT) * nx,
+      y: y + a * (1 + cosT) * ny,
+      z: a * sinT + FOLD_LIFT,
     }
   }
-  const psi = (Math.PI * a) / bend
-  const shift = d * (1 - Math.cos(psi))
+  const phi = Math.PI - tilt
+  const R = bend / phi
+  if (a <= bend) {
+    // 弧段：纸自折线绕圆心在折线上方 R 处的圆柱卷起，ψ = Φ·a/bend。
+    // 目标带符号距离 = −R·sinψ（卷起初期略越过折线），高度 R(1−cosψ)
+    const psi = (phi * a) / bend
+    const offset = a - R * Math.sin(psi)
+    return {
+      x: s + offset * nx,
+      y: y + offset * ny,
+      z: R * (1 - Math.cos(psi)) + FOLD_LIFT * (a / bend),
+    }
+  }
+  // 翘面段：自弧末端（带符号距离 −R·sinT、高度 R(1+cosT)）沿 (cosT, sinT)
+  // 方向延伸。目标带符号距离 = −R·sinT + (a−bend)·cosT
+  const offset = a - R * sinT + (a - bend) * cosT
   return {
-    x: s - shift * crease.nx,
-    y: y - shift * crease.ny,
-    z: a * Math.sin(psi) + FOLD_LIFT * (a / bend),
+    x: s + offset * nx,
+    y: y + offset * ny,
+    z: R * (1 + cosT) + (a - bend) * sinT + FOLD_LIFT,
   }
 }
 
