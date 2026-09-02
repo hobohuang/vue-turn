@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { computeFlipSpec, PAGE_HEIGHT, pageWidth, spreadLayout } from '@/lib/flipSpec'
-import type { FlipSpec } from '@/types/turn'
+import { buildPageSources } from '@/lib/pageMapping'
+import { computeFlipSpec, mergeSpreadPlacements, PAGE_HEIGHT, pageWidth, spreadLayout } from '@/lib/flipSpec'
+import type { FlipSpec, StaticPlacement } from '@/types/turn'
 
 const ASPECT = 0.75
 
@@ -256,5 +257,83 @@ describe('spreadLayout', () => {
     expect(
       spreadLayout({ currentPage: 9, displayedPages: 2, forwardDirection: 'left', numPages: 10 }),
     ).toEqual([{ index: 9, slot: 'center' }])
+  })
+})
+
+describe('mergeSpreadPlacements', () => {
+  // 封面(p0) + 普通(p1) + 补位空白(p2) + 跨页左(p3)/右(p4) + 普通(p5)
+  const sources = buildPageSources([
+    { spread: false },
+    { spread: false },
+    { spread: true },
+    { spread: false },
+  ])
+
+  it('merges the two halves of one spread item into a centered full page (ltr)', () => {
+    const placements = spreadLayout({
+      currentPage: 3,
+      displayedPages: 2,
+      forwardDirection: 'left',
+      numPages: sources.length,
+    })
+    expect(placements).toEqual([
+      { index: 3, slot: 'left' },
+      { index: 4, slot: 'right' },
+    ])
+    expect(mergeSpreadPlacements(placements, sources)).toEqual([
+      { index: 3, slot: 'center', spread: true },
+    ])
+  })
+
+  it('pairs by source identity regardless of slot (rtl)', () => {
+    const placements = spreadLayout({
+      currentPage: 3,
+      displayedPages: 2,
+      forwardDirection: 'right',
+      numPages: sources.length,
+    })
+    expect(placements).toEqual([
+      { index: 4, slot: 'left' },
+      { index: 3, slot: 'right' },
+    ])
+    expect(mergeSpreadPlacements(placements, sources)).toEqual([
+      { index: 3, slot: 'center', spread: true },
+    ])
+  })
+
+  it('keeps a half page whose partner is not visible', () => {
+    // 当前页=跨页右半(p4)，其左半(p3)不在布局中 → 保持原样
+    const placements = spreadLayout({
+      currentPage: 4,
+      displayedPages: 2,
+      forwardDirection: 'left',
+      numPages: sources.length,
+    })
+    expect(mergeSpreadPlacements(placements, sources)).toEqual(placements)
+  })
+
+  it('does not merge blank pages or full-region pages', () => {
+    // 补位空白页(p2)与跨页左半(p3)同屏：空白不参与合并
+    const blankPair: StaticPlacement[] = [
+      { index: 2, slot: 'left' },
+      { index: 3, slot: 'right' },
+    ]
+    expect(mergeSpreadPlacements(blankPair, sources)).toEqual(blankPair)
+    // 普通页（region=full）不与相邻页合并
+    const normalPair: StaticPlacement[] = [
+      { index: 1, slot: 'left' },
+      { index: 3, slot: 'right' },
+    ]
+    expect(mergeSpreadPlacements(normalPair, sources)).toEqual(normalPair)
+  })
+
+  it('leaves centered pages untouched', () => {
+    const placements = spreadLayout({
+      currentPage: 0,
+      displayedPages: 2,
+      forwardDirection: 'left',
+      numPages: sources.length,
+    })
+    expect(mergeSpreadPlacements(placements, sources)).toEqual(placements)
   })
 })

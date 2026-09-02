@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 
 import { PAGE_HEIGHT } from '@/lib/flipSpec'
+import { clamp, positive } from '@/lib/math'
 import { easeInOutCubic } from '@/lib/pageCurl'
 import type { EasingFn } from '@/types/turn'
 
@@ -8,14 +9,6 @@ import type { EasingFn } from '@/types/turn'
 const DEFAULT_FIT_MARGIN = 1.12
 // 最大缩放倍数默认值
 const DEFAULT_MAX_ZOOM = 3
-
-function positive(value: number, fallback: number) {
-  return Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
-}
 
 interface CameraTarget {
   x: number

@@ -12,11 +12,23 @@ import type { useTurnRenderer } from './useTurnRenderer'
 // 整页轻卷悬停的最大进度
 const PEEL_PROGRESS = 0.07
 
-/** 悬停预览当前状态（不变式：peel !== null ⟺ 场景纸张归属为 peel） */
+/** 悬停预览当前状态（拖点/折角元信息，供按下接管判定） */
 export interface PeelState {
   trigger: FlipDirection
   isFold: boolean
   corner: number
+}
+
+/**
+ * 场景纸张归属：唯一事实来源（状态对象由 useFlipInteraction 持有）。
+ * - owner 'drag'：真实拖拽占用的纸张，状态机收尾（提交/回弹 + flip-end）
+ * - owner 'peel'：悬停预览占用的纸张，收起时仅恢复静态布局
+ * - peel 仅在 owner === 'peel' 时非空，两者同置同清——
+ *   "peel 预览激活 ⟺ owner === 'peel'" 的不变式由读写约定结构化保证
+ */
+export interface PaperOwnership {
+  owner: 'drag' | 'peel' | null
+  peel: PeelState | null
 }
 
 export interface PeelPreviewOptions {
@@ -54,10 +66,8 @@ export interface PeelPreviewOptions {
   sheetOptions: (spec: FlipSpec) => FlipSheetOptions
   /** 纸张收尾回调工厂（由主状态机提供，读调用时的纸张归属收尾） */
   makeSheetDone: (spec: FlipSpec, trigger: FlipDirection) => (committed: boolean) => void
-  /** 场景纸张当前是否归属悬停预览（主状态机的 sheetOwner === 'peel'） */
-  isPeelOwner: () => boolean
-  /** 置为悬停预览归属（主状态机 sheetOwner = 'peel' / 清除） */
-  setPeelOwner: (value: boolean) => void
+  /** 场景纸张归属状态（唯一事实来源，与主状态机共享读写） */
+  ownership: PaperOwnership
   isZoomed: () => boolean
 }
 
@@ -67,9 +77,8 @@ export interface PeelPreviewOptions {
  *   与折角拖拽同一张纸张、同一条形变路径（preview=true 差异见下）
  * - fold 关闭：视口边缘条带整页轻卷（旧版 peel 行为）
  *
- * 与主拖拽状态机共享"场景纸张归属"（sheetOwner）：悬停创建的预览纸张
- * 可被真实按下无缝接管；归属标记由 isPeelOwner/setPeelOwner 读写，
- * peel 内部状态与归属标记保持同置同清。
+ * 纸张归属记录在共享的 PaperOwnership 上：悬停创建的预览纸张可被
+ * 真实按下无缝接管；归属的建立/清除与本模块内部标记同置同清。
  */
 export function usePeelPreview(options: PeelPreviewOptions) {
   const {
@@ -89,37 +98,25 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     computeFlipSpecFor,
     sheetOptions,
     makeSheetDone,
-    isPeelOwner,
-    setPeelOwner,
+    ownership,
     isZoomed,
   } = options
 
-  let peel: PeelState | null = null
-
-  /** 当前悬停预览状态（主状态机判定按下接管时读取） */
-  function getPeel(): PeelState | null {
-    return peel
-  }
-
-  /** 清除内部状态（主状态机接管纸张转为 drag 时调用） */
-  function clearPeel() {
-    peel = null
-  }
-
-  // 丢弃折角悬停（不触发收尾动画，供 startFlip 即将静默替换纸张时使用）
+  // 丢弃悬停预览（不触发收尾动画，供 startFlip 即将静默替换纸张时使用）
   function discardPeel() {
-    if (isPeelOwner()) {
-      setPeelOwner(false)
-      peel = null
+    if (ownership.owner === 'peel') {
+      ownership.owner = null
+      ownership.peel = null
     }
   }
 
   // 立即收起悬停预览的纸张（同步触发取消收尾）
   function releasePeelNow() {
-    if (!isPeelOwner() || !peel) return
+    const peel = ownership.peel
+    if (ownership.owner !== 'peel' || !peel) return
     const wasFold = peel.isFold
-    setPeelOwner(false)
-    peel = null
+    ownership.owner = null
+    ownership.peel = null
     if (wasFold) {
       renderer.endFoldDrag(false, safeFlipDuration.value)
     } else {
@@ -135,7 +132,8 @@ export function usePeelPreview(options: PeelPreviewOptions) {
   // 形成"折起-恢复"的闪烁循环
   function ensurePeel(trigger: FlipDirection, t: number) {
     const progress = Math.min(1, Math.max(0, t)) * PEEL_PROGRESS
-    if (peel && peel.trigger === trigger && !peel.isFold) {
+    const peel = ownership.peel
+    if (ownership.owner === 'peel' && peel && peel.trigger === trigger && !peel.isFold) {
       renderer.setDragProgress(progress)
       return
     }
@@ -153,8 +151,8 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       true,
     )
     if (!ok) return
-    setPeelOwner(true)
-    peel = { trigger, isFold: false, corner: 0 }
+    ownership.owner = 'peel'
+    ownership.peel = { trigger, isFold: false, corner: 0 }
     renderer.setDragProgress(progress)
   }
 
@@ -170,7 +168,8 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       // 折角预览已激活：静态布局已是翻开前置布局，pickPage 命中的是底页，
       // 角区进出改按指针到折角锚点（外角）的世界距离判定（与折角条带
       // 命中同心同半径）；折点跟随指针，与折角拖拽同一入口
-      if (peel?.isFold) {
+      const peel = ownership.peel
+      if (ownership.owner === 'peel' && peel?.isFold) {
         const radius = FOLD_ZONE * pageWidth(safePageAspect)
         const dist = renderer.foldAnchorDistanceFromClient(event.clientX, event.clientY)
         if (dist !== null && dist <= radius) {
@@ -244,11 +243,11 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       true,
     )
     if (!ok) return
-    setPeelOwner(true)
-    peel = { trigger, isFold: true, corner: cornerV }
+    ownership.owner = 'peel'
+    ownership.peel = { trigger, isFold: true, corner: cornerV }
     // 创建时拖点先落在锚点外角（平展），立即移到指针当前位置
     renderer.setFoldDragFromClient(event.clientX, event.clientY)
   }
 
-  return { updatePeel, releasePeelNow, discardPeel, getPeel, clearPeel }
+  return { updatePeel, releasePeelNow, discardPeel }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildPageSources } from '@/lib/pageMapping'
+import { buildPageSources, coverPageIndices } from '@/lib/pageMapping'
 
 const item = (spread = false) => ({ spread })
 
@@ -102,5 +102,21 @@ describe('buildPageSources', () => {
         expect(sources.length % 2 === 0 || sources.length === 1).toBe(true)
       }
     }
+  })
+})
+
+describe('coverPageIndices', () => {
+  it('lists cover and back cover page indices in order', () => {
+    // 封面(p0) + 普通(p1) + 跨页补位(p2) + 跨页封底(p3,p4) + 书末补位(p5)
+    const sources = buildPageSources([item(), item(), item(true)])
+    expect(coverPageIndices(sources)).toEqual([0, 3, 4])
+  })
+
+  it('returns the single page when the book has one item', () => {
+    expect(coverPageIndices(buildPageSources([item()]))).toEqual([0])
+  })
+
+  it('returns empty for no pages', () => {
+    expect(coverPageIndices([])).toEqual([])
   })
 })

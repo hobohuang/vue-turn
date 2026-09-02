@@ -150,6 +150,7 @@ interface HostProps {
   preset?: 'soft' | 'hard' | 'custom'
   modelValue?: number
   defaultPages?: number
+  globalKeyboard?: boolean
 }
 
 function createHost(props: HostProps = {}) {
@@ -181,6 +182,7 @@ function createHost(props: HostProps = {}) {
               peel: props.peel,
               fold: props.fold,
               preset: props.preset,
+              globalKeyboard: props.globalKeyboard,
               'onUpdate:modelValue': (v: number) => {
                 page.value = v
                 bump()
@@ -251,6 +253,7 @@ async function mountTurn(
     fold?: boolean
     preset?: 'soft' | 'hard' | 'custom'
     modelValue?: number
+    globalKeyboard?: boolean
   } = {},
 ) {
   const Host = createHost({ numPages, ...extraProps })
@@ -782,9 +785,9 @@ describe('VueTurn', () => {
     expect(wrapper.find('#indicator').text()).toBe('1/6')
   })
 
-  it('flips via document keydown when focus is outside the component', async () => {
+  it('flips via document keydown when focus is outside the component (globalKeyboard on)', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
-    const wrapper = await mountTurn()
+    const wrapper = await mountTurn(6, { globalKeyboard: true })
     // 焦点在组件外（document/body）：点击工具栏按钮后按键的场景
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
     await flushPromises()
@@ -797,7 +800,7 @@ describe('VueTurn', () => {
 
   it('does not hijack keydown from editable elements outside the component', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
-    const wrapper = await mountTurn()
+    const wrapper = await mountTurn(6, { globalKeyboard: true })
     const input = document.createElement('input')
     document.body.appendChild(input)
     try {
@@ -812,8 +815,8 @@ describe('VueTurn', () => {
 
   it('only lets the most recently interacted instance respond to document keydown (multi-instance mutex)', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
-    const first = await mountTurn()
-    const second = await mountTurn()
+    const first = await mountTurn(6, { globalKeyboard: true })
+    const second = await mountTurn(6, { globalKeyboard: true })
     // 多实例并存且尚无交互归属：document 按键一律不翻页，避免实例间抢键盘
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
     await flushPromises()
@@ -829,6 +832,23 @@ describe('VueTurn', () => {
     await flushPromises()
     expect(second.find('#indicator').text()).toBe('4/6')
     expect(first.find('#indicator').text()).toBe('1/6')
+  })
+
+  it('does not respond to document keydown by default (globalKeyboard opt-in)', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    // 默认（未传 globalKeyboard）：document 级兜底关闭，焦点在组件外按键不翻页
+    const wrapper = await mountTurn()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    // 视口聚焦通道不受影响
+    await wrapper.find('.viewport').trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    // document 按键依旧不翻页
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
   })
 
   it('goToPage returns false when rejected and true when applied', async () => {

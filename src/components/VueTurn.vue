@@ -22,6 +22,7 @@ import {
   onMounted,
   onUpdated,
   ref,
+  shallowRef,
   useSlots,
   watch,
 } from 'vue'
@@ -32,8 +33,10 @@ import { useFlipInteraction } from '@/composables/useFlipInteraction'
 import { usePageStack } from '@/composables/usePageStack'
 import { usePageTextures } from '@/composables/usePageTextures'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
-import { pageWidth as pageWidthOf, spreadLayout, computeFlipSpec } from '@/lib/flipSpec'
-import { buildPageSources } from '@/lib/pageMapping'
+import { ZOOM_TOLERANCE } from '@/composables/useZoomPan'
+import { pageWidth as pageWidthOf, spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '@/lib/flipSpec'
+import { positive } from '@/lib/math'
+import { buildPageSources, coverPageIndices } from '@/lib/pageMapping'
 import { resolveFold, resolveLook } from '@/lib/presets'
 import type {
   BeforeFlipContext,
@@ -94,6 +97,10 @@ const props = withDefaults(
     clickDeadZone?: number
     /** 是否允许键盘翻页（方向键/PageUp/PageDown/Space/Home/End，需先聚焦组件） */
     keyboard?: boolean
+    /** 全局键盘兜底：焦点不在组件内（如点击了外部工具栏）时也响应翻页键。
+     *  开启后会在 document 级拦截方向键/空格等按键（影响宿主页面滚动），
+     *  多实例时仅最近交互的实例响应；默认关闭，仅在确有需求时开启 */
+    globalKeyboard?: boolean
     /** 无障碍标签 */
     ariaLabel?: string
     /** 光栅化时是否给图片加破缓存参数 */
@@ -137,6 +144,7 @@ const props = withDefaults(
     clickToFlip: true,
     clickDeadZone: 0,
     keyboard: true,
+    globalKeyboard: false,
     ariaLabel: '翻书',
     cacheBust: true,
     prefetchWindow: 4,
@@ -192,14 +200,10 @@ const safePageAspect = Number.isFinite(props.pageAspect) && props.pageAspect > 0
   ? props.pageAspect
   : 0.75
 
-// 数值 prop 校验：非法值（NaN/非有限/非正）回退默认值
-function positiveProp(value: number | undefined, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-const safeFlipDuration = computed(() => positiveProp(props.flipDuration, 900))
-const safePageWidth = computed(() => positiveProp(props.pageWidth, 768))
-const safePixelRatio = computed(() => positiveProp(props.pixelRatio, 1))
+// 数值 prop 校验：非法值（NaN/非有限/非正）回退默认值（lib/math 共享实现）
+const safeFlipDuration = computed(() => positive(props.flipDuration, 900))
+const safePageWidth = computed(() => positive(props.pageWidth, 768))
+const safePixelRatio = computed(() => positive(props.pixelRatio, 1))
 const safePrefetchWindow = computed(() =>
   Number.isFinite(props.prefetchWindow) && props.prefetchWindow >= 0
     ? Math.floor(props.prefetchWindow)
@@ -367,7 +371,7 @@ const {
   maxAnisotropy,
   applyStaticTexture,
   renderStatic,
-  getLastPlacements: () => lastPlacements,
+  getLastPlacements: () => lastPlacements.value,
   onReady: () => emit('ready'),
   onRasterizeError: (page, error) => emit('rasterize-error', page, error),
 })
@@ -388,9 +392,19 @@ function resolveDisplayedPages(): 1 | 2 {
   return containerSize.width > containerSize.height ? 2 : 1
 }
 
+// 翻页/拖拽进行中收到的显示模式变化推迟到动画结束再应用：进行中翻页的
+// spec 按旧模式计算，中途切换会让 clampAndAlign 与 delta 的页码语义错位
+// （提交后落在错位跨页上）。与 v-model 跳转的 pendingTarget 同一策略；
+// 应用时按最新容器尺寸重新解析，避免用到动画期间的过期快照
+let pendingDisplayedPagesResolve = false
+
 watch(
   () => [containerSize.width, containerSize.height, props.displayedPages] as const,
   () => {
+    if (state.isFlipping.value) {
+      pendingDisplayedPagesResolve = true
+      return
+    }
     state.setDisplayedPages(resolveDisplayedPages())
   },
   { immediate: true },
@@ -420,6 +434,11 @@ watch(
   () => state.isFlipping.value,
   (flipping) => {
     if (flipping) return
+    // 动画期间积压的显示模式变化先应用（重排当前页），再执行积压的跳转
+    if (pendingDisplayedPagesResolve) {
+      pendingDisplayedPagesResolve = false
+      state.setDisplayedPages(resolveDisplayedPages())
+    }
     if (pendingTarget !== null) {
       const target = pendingTarget
       pendingTarget = null
@@ -428,8 +447,9 @@ watch(
   },
 )
 
-// 最近一次静态布局：rasterizePage 完成后按此判断该把整图还是半图贴到现有网格
-let lastPlacements: StaticPlacement[] = []
+// 最近一次静态布局：rasterizePage 完成后按此判断该把整图还是半图贴到
+// 现有网格；消费方（纹理/交互层）在调用时点读取，不做响应式依赖
+const lastPlacements = shallowRef<StaticPlacement[]>([])
 
 // ---------------------------------------------------------------------------
 // 纸叠：书本左右两侧的页层厚度条带（厚度随翻页在两侧间转移）
@@ -454,40 +474,17 @@ function renderStatic() {
     forwardDirection: props.forwardDirection,
     numPages: pageCount.value,
   })
-  // 跨页合并：左右两页同属一个跨页项时，渲染为一张双倍宽度的居中整页。
-  // 配对不依赖具体槽位：LTR 左槽是起始页，RTL 左槽是后半页，均按同源配对。
-  const sources = pageSources.value
-  const merged: StaticPlacement[] = []
-  const consumed = new Set<number>()
-  for (const p of placements) {
-    if (consumed.has(p.index)) continue
-    const src = p.slot !== 'center' ? sources[p.index] : undefined
-    if (src && !src.blank && (src.region === 'left' || src.region === 'right')) {
-      const partnerIdx = src.region === 'left' ? p.index + 1 : p.index - 1
-      const partnerSrc = sources[partnerIdx]
-      const partner = placements.find((q) => q.index === partnerIdx && q.slot !== p.slot)
-      if (
-        partner &&
-        partnerSrc &&
-        !partnerSrc.blank &&
-        partnerSrc.itemIndex === src.itemIndex &&
-        partner.slot !== 'center'
-      ) {
-        merged.push({ index: Math.min(p.index, partnerIdx), slot: 'center', spread: true })
-        consumed.add(partnerIdx)
-        continue
-      }
-    }
-    merged.push(p)
-  }
-  lastPlacements = merged
+  // 跨页合并：左右两页同属一个跨页项时渲染为一张双倍宽度的居中整页
+  // （纯函数实现见 lib/flipSpec.ts，含单测）
+  const merged = mergeSpreadPlacements(placements, pageSources.value)
+  lastPlacements.value = merged
   // 跨页起始页索引集合：这些索引的静态网格用整页纹理
   const spreadStarts = new Set(merged.filter((p) => p.spread).map((p) => p.index))
   // 同步封面/封底索引：静态页与后续翻页纸张据此挂封面图层
-  setCoverPages(sources.reduce<number[]>((acc, s, i) => (s.cover ? [...acc, i] : acc), []))
+  setCoverPages(coverPageIndices(pageSources.value))
   setStaticPages(merged, (index) => {
     if (spreadStarts.has(index)) {
-      const source = sources[index]
+      const source = pageSources.value[index]
       if (!source) return null
       // 跨页整图基准纹理以 itemIndex 为 key（与单页纹理的页索引 key 不同）
       return getSpreadFullTexture(source.itemIndex)
@@ -597,7 +594,7 @@ const {
   foldBendWorld,
   pageSources,
   regionsOf: (itemIndex) => pageItems.value[itemIndex]?.regions ?? [],
-  getLastPlacements: () => lastPlacements,
+  getLastPlacements: () => lastPlacements.value,
   currentStackSides,
   sheetOptions,
   computeFlipSpecFor,
@@ -635,7 +632,7 @@ function flip(trigger: FlipDirection) {
     renderStatic()
     emit('flip-end', trigger)
     // 翻页会将相机复位到适配距离，缩放级别随之归 1
-    if (prevZoom > 1.01) emit('zoom-change', 1)
+    if (prevZoom > 1 + ZOOM_TOLERANCE) emit('zoom-change', 1)
     // 懒光栅化：翻页结束后预取新窗口内缺失纹理，再释放窗口外纹理控制显存
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
   }

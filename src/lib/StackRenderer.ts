@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 
 import { PAGE_HEIGHT } from '@/lib/flipSpec'
+import { clamp } from '@/lib/math'
 import type { StackHover, StackVisual } from '@/types/turn'
 
 // 纸叠条带 z 向厚度（世界单位）：页高 2 时约 1.6%，模拟翻开书页堆的鼓起
@@ -18,10 +19,6 @@ const STACK_MAX_UNITS = 6
 // 页线的最小屏幕像素间距：层数过多导致线距小于该值时按比例抽稀，
 // 保证层理在屏幕上可分辨（窄条带下不会被采样糊掉）
 const STACK_MIN_LINE_PX = 2
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
-}
 
 // 程序化生成纸叠层理纹理：暖白纸色底 + 等距页线（一层纸一条线）+
 // 上下边缘阴影。页线为"暗缝 + 亮边"双线：暗缝是纸页间缝隙，

@@ -9,10 +9,14 @@ let docKeyboardOwner: object | null = null
 let turnInstanceCount = 0
 
 export interface KeyboardNavOptions {
-  /** props.keyboard（响应式读取） */
+  /** props.keyboard（响应式读取）：视口聚焦后的按键翻页 */
   keyboardEnabled: () => boolean
   /** 交互禁用状态（响应式读取） */
   isDisabled: () => boolean
+  /** props.globalKeyboard（响应式读取）：document 级兜底监听总开关。
+   *  默认关闭——全局劫持方向键/空格会拦截宿主页面的滚动等原生行为，
+   *  须由业务方显式开启 */
+  docKeyboardEnabled: () => boolean
   /** 阅读方向（响应式读取） */
   forwardDirection: () => FlipDirection
   rootEl: Ref<HTMLElement | null>
@@ -26,13 +30,16 @@ export interface KeyboardNavOptions {
 
 /**
  * 键盘翻页：方向键跟随阅读方向，PageUp/PageDown/Space 前进后退，
- * Home/End 跳首末页。视口聚焦按键与 document 级兜底监听双通道，
- * 可交互元素（按钮/链接/输入框等）内的按键不劫持。
+ * Home/End 跳首末页。视口聚焦按键为基础通道；document 级兜底监听
+ * 仅在 globalKeyboard 显式开启时生效（全局按键有劫持宿主页面滚动的
+ * 副作用，不作为默认行为），可交互元素（按钮/链接/输入框等）内的
+ * 按键不劫持。
  */
 export function useKeyboardNav(options: KeyboardNavOptions) {
   const {
     keyboardEnabled,
     isDisabled,
+    docKeyboardEnabled,
     forwardDirection,
     rootEl,
     instanceToken,
@@ -51,11 +58,12 @@ export function useKeyboardNav(options: KeyboardNavOptions) {
   }
 
   // document 级键盘监听：焦点不在书页上（如点击了外部工具栏按钮）时
-  // 方向键依然可翻页。组件内部目标已由 viewport 的 @keydown 处理，
-  // 此处跳过避免重复；可交互元素（按钮/链接/输入框等）内的按键不劫持，
-  // 保留其原生激活行为；多实例时仅最近交互过的实例响应
+  // 方向键依然可翻页，仅 globalKeyboard 开启时生效。组件内部目标已由
+  // viewport 的 @keydown 处理，此处跳过避免重复；可交互元素（按钮/链接/
+  // 输入框等）内的按键不劫持，保留其原生激活行为；多实例时仅最近交互过
+  // 的实例响应。监听器常驻（prop 运行时可变），未开启时在入口静默返回
   function onDocKeydown(event: KeyboardEvent) {
-    if (!keyboardEnabled() || isDisabled()) return
+    if (!docKeyboardEnabled() || !keyboardEnabled() || isDisabled()) return
     if (turnInstanceCount > 1 && docKeyboardOwner !== instanceToken) return
     const target = event.target as Node | null
     if (target) {

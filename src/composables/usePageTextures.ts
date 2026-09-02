@@ -72,13 +72,19 @@ export function usePageTextures(options: PageTexturesOptions) {
         textures.delete(index)
       }
     }
-    for (const itemIndex of Array.from(spreadFullTextures.keys())) {
-      // 找到该跨页项占用的页索引区间
-      const pages = options.pageSources.value
-        .map((source, index) => ({ source, index }))
-        .filter(({ source }) => !source.blank && source.itemIndex === itemIndex)
-      const inWindow = pages.some(({ index }) => index >= start && index < end)
-      if (!inWindow && pages.length > 0) {
+    if (spreadFullTextures.size === 0) return
+    // 先建一次 itemIndex → 页索引集合的索引，避免对每个跨页项全量扫描
+    const pagesOfItem = new Map<number, number[]>()
+    for (let index = 0; index < options.pageSources.value.length; index++) {
+      const source = options.pageSources.value[index]
+      if (!source || source.blank || source.itemIndex < 0) continue
+      const pages = pagesOfItem.get(source.itemIndex)
+      if (pages) pages.push(index)
+      else pagesOfItem.set(source.itemIndex, [index])
+    }
+    for (const [itemIndex, pages] of pagesOfItem) {
+      const inWindow = pages.some((index) => index >= start && index < end)
+      if (!inWindow) {
         spreadFullTextures.get(itemIndex)?.dispose()
         spreadFullTextures.delete(itemIndex)
         spreadBasePromises.delete(itemIndex)

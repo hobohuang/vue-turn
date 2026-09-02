@@ -75,3 +75,12 @@ export function buildPageSources(items: ReadonlyArray<PageItemLike>): PageSource
   }
   return sources
 }
+
+/** 封面/封底页索引列表（挂封面图层独立光照用），按页索引升序 */
+export function coverPageIndices(sources: ReadonlyArray<PageSource>): number[] {
+  const indices: number[] = []
+  for (let i = 0; i < sources.length; i++) {
+    if (sources[i]?.cover) indices.push(i)
+  }
+  return indices
+}

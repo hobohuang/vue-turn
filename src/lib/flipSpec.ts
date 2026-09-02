@@ -1,3 +1,4 @@
+import type { PageSource } from '@/lib/pageMapping'
 import type {
   FlipSpec,
   ForwardDirection,
@@ -166,5 +167,41 @@ export function spreadLayout(options: SpreadLayoutOptions): StaticPlacement[] {
     ...placement(ltr ? currentPage : currentPage + 1, 'left', numPages),
     ...placement(ltr ? currentPage + 1 : currentPage, 'right', numPages),
   ]
+}
+
+/**
+ * 静态布局的跨页合并：左右两页同属一个跨页项时，合并为一张双倍宽度的
+ * 居中整页（slot=center、spread=true）。配对不依赖具体槽位：LTR 左槽是
+ * 起始页，RTL 左槽是后半页，均按同源（itemIndex）配对；空白页与居中
+ * 单页不参与合并。
+ */
+export function mergeSpreadPlacements(
+  placements: StaticPlacement[],
+  sources: ReadonlyArray<PageSource>,
+): StaticPlacement[] {
+  const merged: StaticPlacement[] = []
+  const consumed = new Set<number>()
+  for (const p of placements) {
+    if (consumed.has(p.index)) continue
+    const src = p.slot !== 'center' ? sources[p.index] : undefined
+    if (src && !src.blank && (src.region === 'left' || src.region === 'right')) {
+      const partnerIdx = src.region === 'left' ? p.index + 1 : p.index - 1
+      const partnerSrc = sources[partnerIdx]
+      const partner = placements.find((q) => q.index === partnerIdx && q.slot !== p.slot)
+      if (
+        partner &&
+        partnerSrc &&
+        !partnerSrc.blank &&
+        partnerSrc.itemIndex === src.itemIndex &&
+        partner.slot !== 'center'
+      ) {
+        merged.push({ index: Math.min(p.index, partnerIdx), slot: 'center', spread: true })
+        consumed.add(partnerIdx)
+        continue
+      }
+    }
+    merged.push(p)
+  }
+  return merged
 }
 

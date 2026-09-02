@@ -1,5 +1,8 @@
 import type { ComputedRef, Ref } from 'vue'
 
+/** 缩放级别判定容差：zoom 超过 1 + ZOOM_TOLERANCE 视为放大态 */
+export const ZOOM_TOLERANCE = 0.01
+
 /** 缩放/平移关注的渲染器能力子集（由 useTurnRenderer 提供） */
 export interface ZoomPanRenderer {
   getZoom: () => number
@@ -31,7 +34,7 @@ export function useZoomPan(options: ZoomPanOptions) {
     options
 
   function isZoomed() {
-    return renderer.getZoom() > 1.01
+    return renderer.getZoom() > 1 + ZOOM_TOLERANCE
   }
 
   // 滚轮缩放：级别按指数随滚轮增量变化

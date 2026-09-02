@@ -57,7 +57,8 @@ const page = ref(1)
 | `easing` | `(t: number) => number` | easeInOutCubic | 翻页进度缓动函数 |
 | `clickToFlip` | `boolean` | `true` | 点击视口翻页（跟随阅读方向：LTR 右半前进、左半后退；RTL 相反） |
 | `clickDeadZone` | `number` | `0` | 点击翻页中间死区宽度占比（0~0.5）：视口中轴该比例区域内的点击不翻页 |
-| `keyboard` | `boolean` | `true` | 键盘翻页：方向键 / PageUp / PageDown / Space / Home / End（方向键跟随阅读方向）。监听挂载到 document——焦点不在组件上时同样响应；按钮/链接/输入框等可交互元素内的按键不劫持（保留原生激活行为）；页面多实例时仅最近交互过的实例响应 |
+| `keyboard` | `boolean` | `true` | 键盘翻页：方向键 / PageUp / PageDown / Space / Home / End（方向键跟随阅读方向）。**需先聚焦组件**（点击书页或 Tab 聚焦视口） |
+| `globalKeyboard` | `boolean` | `false` | 全局键盘兜底：焦点不在组件内（如点击了外部工具栏按钮）时也响应翻页键。开启后会在 document 级拦截方向键/空格等按键（影响宿主页面的键盘滚动），按钮/链接/输入框等可交互元素内的按键不劫持；多实例时仅最近交互过的实例响应。仅在确有需求时开启 |
 | `ariaLabel` | `string` | `'翻书'` | 视口无障碍标签 |
 | `cacheBust` | `boolean` | `true` | 手动重绘（`refresh`/`refreshPage`）时是否给图片加破缓存参数，避免拿到旧图；懒光栅化与 DOM 变化触发的自动光栅化不破缓存（详见下文「cacheBust 使用场景」） |
 | `prefetchWindow` | `number` | `4` | 懒光栅化预取窗口：当前可见页前后各 N 页预生成纹理，窗口外释放（设为 0 关闭懒加载，全量光栅化） |

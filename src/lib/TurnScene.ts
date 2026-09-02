@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { CameraRig } from '@/lib/CameraRig'
 import { StackRenderer } from '@/lib/StackRenderer'
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
+import { clamp, positive } from '@/lib/math'
 import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from '@/lib/pageFold'
 import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
 import type {
@@ -27,14 +28,6 @@ const FOLD_SEGMENTS = 96
 // 封面图层：封面/封底网格与封面灯光组单独一层，灯光按图层隔离，
 // 实现封面（coverPreset）与内页（preset）互不干扰的光影
 const COVER_LAYER = 1
-
-function positive(value: number, fallback: number) {
-  return Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
-}
 
 function createRenderer(): THREE.WebGLRenderer | null {
   // 探测与渲染共用同一 canvas：探测用的 context 无法显式释放，弃置会
@@ -339,7 +332,7 @@ export class TurnScene {
 
   private onContextRestoredHandler = () => {
     this.contextLost = false
-    this.dirty = true
+    this.markDirty()
     // 通知调用方重建静态页并重光栅化窗口内纹理
     this.onContextRestored?.()
   }
@@ -350,13 +343,13 @@ export class TurnScene {
     this.rig.resize(width, height)
     // 空闲时按当前布局与缩放级别重新适配相机（翻页/缩放动画进行中不打断）
     this.refitCamera()
-    this.dirty = true
+    this.markDirty()
   }
 
   // 空闲时重适配相机；纸张动画进行中跳过（随后由动画终点收敛）
   private refitCamera() {
     if (this.sheet) return
-    if (this.rig.refit()) this.dirty = true
+    if (this.rig.refit()) this.markDirty()
   }
 
   setStaticPages(
@@ -371,7 +364,7 @@ export class TurnScene {
       this.sheetWidth,
     )
     this.recomputeFitWidth()
-    this.dirty = true
+    this.markDirty()
 
     // placement diff 复用：按页索引比对，几何形态（spread）相同的页复用
     // 现有网格与材质，仅更新纹理与起止位置。该调用频率很高（每次翻页 2 次、
@@ -450,7 +443,7 @@ export class TurnScene {
     if (!entry) return
     entry.material.map = texture
     entry.material.needsUpdate = true
-    this.dirty = true
+    this.markDirty()
   }
 
   // 封面/封底页索引：布局重建时同步，静态页与翻页纸张据此挂封面图层
@@ -480,7 +473,7 @@ export class TurnScene {
       // （否则要等到下一次 resize/翻页才收敛，条带可能被视口裁剪）
       this.refitCamera()
     }
-    this.dirty = true
+    this.markDirty()
   }
 
   // 某视觉态下纸叠两侧厚度之和（相机适配宽度计入纸叠，条带不被视口裁剪）
@@ -505,7 +498,7 @@ export class TurnScene {
   // 设置纸叠高亮条带（null 清除）
   setStackHover(hover: StackHover | null) {
     this.stacks.setHover(hover)
-    this.dirty = true
+    this.markDirty()
   }
 
   private slotX(slot: 'left' | 'right' | 'center') {
@@ -679,6 +672,7 @@ export class TurnScene {
       sheet.duration,
       startTime,
     )
+    this.wake()
   }
 
   // 主动折页翻页（点击翻页/next/prev，fold 开启时替代 startFlip 的卷曲动画）：
@@ -722,6 +716,7 @@ export class TurnScene {
       settleDuration,
       startTime,
     )
+    this.wake()
     return true
   }
 
@@ -746,6 +741,8 @@ export class TurnScene {
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
     if (!base) return false
     this.sheet = { ...base, kind: 'curl', mode: 'drag', progress: 0, preview }
+    // 新建纸张须立即可见：标脏唤醒一帧渲染（drag 模式不逐帧自驱）
+    this.markDirty()
     return true
   }
 
@@ -758,6 +755,8 @@ export class TurnScene {
     if (!sheet) return
     if (!sheet.preview) return
     sheet.preview = false
+    // 预览标记清除后书体/静态页/纸叠开始随进度联动，唤醒循环重绘
+    this.markDirty()
     if (spec) this.applyWorldOffsets(spec)
   }
 
@@ -770,9 +769,12 @@ export class TurnScene {
     if (sheet.kind === 'fold') {
       const { fold: _fold, kind: _kind, preview: _preview, ...rest } = sheet
       this.sheet = { ...rest, kind: 'curl', progress: clamp(progress, 0, 1) }
+      this.markDirty()
       return
     }
     sheet.progress = clamp(progress, 0, 1)
+    // drag 模式纸张不逐帧自驱，进度变化须标脏唤醒一帧渲染
+    this.markDirty()
   }
 
   // 开始折角拖拽：已有 drag 模式纸张（同方向折角悬停预览）则直接接管，
@@ -803,6 +805,7 @@ export class TurnScene {
           existing.preview = false
           this.applyWorldOffsets(spec)
         }
+        this.markDirty()
         return true
       }
       // 卷曲拖拽中的纸张转折角：重建为折角拖拽（沿用几何与纹理）
@@ -816,6 +819,7 @@ export class TurnScene {
         bend: positive(bend, existing.bend),
       }
       this.applyWorldOffsets(spec)
+      this.markDirty()
       return true
     }
     if (this.sheet) this.removeSheet()
@@ -835,6 +839,8 @@ export class TurnScene {
       bend: positive(bend, base.bend),
       preview,
     }
+    // 新建纸张须立即可见：标脏唤醒一帧渲染（drag 模式不逐帧自驱）
+    this.markDirty()
     return true
   }
 
@@ -901,6 +907,8 @@ export class TurnScene {
     sheet.fold.qu = clamped.qu
     sheet.fold.qv = clamped.qv
     sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
+    // drag 模式纸张不逐帧自驱，拖点变化须标脏唤醒一帧渲染
+    this.markDirty()
     return sheet.progress
   }
 
@@ -933,6 +941,7 @@ export class TurnScene {
       foldFromQ: [qu, qv],
       foldToQ: toQ,
     }
+    this.wake()
   }
 
   // 拖拽结束：commit 为 true 动画补完翻页，否则回弹取消
@@ -962,8 +971,12 @@ export class TurnScene {
     this.sheet = settle
     // 悬停预览的回弹不动相机（预览从未移动过相机）；真实拖拽的松手
     // 相机复位到适配距离（缩放/平移随松手收尾一并复位，级别归 1）
-    if (settle.preview) return
+    if (settle.preview) {
+      this.wake()
+      return
+    }
     this.rig.resetTo(this.sheetFitWidth(sheet, commit), settle.duration, startTime)
+    this.wake()
   }
 
   // 中断当前翻页并立即收尾：time/settle 按各自终点，drag 按最近端点
@@ -986,7 +999,7 @@ export class TurnScene {
       this.rig.resetTo(this.sheetFitWidth(sheet, committed), 0)
     }
     if (this.sheet === sheet) this.sheet = null
-    this.dirty = true
+    this.markDirty()
     this.scene.remove(sheet.group)
     sheet.geometry.dispose()
     sheet.backGeometry.dispose()
@@ -1003,20 +1016,22 @@ export class TurnScene {
   // 运行时更新最大缩放倍数：当前级别超出新上限时立即收敛
   setMaxZoom(value: number) {
     this.rig.setMaxZoom(value)
+    // 当前级别超出新上限时 rig 会立即收敛（可能启动相机动画），唤醒重绘
+    this.wake()
   }
 
   // 设置缩放级别（钳制到 [1, maxZoom]）；翻页进行中忽略
   setZoom(level: number, animate = true, duration = 200) {
     if (!this.renderer || this.sheet) return
     this.rig.setZoom(level, animate, duration)
-    this.dirty = true
+    this.markDirty()
   }
 
   // 按屏幕像素平移相机（放大后拖动查看）；翻页进行中忽略
   panBy(dxPixels: number, dyPixels: number) {
     if (!this.renderer || this.sheet) return
     this.rig.panBy(dxPixels, dyPixels)
-    this.dirty = true
+    this.markDirty()
   }
 
   // 射线拾取静态页面：返回命中页与纹理坐标，未命中返回 null
@@ -1183,7 +1198,7 @@ export class TurnScene {
     const sheet = this.sheet
     if (!sheet) return
     this.sheet = null
-    this.dirty = true
+    this.markDirty()
     this.scene.remove(sheet.group)
     sheet.geometry.dispose()
     sheet.backGeometry.dispose()
@@ -1191,17 +1206,39 @@ export class TurnScene {
     sheet.backMaterial.dispose()
   }
 
+  // 唤醒渲染循环：空闲停帧后，任何状态变化或动画启动的入口须调用。
+  // 循环运行中（rafId 非 0）为 no-op；disposed 后不再排帧
+  private wake() {
+    if (this.rafId === 0 && !this.disposed) {
+      this.rafId = requestAnimationFrame(this.tick)
+    }
+  }
+
+  // 标脏并唤醒循环：所有让画面产生变化的状态写入统一走此入口
+  private markDirty() {
+    this.dirty = true
+    this.wake()
+  }
+
   private tick = (now: number) => {
     if (this.disposed) return
     this.updateSheet(now)
     // 相机动画结束帧显式标脏，保证终点帧被渲染
     if (this.rig.update(now)) this.dirty = true
-    // 动画进行中每帧渲染；静止时仅在场景有变化（脏标记）时渲染，
-    // 空闲书本不再持续占用 GPU
-    const animating = this.sheet !== null || this.rig.isAnimating
+    // time/settle 模式逐帧动画；drag 模式由指针驱动，仅状态变化帧渲染
+    //（写入入口已 markDirty/wake 唤醒）
+    const animating =
+      (this.sheet !== null && this.sheet.mode !== 'drag') || this.rig.isAnimating
     if ((animating || this.dirty) && this.renderer && !this.contextLost) {
       this.renderer.render(this.scene, this.rig.camera)
       this.dirty = false
+    }
+    // 空闲（无逐帧动画、无脏标记）时停帧节能；之后的任何状态变化经
+    // wake()/markDirty() 重新挂起循环。上下文丢失期间 dirty 无法被渲染
+    // 清除，循环保持运转直至恢复/销毁（与停帧前行为一致）
+    if (!animating && !this.dirty) {
+      this.rafId = 0
+      return
     }
     this.rafId = requestAnimationFrame(this.tick)
   }

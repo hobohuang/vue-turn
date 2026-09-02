@@ -4,13 +4,15 @@ import { toCanvas } from 'html-to-image'
 // 资源等待默认超时：超时后放弃等待直接光栅化，避免慢资源阻塞初始化
 const DEFAULT_RESOURCE_TIMEOUT = 5000
 
-function withTimeout(promise: Promise<unknown>, ms: number) {
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  // 超时按 resolve 结束（调用方放弃等待继续光栅化），主 Promise 先完成时清理定时器
   return Promise.race([
     promise,
     new Promise<void>((resolve) => {
-      setTimeout(resolve, ms)
+      timer = setTimeout(resolve, ms)
     }),
-  ])
+  ]).finally(() => clearTimeout(timer))
 }
 
 // 提取元素计算样式里所有 background-image 的 url(...) 地址

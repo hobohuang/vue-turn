@@ -20,7 +20,7 @@ import type {
 
 import type { useBookState } from './useBookState'
 import { useKeyboardNav } from './useKeyboardNav'
-import { usePeelPreview, type PeelState } from './usePeelPreview'
+import { usePeelPreview, type PaperOwnership } from './usePeelPreview'
 import { useStackHover } from './useStackHover'
 import type { useTurnRenderer } from './useTurnRenderer'
 import { useZoomPan } from './useZoomPan'
@@ -28,9 +28,22 @@ import { useZoomPan } from './useZoomPan'
 // 双击缩放开启时，单击翻页延迟判定的窗口期
 const CLICK_DISAMBIGUATION_MS = 260
 
+// 拖拽提交阈值：松手时进度超过该比例视为完成翻页
+const DRAG_COMMIT_PROGRESS = 0.45
+// 快速甩动判定的最小进度：未达提交比例但有速度时，进度超过该值仍提交
+const DRAG_FLICK_PROGRESS = 0.08
+// 卷曲拖拽的甩动速度阈值（px/ms，沿翻页方向）
+const CURL_FLICK_VELOCITY = 0.5
+// 折角拖拽的甩动速度阈值（进度/ms，进度量纲远小于像素，阈值相应更小）
+const FOLD_FLICK_VELOCITY = 0.0025
+// 视为拖拽（而非点击/误触）的最小位移（px）
+const DRAG_MIN_MOVED_PX = 6
+
 /** 交互层关注的 props 子集（值由编排层传入，保持响应式） */
 export interface FlipInteractionProps {
   keyboard?: boolean
+  /** document 级键盘兜底总开关（默认关闭，见 useKeyboardNav） */
+  globalKeyboard?: boolean
   clickToFlip?: boolean
   clickDeadZone?: number
   dblClickZoom?: boolean
@@ -97,6 +110,7 @@ interface DragState {
   trigger: FlipDirection
   startX: number
   lastX: number
+  lastY: number
   lastT: number
   /** 沿翻页方向的速度（px/ms）；折角模式为进度变化速度（progress/ms） */
   velocity: number
@@ -157,13 +171,20 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   const disabledRef = ref(false)
   const isDisabled = () => disabledRef.value
 
-  // sheetOwner：当前场景中拖拽纸张的归属（'drag' 需要状态机收尾，'peel' 仅悬停预览）。
-  // 不变式：peel 预览激活 ⟺ sheetOwner === 'peel'（peel 状态由 usePeelPreview 持有）
+  // 场景纸张归属（PaperOwnership，见 usePeelPreview）：'drag' 需要状态机收尾，
+  // 'peel' 仅悬停预览。悬停预览的内部状态（PeelState）与归属标记同置同清
+  const ownership: PaperOwnership = { owner: null, peel: null }
   let drag: DragState | null = null
   let pan: PanState | null = null
-  let sheetOwner: 'drag' | 'peel' | null = null
   let suppressClick = false
   let clickTimer: ReturnType<typeof setTimeout> | null = null
+
+  // 纸张转为真实拖拽归属：一并清除可能残留的悬停预览标记
+  // （peel → drag 的接管路径同样适用：'peel' 直接改写为 'drag'）
+  function claimDragOwnership() {
+    ownership.owner = 'drag'
+    ownership.peel = null
+  }
 
   // ---------------------------------------------------------------------------
   // 子模块装配：键盘 / 纸叠悬停 / 缩放 / 悬停预览
@@ -172,6 +193,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   const { onKeydown, claimKeyboardOwnership } = useKeyboardNav({
     keyboardEnabled: () => props.keyboard === true,
     isDisabled,
+    docKeyboardEnabled: () => props.globalKeyboard === true,
     forwardDirection: () => props.forwardDirection ?? 'left',
     rootEl,
     instanceToken,
@@ -198,20 +220,20 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     isDisabled,
     isFlipping: state.isFlipping,
     // 拖拽/悬停预览占用场景时缩放让路
-    isBusy: () => drag !== null || pan !== null || sheetOwner !== null,
+    isBusy: () => drag !== null || pan !== null || ownership.owner !== null,
     renderer,
     safeMaxZoom,
     emit: (event, level) => emit(event, level),
   })
 
   // 纸张完成/取消的统一收尾：拖拽提交或回弹后恢复状态机，悬停预览仅恢复布局。
-  // 注意：onDone 读取的是调用时的 sheetOwner（而非创建回调时的快照），
+  // 注意：onDone 读取的是调用时的归属（而非创建回调时的快照），
   // 这让悬停预览（peel）→ 按下接管（drag）无需更换回调即可正确收尾
   function makeSheetDone(spec: FlipSpec, trigger: FlipDirection) {
     return (committed: boolean) => {
-      const owner = sheetOwner
-      sheetOwner = null
-      clearPeel()
+      const owner = ownership.owner
+      ownership.owner = null
+      ownership.peel = null
       if (owner === 'drag') {
         if (committed) state.commitFlip(spec.delta)
         else state.cancelFlip()
@@ -225,7 +247,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     }
   }
 
-  const { updatePeel, releasePeelNow, discardPeel, getPeel, clearPeel } = usePeelPreview({
+  const { updatePeel, releasePeelNow, discardPeel } = usePeelPreview({
     peelEnabled: () => props.peel === true,
     isDisabled,
     forwardDirection: () => props.forwardDirection ?? 'left',
@@ -242,10 +264,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     computeFlipSpecFor,
     sheetOptions,
     makeSheetDone,
-    isPeelOwner: () => sheetOwner === 'peel',
-    setPeelOwner: (value) => {
-      sheetOwner = value ? 'peel' : null
-    },
+    ownership,
     isZoomed,
   })
 
@@ -276,9 +295,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   // foldPageAt 返回 null。预览存活即指针仍在角区内（每次移动都在
   // 维持角区判定），按预览的方向与角构造折角命中，无缝接管预览纸张
   function foldHitFromActivePeel(): { trigger: FlipDirection; cornerV: number; edge: boolean; v: number } | null {
-    const peelState = getPeel()
-    if (sheetOwner !== 'peel' || !peelState?.isFold) return null
-    return { trigger: peelState.trigger, cornerV: peelState.corner, edge: true, v: 0.5 }
+    const peel = ownership.peel
+    if (ownership.owner !== 'peel' || !peel?.isFold) return null
+    return { trigger: peel.trigger, cornerV: peel.corner, edge: true, v: 0.5 }
   }
 
   // 热区命中：把拾取到的纹理坐标换算为 item 内容坐标（左上角原点，0~1），
@@ -433,7 +452,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       capturePointer(el, event.pointerId)
       return
     }
-    if (!props.dragToFlip || state.isFlipping.value || sheetOwner === 'drag') return
+    if (!props.dragToFlip || state.isFlipping.value || ownership.owner === 'drag') return
     // 折页拖拽：fold 开启时命中页面任意位置（跨页左右页）均走折角变形——
     // 四角区为折角拖拽（锚点=最近外角，斜折线）；其余位置为折页拖拽
     // （锚点=指针同高度的外页边缘点，竖直折线对折翻页）；fold 关闭才走
@@ -453,22 +472,22 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     clearStackHover()
     state.startFlip()
     emit('flip-start', trigger)
-    emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
     // fold 开启：书页外（视口空白处）按下也走折页拖拽——方向按视口半区
-    // 判定，锚点取外缘中部（竖直折线），拖点跟手
+    // 判定，锚点取外缘中部（竖直折线），拖点横向跟手、纵向钉在页中
     if (foldEnabled) {
       const drag2 = startFoldDragGesture(event, spec, trigger, 0)
       if (drag2) {
         applyStacksFlip(spec)
-        sheetOwner = 'drag'
+        claimDragOwnership()
+        // pressed/released 成对：纸张创建成功进入拖拽才派发，失败路径不发
+        emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
         capturePointer(el, event.pointerId)
       }
       return
     }
     // 该方向的悬停预览已创建纸张：直接接管纸张，避免重建；
     // 纸叠过渡在此补设（悬停预览不动纸叠，真实翻页才过渡）
-    const peelState: PeelState | null = getPeel()
-    const takeOver = sheetOwner === 'peel' && peelState?.trigger === trigger
+    const takeOver = ownership.owner === 'peel' && ownership.peel?.trigger === trigger
     // 翻页前置布局：相机由拖拽结束动画接管。接管悬停预览的纸张时同样
     // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）
     renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
@@ -492,13 +511,15 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       renderer.activateSheet(spec)
     }
     applyStacksFlip(spec)
-    sheetOwner = 'drag'
-    clearPeel()
+    claimDragOwnership()
+    // pressed/released 成对：进入拖拽状态才派发
+    emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
     drag = {
       pointerId: event.pointerId,
       trigger,
       startX: event.clientX,
       lastX: event.clientX,
+      lastY: event.clientY,
       lastT: event.timeStamp,
       velocity: 0,
       moved: 0,
@@ -524,7 +545,6 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     clearStackHover()
     state.startFlip()
     emit('flip-start', foldHit.trigger)
-    emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
     // 折页拖拽锚点高度取指针 v（页高坐标 v=0 为中），折角拖拽取外角
     const anchorV = foldHit.edge
       ? (foldHit.cornerV * PAGE_HEIGHT) / 2
@@ -532,7 +552,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     const drag2 = startFoldDragGesture(event, spec, foldHit.trigger, anchorV, foldHit)
     if (drag2) {
       applyStacksFlip(spec)
-      sheetOwner = 'drag'
+      claimDragOwnership()
+      // pressed/released 成对：纸张创建成功进入拖拽才派发，失败路径不发
+      emit('pressed', { x: event.clientX - rect.left, y: event.clientY - rect.top })
       capturePointer(el, event.pointerId)
     }
     return drag2 !== null
@@ -549,14 +571,15 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   ): DragState | null {
     const foldW = pageWidthOf(safePageAspect)
     const takeOverCorner = foldHit ? (foldHit.edge ? foldHit.cornerV : 0) : 0
-    const peelState: PeelState | null = getPeel()
+    const peel = ownership.peel
     // 同方向同模式悬停预览的纸张直接接管；其余情况收起后新建折角纸张
     const takeOver =
-      peelState !== null &&
-      peelState.trigger === trigger &&
-      peelState.isFold &&
-      peelState.corner === takeOverCorner
-    if (!takeOver && sheetOwner === 'peel') releasePeelNow()
+      ownership.owner === 'peel' &&
+      peel !== null &&
+      peel.trigger === trigger &&
+      peel.isFold &&
+      peel.corner === takeOverCorner
+    if (!takeOver && ownership.owner === 'peel') releasePeelNow()
     // 翻页前置布局：相机不动，折角在页内完成。接管悬停预览的纸张时同样
     // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）
     renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
@@ -576,12 +599,13 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       emit('flip-end', trigger)
       return null
     }
-    clearPeel()
+    claimDragOwnership()
     drag = {
       pointerId: event.pointerId,
       trigger,
       startX: event.clientX,
       lastX: event.clientX,
+      lastY: event.clientY,
       lastT: event.timeStamp,
       velocity: 0,
       moved: 0,
@@ -601,7 +625,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       pan.lastX = event.clientX
       pan.lastY = event.clientY
       pan.moved += Math.abs(dx) + Math.abs(dy)
-      if (pan.moved > 6) suppressClick = true
+      if (pan.moved > DRAG_MIN_MOVED_PX) suppressClick = true
       renderer.panBy(dx, dy)
       return
     }
@@ -632,6 +656,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
         renderer.setDragProgress(drag.progress)
       }
       drag.lastX = event.clientX
+      drag.lastY = event.clientY
       drag.lastT = event.timeStamp
       drag.moved += Math.abs(dx)
       return
@@ -655,20 +680,23 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     const el = event.currentTarget as HTMLElement | null
     const rect = el?.getBoundingClientRect()
     drag = null
-    if (dragState.moved > 6) suppressClick = true
+    if (dragState.moved > DRAG_MIN_MOVED_PX) suppressClick = true
     if (rect) {
       emit('released', { x: event.clientX - rect.left, y: event.clientY - rect.top })
     }
     if (dragState.fold) {
       // 折角：过阈值或快速甩动完成翻页，否则拖点收回展平
       const commit =
-        dragState.progress > 0.45 || (dragState.velocity > 0.0025 && dragState.progress > 0.08)
+        dragState.progress > DRAG_COMMIT_PROGRESS ||
+        (dragState.velocity > FOLD_FLICK_VELOCITY && dragState.progress > DRAG_FLICK_PROGRESS)
       renderer.endFoldDrag(commit, safeFlipDuration.value)
       return
     }
     const progress = rect ? dragProgressFrom(event.clientX, rect, dragState) : dragState.progress
     // 超过阈值，或朝翻页方向的快速甩动，都视为完成翻页
-    const commit = progress > 0.45 || (dragState.velocity > 0.5 && progress > 0.08)
+    const commit =
+      progress > DRAG_COMMIT_PROGRESS ||
+      (dragState.velocity > CURL_FLICK_VELOCITY && progress > DRAG_FLICK_PROGRESS)
     renderer.endDragFlip(commit, safeFlipDuration.value)
   }
 
@@ -681,6 +709,12 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       const wasFold = drag.fold === true
       drag = null
       suppressClick = true
+      // pressed/released 成对：系统取消手势（触摸干扰/浏览器接管）同样补发松开
+      const el = event.currentTarget as HTMLElement | null
+      const rect = el?.getBoundingClientRect()
+      if (rect) {
+        emit('released', { x: event.clientX - rect.left, y: event.clientY - rect.top })
+      }
       if (wasFold) {
         renderer.endFoldDrag(false, safeFlipDuration.value)
       } else {
@@ -702,21 +736,23 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
 
   // 中断当前翻页并立即收尾：拖拽按最近端点，动画按终点提交
   function stop() {
-    const wasDrag = drag !== null
+    const dragState = drag
     const wasPan = pan !== null
     drag = null
     pan = null
-    if (wasDrag || wasPan) suppressClick = true
+    if (dragState || wasPan) suppressClick = true
+    // pressed/released 成对：程序化中断也补发松开（按最近一次拖点位置）
+    if (dragState) {
+      const rect = rootEl.value?.getBoundingClientRect()
+      if (rect) {
+        emit('released', { x: dragState.lastX - rect.left, y: dragState.lastY - rect.top })
+      }
+    }
     clearClickTimer()
     clearStackHover()
-    // stopFlip 同步触发 onDone 完成收尾（含缩放相机复位）
+    // stopFlip 同步触发 onDone → makeSheetDone 收尾（drag 提交/回弹 +
+    // flip-end，peel 恢复布局），纸张归属随 makeSheetDone 一并清除
     renderer.stopFlip()
-    if (sheetOwner === 'peel') {
-      // 场景不可用导致未收尾时的兜底
-      sheetOwner = null
-      clearPeel()
-      renderStatic()
-    }
   }
 
   // 禁用/启用组件交互与翻页
