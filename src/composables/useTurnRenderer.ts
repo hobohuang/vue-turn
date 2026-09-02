@@ -158,7 +158,8 @@ export function useTurnRenderer(options: TurnRendererOptions) {
   }
 
   // 折角拖拽：场景可用返回 true；已有同方向拖拽纸张时直接接管。
-  // preview=true 为悬停预览：书体/静态页/纸叠钉在起始态
+  // preview=true 为折角悬停预览：静态页由调用方先重设为翻开前置布局
+  // （底页呈现下一页），书体平移/纸叠/相机钉在起始态
   function beginFoldDrag(
     spec: FlipSpec,
     frontTexture: THREE.Texture | null,
@@ -189,6 +190,12 @@ export function useTurnRenderer(options: TurnRendererOptions) {
   // lockedV 给出时拖点纵向钉在该高度（折页拖拽锁定按下高度）
   function setFoldDragFromClient(clientX: number, clientY: number, lockedV?: number) {
     return scene ? scene.setFoldDragFromClient(clientX, clientY, lockedV) : null
+  }
+
+  // 指针到当前折角锚点（外角）的世界距离：折角预览激活期间的角区进出
+  // 判定用（此时静态布局是翻开前置布局，pickPage 命中的是底页不可依赖）
+  function foldAnchorDistanceFromClient(clientX: number, clientY: number) {
+    return scene ? scene.foldAnchorDistanceFromClient(clientX, clientY) : null
   }
 
   // 直接以页宽坐标设置折角拖点（悬停预览用）
@@ -244,6 +251,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     endDragFlip,
     beginFoldDrag,
     setFoldDragFromClient,
+    foldAnchorDistanceFromClient,
     setFoldDragAt,
     endFoldDrag,
     stopFlip,

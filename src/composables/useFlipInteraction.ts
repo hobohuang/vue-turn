@@ -271,6 +271,16 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     )
   }
 
+  // 折角预览激活时的按下兜底：预览激活期间静态布局是翻开前置布局，
+  // 单页模式等场景下按下拾取命中的底页（居中非封面页）不可折，
+  // foldPageAt 返回 null。预览存活即指针仍在角区内（每次移动都在
+  // 维持角区判定），按预览的方向与角构造折角命中，无缝接管预览纸张
+  function foldHitFromActivePeel(): { trigger: FlipDirection; cornerV: number; edge: boolean; v: number } | null {
+    const peelState = getPeel()
+    if (sheetOwner !== 'peel' || !peelState?.isFold) return null
+    return { trigger: peelState.trigger, cornerV: peelState.corner, edge: true, v: 0.5 }
+  }
+
   // 热区命中：把拾取到的纹理坐标换算为 item 内容坐标（左上角原点，0~1），
   // 半页网格（跨页左/右半）映射到整 item 的一半，跨页合并网格直接覆盖整 item
   function hitRegion(pick: PagePick): PageRegion | null {
@@ -428,7 +438,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     // 四角区为折角拖拽（锚点=最近外角，斜折线）；其余位置为折页拖拽
     // （锚点=指针同高度的外页边缘点，竖直折线对折翻页）；fold 关闭才走
     // 普通整页卷曲拖拽
-    const foldHit = foldPageAt(event.clientX, event.clientY)
+    const foldHit = foldPageAt(event.clientX, event.clientY) ?? foldHitFromActivePeel()
     if (foldHit) {
       beginFoldDragGesture(event, el, rect, foldHit)
       return

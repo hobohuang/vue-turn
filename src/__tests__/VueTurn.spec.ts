@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => {
       ) => boolean
     >(),
     setFoldDragFromClient: vi.fn<(x: number, y: number, lockedV?: number) => number | null>(),
+    foldAnchorDistanceFromClient: vi.fn<(x: number, y: number) => number | null>(),
     setFoldDragAt: vi.fn<(qu: number, qv: number) => number | null>(),
     endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
     setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
@@ -112,6 +113,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     endDragFlip: mocks.endDragFlip,
     beginFoldDrag: mocks.beginFoldDrag,
     setFoldDragFromClient: mocks.setFoldDragFromClient,
+    foldAnchorDistanceFromClient: mocks.foldAnchorDistanceFromClient,
     setFoldDragAt: mocks.setFoldDragAt,
     endFoldDrag: mocks.endFoldDrag,
     stopFlip: mocks.stopFlip,
@@ -301,6 +303,8 @@ describe('VueTurn', () => {
     // getZoom 默认读有状态 zoomState（初始 1）；此处不再 mockReturnValue
     // 固定值，否则 applyZoom 的前后对比恒等，zoom-change 永不派发
     mocks.pickPage.mockReturnValue(null)
+    // 折角预览激活期间的角区进出判定：默认无折角纸张（预览未激活）
+    mocks.foldAnchorDistanceFromClient.mockReset()
   })
 
   it('rasterizes every turn-item before first paint', async () => {
@@ -1579,14 +1583,21 @@ describe('VueTurn', () => {
       true,
     )
     expect(mocks.beginDragFlip).not.toHaveBeenCalled()
-    expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(1)
-    // 同角深入角点：同一张纸仅更新拖点（折得更深），不重建纸张
-    mocks.pickPage.mockReturnValue({ index: 2, u: 0.99, v: 0.1, spread: true })
+    // 折点跟随指针（与折角拖拽同入口）
+    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(870, 480)
+    // 预览与拖拽同一份翻页前置布局（底页呈现翻开布局）
+    expect(mocks.setStaticPages).toHaveBeenCalledWith(
+      [{ index: 2, slot: 'right' }],
+      expect.anything(),
+      false,
+    )
+    // 同角深入：同一张纸仅更新拖点（跟随指针），不重建纸张
+    mocks.foldAnchorDistanceFromClient.mockReturnValue(0.01)
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 890, clientY: 480, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
-    expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(2)
+    expect(mocks.setFoldDragFromClient).toHaveBeenLastCalledWith(890, 480)
     // 移入页面中部（角区外）：折角收回
-    mocks.pickPage.mockReturnValue({ index: 2, u: 0.5, v: 0.3, spread: true })
+    mocks.foldAnchorDistanceFromClient.mockReturnValue(1000)
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 450, clientY: 260, buttons: 0 })
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
   })
@@ -1619,16 +1630,18 @@ describe('VueTurn', () => {
     // 顶角（cornerV 由 beginFoldDrag 的 pickV 参数传入，+PAGE_HEIGHT/2 为顶）
     const pickV = mocks.beginFoldDrag.mock.calls[0]?.[4] as number
     expect(pickV).toBeGreaterThan(0)
+    // 折点跟随指针
+    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(870, 60)
     // 移到页面中部（角区外）：折角收回
-    mocks.pickPage.mockReturnValue({ index: 2, u: 0.7, v: 0.5, spread: true })
+    mocks.foldAnchorDistanceFromClient.mockReturnValue(1000)
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 650, clientY: 300, buttons: 0 })
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
   })
 
-  it('previews the cover corner on hover without touching the static layout', async () => {
-    // 封面（合书态居中）悬停角区：预览折角，且预览不重设静态布局——
-    // 否则封面开合 spec 的世界偏移会把静态封面挪到侧旁（"另一个封面
-    // 在旁闪烁"的根源）。 mocked 场景下以"未调用 setStaticPages"验证
+  it('previews the cover corner on hover with the flip-start static layout', async () => {
+    // 封面（合书态居中）悬停角区：预览与折角拖拽共用同一份翻页前置布局
+    // ——底页呈现翻开布局（折角下方露出的是下一页而非封面）；preview=true
+    // 使书体平移/纸叠/相机钉在起始态，收起时 renderStatic 恢复空闲布局
     mocks.beginFoldDrag.mockReturnValue(true)
     const wrapper = await mountTurn(6, { peel: true, modelValue: 1 })
     stubViewportRect(wrapper)
@@ -1639,15 +1652,21 @@ describe('VueTurn', () => {
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
     // 悬停预览：preview=true（第 9 参）
     expect(mocks.beginFoldDrag.mock.calls[0]?.[8]).toBe(true)
-    // 预览全程不得重设静态布局（防止世界偏移篡改空闲布局）
-    expect(mocks.setStaticPages).not.toHaveBeenCalled()
+    // 预览与拖拽同一份翻页前置布局：封面翻开的底页 = 第 2 页右页
+    expect(mocks.setStaticPages).toHaveBeenCalledWith(
+      [{ index: 2, slot: 'right' }],
+      expect.anything(),
+      false,
+    )
+    // 折点跟随指针（与折角拖拽同入口）
+    expect(mocks.setFoldDragFromClient).toHaveBeenCalledWith(520, 480)
     // 同角深入：仅更新拖点，不重建
-    mocks.pickPage.mockReturnValue({ index: 0, u: 0.99, v: 0.1, spread: false })
+    mocks.foldAnchorDistanceFromClient.mockReturnValue(0.01)
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 545, clientY: 480, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
-    expect(mocks.setFoldDragAt).toHaveBeenCalledTimes(2)
+    expect(mocks.setFoldDragFromClient).toHaveBeenLastCalledWith(545, 480)
     // 移出角圆：折角收回
-    mocks.pickPage.mockReturnValue({ index: 0, u: 0.6, v: 0.3, spread: false })
+    mocks.foldAnchorDistanceFromClient.mockReturnValue(1000)
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 400, clientY: 260, buttons: 0 })
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
   })

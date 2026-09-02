@@ -819,9 +819,11 @@ export class TurnScene {
       return true
     }
     if (this.sheet) this.removeSheet()
-    // 真实拖拽才应用布局切换的世界偏移（悬停预览不动静态网格，
-    // 见 beginDragFlip 同款注释）
-    if (!preview) this.applyWorldOffsets(spec)
+    // 静态页已由调用方按 spec.staticPages 重设（真实拖拽与折角预览皆然：
+    // 折角下方露出的须是底页而非当前页），此处统一叠加布局切换的世界偏移；
+    // 预览的书体平移/纸叠/相机仍钉在起始态（updateSheet 中 preview 的
+    // slideP=0），收起时由调用方 renderStatic 恢复空闲布局
+    this.applyWorldOffsets(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
     if (!base) return false
     this.sheet = {
@@ -868,6 +870,19 @@ export class TurnScene {
     if (sheet.sign < 0) qu = -qu
     const qv = lockedV ?? world[1]
     return this.setFoldDragAt(qu, qv)
+  }
+
+  // 指针到当前折角锚点（外角抓取点 P）的世界距离；无折角拖拽纸张时返回
+  // null。折角预览激活期间静态布局是翻开前置布局，pickPage 命中的是底页，
+  // 角区进出判定不能依赖拾取，改用与锚点的几何距离（与折角条带命中
+  // foldStripFromPick 的外角圆形判定同心同半径）
+  foldAnchorDistanceFromClient(clientX: number, clientY: number): number | null {
+    const sheet = this.sheet
+    if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return null
+    const world = this.pagePointFromClient(clientX, clientY)
+    if (!world) return null
+    const anchorX = sheet.group.position.x + sheet.sign * sheet.fold.pu
+    return Math.hypot(world[0] - anchorX, world[1] - sheet.fold.pv)
   }
 
   // 直接以页宽坐标设置折角拖点（悬停预览/拖拽跟随共用入口）；返回折角进度。

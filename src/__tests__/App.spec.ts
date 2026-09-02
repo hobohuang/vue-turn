@@ -48,6 +48,8 @@ const mocks = vi.hoisted(() => ({
       ) => boolean
     >().mockReturnValue(true),
   setFoldDragFromClient: vi.fn<(x: number, y: number) => number | null>().mockReturnValue(null),
+  foldAnchorDistanceFromClient:
+    vi.fn<(x: number, y: number) => number | null>().mockReturnValue(null),
   setFoldDragAt: vi.fn<(qu: number, qv: number) => number | null>().mockReturnValue(null),
   endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
   startFoldFlip:
@@ -88,6 +90,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     endDragFlip: mocks.endDragFlip,
     beginFoldDrag: mocks.beginFoldDrag,
     setFoldDragFromClient: mocks.setFoldDragFromClient,
+    foldAnchorDistanceFromClient: mocks.foldAnchorDistanceFromClient,
     setFoldDragAt: mocks.setFoldDragAt,
     endFoldDrag: mocks.endFoldDrag,
     stopFlip: mocks.stopFlip,

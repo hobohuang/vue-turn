@@ -3,7 +3,7 @@ import type * as THREE from 'three'
 
 import type { PagePick } from '@/lib/TurnScene'
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
-import { foldStripFromPick } from '@/lib/foldHit'
+import { FOLD_ZONE, foldStripFromPick } from '@/lib/foldHit'
 import type { FlipDirection, FlipSheetOptions, FlipSpec, StaticPlacement } from '@/types/turn'
 
 import type { useBookState } from './useBookState'
@@ -35,7 +35,8 @@ export interface PeelPreviewOptions {
     | 'beginDragFlip'
     | 'beginFoldDrag'
     | 'setDragProgress'
-    | 'setFoldDragAt'
+    | 'setFoldDragFromClient'
+    | 'foldAnchorDistanceFromClient'
     | 'endDragFlip'
     | 'endFoldDrag'
     | 'pickPage'
@@ -61,8 +62,9 @@ export interface PeelPreviewOptions {
 }
 
 /**
- * 悬停预览（peel）：不动相机、不改纸叠布局，只预览纸角形变。
- * - fold 开启：仅四角区域为折角预览（turn.js 风格），按深入强度折起最近外角
+ * 悬停预览（peel）：不动相机、不改纸叠，只预览纸角形变。
+ * - fold 开启：仅四角区域为折角预览（turn.js 风格），折点跟随指针，
+ *   与折角拖拽同一张纸张、同一条形变路径（preview=true 差异见下）
  * - fold 关闭：视口边缘条带整页轻卷（旧版 peel 行为）
  *
  * 与主拖拽状态机共享"场景纸张归属"（sheetOwner）：悬停创建的预览纸张
@@ -163,9 +165,21 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       releasePeelNow()
       return
     }
-    // fold 开启：仅四角区域悬停为折角预览（turn.js 风格）——
-    // 按深入强度折起最近外角；其余位置无任何悬停预览
+    // fold 开启：仅四角区域悬停为折角预览（turn.js 风格）
     if (foldEnabled) {
+      // 折角预览已激活：静态布局已是翻开前置布局，pickPage 命中的是底页，
+      // 角区进出改按指针到折角锚点（外角）的世界距离判定（与折角条带
+      // 命中同心同半径）；折点跟随指针，与折角拖拽同一入口
+      if (peel?.isFold) {
+        const radius = FOLD_ZONE * pageWidth(safePageAspect)
+        const dist = renderer.foldAnchorDistanceFromClient(event.clientX, event.clientY)
+        if (dist !== null && dist <= radius) {
+          renderer.setFoldDragFromClient(event.clientX, event.clientY)
+        } else {
+          releasePeelNow()
+        }
+        return
+      }
       const pick: PagePick | null = renderer.pickPage(event.clientX, event.clientY)
       const hit = pick
         ? foldStripFromPick(
@@ -177,7 +191,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
           )
         : null
       if (hit) {
-        ensureFoldPreview(hit.trigger, hit.t, hit.cornerV)
+        ensureFoldPreview(hit.trigger, hit.cornerV, event)
         return
       }
       releasePeelNow()
@@ -205,31 +219,25 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     }
   }
 
-  // 折角悬停预览：命中四角区域（fold 开启）时按深入强度轻轻折起最近外角
-  // （cornerV 指定顶 +1 / 底 -1，斜折线），提示可抓取。
-  // 不动相机、不改纸叠布局（真实翻页才过渡）
-  function ensureFoldPreview(trigger: FlipDirection, t: number, cornerV: number) {
-    const w = pageWidth(safePageAspect)
-    const pickV = (cornerV * PAGE_HEIGHT) / 2
-    // 拖点自锚点向内偏移，t 越大折得越明显
-    const qu = w - t * 0.16 * w
-    const qv = pickV - t * cornerV * 0.1 * PAGE_HEIGHT
-    if (peel && peel.trigger === trigger && peel.isFold && peel.corner === cornerV) {
-      renderer.setFoldDragAt(qu, qv)
-      return
-    }
+  // 折角悬停预览：与折角拖拽同一张纸张、同一条形变路径（beginFoldDrag +
+  // setFoldDragFromClient），差别仅在 preview=true——静态页钉在翻页前置
+  // 布局起点、书体平移/纸叠/相机钉在起始态，只有折角形变跟随指针；
+  // 折点直接取指针位置（角区内跟随鼠标），书脊约束钳制在场景层
+  function ensureFoldPreview(trigger: FlipDirection, cornerV: number, event: PointerEvent) {
     releasePeelNow()
     const spec = computeFlipSpecFor(trigger)
     if (!spec) return
-    // preview=true：悬停预览不动书体/静态页/纸叠，只预览折角形变。
-    // 不替换静态布局（见 ensurePeel 注释）：预览命中判定依赖空闲布局的
-    // 静态网格，布局一旦翻转，悬停侧拾取 miss 会引发折起-收起闪烁
+    const w = pageWidth(safePageAspect)
+    // 与真实拖拽一致：先重设翻开前置布局再建纸张，折角下方露出的才是
+    // 下一页而非当前页；世界偏移由 beginFoldDrag 统一叠加。收起时经
+    // makeSheetDone 的 renderStatic 恢复空闲布局
+    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
     const ok = renderer.beginFoldDrag(
       spec,
       textures.get(spec.frontIndex) ?? null,
       textures.get(spec.backIndex) ?? null,
       w,
-      pickV,
+      (cornerV * PAGE_HEIGHT) / 2,
       foldBendWorld,
       makeSheetDone(spec, trigger),
       sheetOptions(spec),
@@ -238,7 +246,8 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     if (!ok) return
     setPeelOwner(true)
     peel = { trigger, isFold: true, corner: cornerV }
-    renderer.setFoldDragAt(qu, qv)
+    // 创建时拖点先落在锚点外角（平展），立即移到指针当前位置
+    renderer.setFoldDragFromClient(event.clientX, event.clientY)
   }
 
   return { updatePeel, releasePeelNow, discardPeel, getPeel, clearPeel }
