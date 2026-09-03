@@ -159,6 +159,9 @@ function createHost(props: HostProps = {}) {
     setup() {
       const turnRef = ref<TurnInstance | null>(null)
       const page = ref(props.modelValue ?? 1)
+      // item 数固定驱动默认插槽；numPages（含空白衬页）由 onReady 回报，
+      // 仅用于指示器展示，不能回写进插槽（否则 6 item → 8 页 → 8 item 反馈循环）
+      const itemCount = props.numPages ?? 6
       const total = ref(props.numPages ?? 6)
       const flipping = ref(false)
       // canNext/canPrev 是实例 getter，非响应式；用 tick 在事件后强制重渲
@@ -205,8 +208,7 @@ function createHost(props: HostProps = {}) {
               },
             },
             {
-              default: () =>
-                pages(props.defaultPages !== undefined ? props.defaultPages : total.value),
+              default: () => pages(props.defaultPages ?? itemCount),
             },
           ),
           h('div', { class: 'toolbar' }, [
@@ -312,13 +314,15 @@ describe('VueTurn', () => {
 
   it('rasterizes every turn-item before first paint', async () => {
     await mountTurn()
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(6)
-    expect(mocks.applyStaticTexture).toHaveBeenCalledTimes(6)
+    // 6 item → 8 页（封面/封底专用纸张各带一张空白衬页）；
+    // 挂载窗口 [0,6) 命中页 0,2,3,4,5（页 1 空白跳过）→ 5 次光栅化
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(5)
+    expect(mocks.applyStaticTexture).toHaveBeenCalledTimes(5)
   })
 
   it('shows the first spread and disables the back flip', async () => {
     const wrapper = await mountTurn()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     expect(wrapper.find('#prev').attributes('disabled')).toBeDefined()
     expect(wrapper.find('#next').attributes('disabled')).toBeUndefined()
   })
@@ -333,11 +337,11 @@ describe('VueTurn', () => {
     expect(coverSpec?.frontIndex).toBe(0)
     expect(coverSpec?.backIndex).toBe(1)
     expect(coverSpec?.worldFromX).toBeLessThan(0)
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     await wrapper.find('#next').trigger('click')
     await flushPromises()
     expect(mocks.startFlip).toHaveBeenCalledTimes(2)
-    expect(wrapper.find('#indicator').text()).toBe('4/6')
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
   })
 
   it('flips the cover sheet closed when going back from page two', async () => {
@@ -345,7 +349,7 @@ describe('VueTurn', () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     await wrapper.find('#prev').trigger('click')
     await flushPromises()
     expect(mocks.startFlip).toHaveBeenCalledTimes(2)
@@ -353,7 +357,7 @@ describe('VueTurn', () => {
     expect(closeSpec?.frontIndex).toBe(1)
     expect(closeSpec?.backIndex).toBe(0)
     expect(closeSpec?.delta).toBe(-1)
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('passes the correct sheet textures to the renderer', async () => {
@@ -376,16 +380,19 @@ describe('VueTurn', () => {
     const wrapper = await mountTurn()
     await wrapper.find('#jump').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('4/6')
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('6/8')
     await wrapper.find('#next').trigger('click')
     await flushPromises()
     const calls = mocks.startFlip.mock.calls
     const closeSpec = calls[calls.length - 1]?.[0]
-    expect(closeSpec?.frontIndex).toBe(4)
-    expect(closeSpec?.backIndex).toBe(5)
+    expect(closeSpec?.frontIndex).toBe(6)
+    expect(closeSpec?.backIndex).toBe(7)
     expect(closeSpec?.delta).toBe(2)
     expect(closeSpec?.worldToX).toBeGreaterThan(0)
-    expect(wrapper.find('#indicator').text()).toBe('6/6')
+    expect(wrapper.find('#indicator').text()).toBe('8/8')
     expect(wrapper.find('#next').attributes('disabled')).toBeDefined()
   })
 
@@ -396,22 +403,24 @@ describe('VueTurn', () => {
     await flushPromises()
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('6/6')
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('8/8')
     await wrapper.find('#prev').trigger('click')
     await flushPromises()
     const calls = mocks.startFlip.mock.calls
     const openSpec = calls[calls.length - 1]?.[0]
-    expect(openSpec?.frontIndex).toBe(5)
-    expect(openSpec?.backIndex).toBe(4)
+    expect(openSpec?.frontIndex).toBe(7)
+    expect(openSpec?.backIndex).toBe(6)
     expect(openSpec?.delta).toBe(-2)
-    expect(wrapper.find('#indicator').text()).toBe('4/6')
+    expect(wrapper.find('#indicator').text()).toBe('6/8')
   })
 
   it('jumps straight to a page through the instance api', async () => {
     const wrapper = await mountTurn(6)
     await wrapper.find('#jump').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('4/6')
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
   })
 
   it('ignores flips while an animation is in flight', async () => {
@@ -420,7 +429,7 @@ describe('VueTurn', () => {
     await wrapper.find('#next').trigger('click')
     await wrapper.find('#jump').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('emits update:modelValue and change when a flip commits', async () => {
@@ -535,11 +544,11 @@ describe('VueTurn', () => {
       .mockRejectedValueOnce(new Error('boom'))
       .mockResolvedValue({ dispose: vi.fn<() => void>() })
     const wrapper = await mountTurn()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
@@ -575,8 +584,8 @@ describe('VueTurn', () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     await second.find('#next').trigger('click')
     await flushPromises()
-    expect(second.find('#indicator').text()).toBe('2/6')
-    expect(first.find('#indicator').text()).toBe('1/6')
+    expect(second.find('#indicator').text()).toBe('2/8')
+    expect(first.find('#indicator').text()).toBe('1/8')
   })
 
   it('re-rasterizes when page content changes', async () => {
@@ -607,10 +616,13 @@ describe('VueTurn', () => {
     })
     const wrapper = mount(Host)
     await flushPromises()
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(1)
+    // 单 item → 4 页（封面+空白衬页+空白衬页+封底同源）：
+    // 窗口 [0,4) 内页 0、2、3 需要纹理（页 1 空白跳过），页 0/3 同源各光栅化一次
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(2)
     content.value = 'updated'
     await flushPromises()
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(2)
+    // 内容变化映射到页 0 与页 3，两页都重光栅化
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(4)
     expect(wrapper.findComponent(VueTurn).vm.page).toBe(1)
   })
 
@@ -664,11 +676,14 @@ describe('VueTurn', () => {
     const wrapper = mount(Host)
     await flushPromises()
     expect(wrapper.find('#indicator').text()).toBe('1/4')
+    // 4 item → 6 页（窗口 [0,6) 内页 0,2,3,5 需要纹理，页 1/4 空白跳过）
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(4)
     count.value = 6
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
-    // 新增页也完成了光栅化
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(10)
+    expect(wrapper.find('#indicator').text()).toBe(`1/${count.value}`)
+    // 新增两页触发整窗强制重光栅化：窗口 [0,6) 内页 0,2,3,4,5 全部重光栅化
+    // （页 1/6 空白跳过）→ 4 + 5 = 9
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(9)
   })
 
   it('exposes next/prev and readonly state on the instance api', async () => {
@@ -676,7 +691,7 @@ describe('VueTurn', () => {
     const wrapper = await mountTurn()
     const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
     expect(inst.page).toBe(1)
-    expect(inst.numPages).toBe(6)
+    expect(inst.numPages).toBe(8)
     expect(inst.isFlipping).toBe(false)
     inst.next()
     await flushPromises()
@@ -694,7 +709,7 @@ describe('VueTurn', () => {
     expect(inst.canNext).toBe(true)
     expect(inst.canPrev).toBe(false)
     // 跳到末页
-    inst.goToPage(6)
+    inst.goToPage(8)
     await flushPromises()
     expect(inst.canNext).toBe(false)
     expect(inst.canPrev).toBe(true)
@@ -719,7 +734,8 @@ describe('VueTurn', () => {
     const wrapper = await mountTurn()
     const turn = wrapper.findComponent(VueTurn)
     const errors = turn.emitted('rasterize-error')
-    expect(errors?.[0]?.[0]).toBe(2)
+    // 窗口内第 2 个光栅化的内容页（页索引 2，1 起页码 3）失败
+    expect(errors?.[0]?.[0]).toBe(3)
     warn.mockRestore()
   })
 
@@ -732,7 +748,7 @@ describe('VueTurn', () => {
     el.getBoundingClientRect = () => ({ left: 0, width: 900, height: 600 }) as DOMRect
     await viewport.trigger('click', { clientX: 700 })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
   })
 
   it('does not flip on click when clickToFlip is disabled', async () => {
@@ -743,7 +759,7 @@ describe('VueTurn', () => {
     el.getBoundingClientRect = () => ({ left: 0, width: 900, height: 600 }) as DOMRect
     await viewport.trigger('click', { clientX: 700 })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('flips with arrow keys when focused', async () => {
@@ -752,11 +768,11 @@ describe('VueTurn', () => {
     const viewport = wrapper.find('.viewport')
     await viewport.trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     // 回到封面后左键不再前进
     await viewport.trigger('keydown', { key: 'ArrowLeft' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('supports PageDown, Space, PageUp, Home and End keys', async () => {
@@ -766,23 +782,23 @@ describe('VueTurn', () => {
     // Space 前进（封面展开）
     await viewport.trigger('keydown', { key: ' ' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     // PageDown 常规翻页
     await viewport.trigger('keydown', { key: 'PageDown' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('4/6')
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
     // End 跳到末页（封底合上）
     await viewport.trigger('keydown', { key: 'End' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('6/6')
+    expect(wrapper.find('#indicator').text()).toBe('8/8')
     // Home 跳回首页
     await viewport.trigger('keydown', { key: 'Home' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     // PageUp 在首页无效果
     await viewport.trigger('keydown', { key: 'PageUp' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('flips via document keydown when focus is outside the component (globalKeyboard on)', async () => {
@@ -791,11 +807,11 @@ describe('VueTurn', () => {
     // 焦点在组件外（document/body）：点击工具栏按钮后按键的场景
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     // 组件内部目标的 keydown 已由 viewport 处理，document 层不重复翻页
     await wrapper.find('.viewport').trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('4/6')
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
   })
 
   it('does not hijack keydown from editable elements outside the component', async () => {
@@ -807,7 +823,7 @@ describe('VueTurn', () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
       await flushPromises()
       // 输入框内的方向键不触发翻页
-      expect(wrapper.find('#indicator').text()).toBe('1/6')
+      expect(wrapper.find('#indicator').text()).toBe('1/8')
     } finally {
       input.remove()
     }
@@ -820,18 +836,18 @@ describe('VueTurn', () => {
     // 多实例并存且尚无交互归属：document 按键一律不翻页，避免实例间抢键盘
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
     await flushPromises()
-    expect(first.find('#indicator').text()).toBe('1/6')
-    expect(second.find('#indicator').text()).toBe('1/6')
+    expect(first.find('#indicator').text()).toBe('1/8')
+    expect(second.find('#indicator').text()).toBe('1/8')
     // 在第二个实例的书页内按键：键盘归属转移给它
     await second.find('.viewport').trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
-    expect(second.find('#indicator').text()).toBe('2/6')
-    expect(first.find('#indicator').text()).toBe('1/6')
+    expect(second.find('#indicator').text()).toBe('2/8')
+    expect(first.find('#indicator').text()).toBe('1/8')
     // 此后 document 按键只驱动第二个实例
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
     await flushPromises()
-    expect(second.find('#indicator').text()).toBe('4/6')
-    expect(first.find('#indicator').text()).toBe('1/6')
+    expect(second.find('#indicator').text()).toBe('4/8')
+    expect(first.find('#indicator').text()).toBe('1/8')
   })
 
   it('does not respond to document keydown by default (globalKeyboard opt-in)', async () => {
@@ -840,15 +856,15 @@ describe('VueTurn', () => {
     const wrapper = await mountTurn()
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     // 视口聚焦通道不受影响
     await wrapper.find('.viewport').trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     // document 按键依旧不翻页
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
   })
 
   it('goToPage returns false when rejected and true when applied', async () => {
@@ -888,7 +904,7 @@ describe('VueTurn', () => {
               },
               { default: () => pages(6) },
             ),
-            h('span', { id: 'indicator' }, `${page.value}/6`),
+            h('span', { id: 'indicator' }, `${page.value}/8`),
           ])
       },
     })
@@ -900,11 +916,11 @@ describe('VueTurn', () => {
     // 死区中轴（0.5±0.1）：点击不翻页
     await viewport.trigger('click', { clientX: 450 })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     // 死区外右半：前进
     await viewport.trigger('click', { clientX: 700 })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
   })
 
   it('exposes accessibility attributes on the viewport', async () => {
@@ -921,7 +937,7 @@ describe('VueTurn', () => {
     await wrapper.find('#next').trigger('click')
     await flushPromises()
     // 单页模式每次只前进一页
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     const spec = mocks.startFlip.mock.calls[0]?.[0]
     expect(spec?.delta).toBe(1)
   })
@@ -931,11 +947,12 @@ describe('VueTurn', () => {
     const wrapper = await mountTurn(6, { displayedPages: 2 })
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
   })
 
   it('only rasterizes pages within the prefetch window on mount', async () => {
-    // 20 页、prefetchWindow=2、双页模式：初始窗口 [0, 0+2+2)=[0,4)，仅光栅化 4 页
+    // 20 item → 22 页、prefetchWindow=2、双页模式：初始窗口 [0, 0+2+2)=[0,4)，
+    // 页 1 为空白衬页跳过 → 仅光栅化 3 页
     const Host = defineComponent({
       setup() {
         const turnRef = ref<TurnInstance | null>(null)
@@ -959,12 +976,12 @@ describe('VueTurn', () => {
     })
     mount(Host)
     await flushPromises()
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(4)
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(3)
   })
 
   it('prefetches missing pages after flipping into a new window', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
-    // 10 页、prefetchWindow=1、双页模式
+    // 10 item → 12 页、prefetchWindow=1、双页模式
     const Host = defineComponent({
       setup() {
         const turnRef = ref<TurnInstance | null>(null)
@@ -989,12 +1006,12 @@ describe('VueTurn', () => {
     })
     const wrapper = mount(Host)
     await flushPromises()
-    // 初始窗口 [0, 0+2+1)=[0,3)，光栅化 3 页
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(3)
+    // 初始窗口 [0, 0+2+1)=[0,3)，页 1 空白跳过 → 光栅化 2 页
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(2)
     await wrapper.find('#next').trigger('click')
     await flushPromises()
     // 翻一次后 currentPage=1，窗口 [0, 1+2+1)=[0,4)，仅新增 index 3
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(4)
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(3)
   })
 
   it('disposes textures of removed pages to avoid leaks', async () => {
@@ -1020,6 +1037,8 @@ describe('VueTurn', () => {
               {
                 ref: turnRef,
                 modelValue: page.value,
+                // 大窗口：挂载即光栅化全部页面，便于构造"删页释放"场景
+                prefetchWindow: 99,
                 'onUpdate:modelValue': (v: number) => {
                   page.value = v
                 },
@@ -1035,12 +1054,12 @@ describe('VueTurn', () => {
     })
     const wrapper = mount(Host)
     await flushPromises()
-    // 初始光栅化 6 页（窗口 [0,6) 覆盖全部）
+    // 初始光栅化 6 页：6 item → 8 页，页 0,2,3,4,5,7 需要纹理（1/6 空白跳过）
     expect(disposes).toHaveLength(6)
-    // 删掉后两页：触发 syncPageCount 释放 index >= 4 的纹理
+    // 删掉后两页：触发 syncPageCount 释放 index >= 6 的纹理
     count.value = 4
     await flushPromises()
-    // 被删除页（index 4、5）的纹理应被释放
+    // 被删除页（页 5、页 7 → 第 5、6 个纹理）应被释放
     expect(disposes[4]).toHaveBeenCalled()
     expect(disposes[5]).toHaveBeenCalled()
     wrapper.unmount()
@@ -1111,9 +1130,10 @@ describe('VueTurn', () => {
   it('maps a spread item to two page indices', async () => {
     mocks.elementToTexture.mockReset()
     mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
-    // 封面(0) + 跨页[1,2] + 两个普通页(3,4) = 5 页，奇数总数补 1 空白 = 6 页
+    // 封面纸(0,1) + 跨页[3,4]（p2 补位）+ 普通页(5) + 补偶空白(6)?……
+    // 内容区段 = 补位(2) + 跨页(3,4) + 普通(5) 共 4 页为偶 → 封底纸(6,7) = 8 页
     const wrapper = await mountItems(['full', 'spread', 'full', 'full'])
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('inserts a blank page when a spread would land on an even index', async () => {
@@ -1131,11 +1151,14 @@ describe('VueTurn', () => {
     const wrapper = await mountItems(['full', 'spread', 'full', 'full'])
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
-    // 翻到跨页后：静态布局合并为单张居中跨页页（index 为起始页 1）
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
+    // 翻到跨页后：静态布局合并为单张居中跨页页（index 为起始页 3）
     const calls = mocks.setStaticPages.mock.calls
     const lastPlacements = calls[calls.length - 1]?.[0]
-    expect(lastPlacements).toEqual([{ index: 1, slot: 'center', spread: true }])
+    expect(lastPlacements).toEqual([{ index: 3, slot: 'center', spread: true }])
   })
 
   it('uses the spread base texture for the merged static mesh', async () => {
@@ -1150,6 +1173,8 @@ describe('VueTurn', () => {
     const wrapper = await mountItems(['full', 'spread', 'full', 'full'])
     await wrapper.find('#next').trigger('click')
     await flushPromises()
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
     const spreadCalls = mocks.setStaticPages.mock.calls.filter(([placements]) =>
       (placements as Array<{ spread?: boolean }>).some((p) => p.spread),
     )
@@ -1157,8 +1182,9 @@ describe('VueTurn', () => {
     const textureOf = spreadCalls[spreadCalls.length - 1]![1] as (index: number) => {
       tag?: string
     }
-    // 跨页项是第 2 个 item（"item 2"），合并网格应贴它的整图
-    expect(textureOf(1)).toMatchObject({ tag: 'item 2' })
+    // 跨页项是第 2 个 item（"item 2"），合并网格应贴它的整图；
+    // 新映射下跨页起始页为 3（face 2）
+    expect(textureOf(3)).toMatchObject({ tag: 'item 2' })
   })
 
   it('flips through a spread with regular sheet flips', async () => {
@@ -1168,11 +1194,11 @@ describe('VueTurn', () => {
     const wrapper = await mountItems(['full', 'spread', 'full', 'full'])
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('4/6')
-    // 离开跨页：front=2（跨页右半）、back=3，static 含跨页左半(1)
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
+    // 离开普通页：front=2（普通页）、back=3（跨页左半），static 含空白衬页(1)与跨页右半(4)
     const calls = mocks.startFlip.mock.calls
     const spec = calls[calls.length - 1]?.[0]
     expect(spec?.frontIndex).toBe(2)
@@ -1186,7 +1212,7 @@ describe('VueTurn', () => {
   it('restores the initial page from modelValue on mount', async () => {
     // 回归：挂载时初始页码不能被 0 页状态钳制到封面（刷新恢复 /book/:page 场景）
     const wrapper = await mountTurn(6, { modelValue: 6 })
-    expect(wrapper.find('#indicator').text()).toBe('6/6')
+    expect(wrapper.find('#indicator').text()).toBe('6/8')
     const turn = wrapper.findComponent(VueTurn)
     expect((turn.vm as unknown as TurnInstance).page).toBe(6)
   })
@@ -1195,30 +1221,35 @@ describe('VueTurn', () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     mocks.elementToTexture.mockReset()
     mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
-    // 封面(0) + a(1) + back(2) = 3 页（奇数）→ 末项前补空白 = 4 页
+    // 封面纸(0,1) + a(2) + 内页区段奇数补偶空白(3) + 封底纸(4,5) = 6 页
     const wrapper = await mountItems(['full', 'full', 'full'])
-    expect(wrapper.find('#indicator').text()).toBe('1/4')
-    // 前进到 [1,2]（a + 空白）：再次前进应走封底合上分支（back=末页 3）
+    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    // 前进到 [2,3]（a + 补偶空白）：再次前进应走封底合上分支（back=末页 5）
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/4')
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('4/4')
+    expect(wrapper.find('#indicator').text()).toBe('4/6')
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('6/6')
     const calls = mocks.startFlip.mock.calls
     const closeSpec = calls[calls.length - 1]?.[0]
-    expect(closeSpec?.frontIndex).toBe(2)
-    expect(closeSpec?.backIndex).toBe(3)
+    expect(closeSpec?.frontIndex).toBe(4)
+    expect(closeSpec?.backIndex).toBe(5)
     expect(closeSpec?.delta).toBe(2)
   })
 
   it('rasterizes a spread base texture only once', async () => {
     mocks.elementToTexture.mockReset()
     mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
-    // 5 个 item（跨页占 2 页 + 奇数补空白 = 6 页），跨页共享一次整页光栅化 → elementToTexture 共 4 次
+    // 4 item（封面纸+补位+跨页+普通+补偶 → 8 页），窗口 [0,5) 内需要
+    // 纹理的页：0(封面)、2(普通)、3(跨页左半，整页光栅化)、4(右半克隆共享)
+    // → elementToTexture 共 3 次
     const wrapper = await mountItems(['full', 'spread', 'full', 'full'])
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(4)
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(3)
   })
 
   it('passes resourceTimeout to waitForResources', async () => {
@@ -1283,8 +1314,8 @@ describe('VueTurn', () => {
     const wrapper = mount(Host)
     await flushPromises()
     const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
-    // 封面索引 0、封底索引 5（末 item 前 5 页时末项前补空白页）
-    expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 5])
+    // 封面纸张索引 0,1、封底纸张索引 6,7（5 item → 8 页）
+    expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 1, 6, 7])
     inst.next()
     await flushPromises()
     // 封面：默认 coverPreset=hard，curl 0 刚体翻转 + 封面档网格密度
@@ -1293,6 +1324,103 @@ describe('VueTurn', () => {
     await flushPromises()
     // 普通内页：无覆盖
     expect(mocks.startFlip.mock.calls[1]?.[5]).toEqual({})
+  })
+
+  it('supports declared cover/back-cover sheets with #back inside faces', async () => {
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation((el) =>
+      Promise.resolve({ ...fakeTexture(), tag: el.textContent ?? '' }),
+    )
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const page = ref(1)
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                ref: turnRef,
+                modelValue: page.value,
+                'onUpdate:modelValue': (v: number) => {
+                  page.value = v
+                },
+              },
+              {
+                default: () => [
+                  // 封面 + 封面底同纸；中间两个内容页；封底里 + 封底同纸
+                  h(TurnItem, { cover: true }, {
+                    default: () => [h('div', 'cover')],
+                    back: () => [h('div', 'inside-front')],
+                  }),
+                  h(TurnItem, null, { default: () => [h('div', 'page 1')] }),
+                  h(TurnItem, null, { default: () => [h('div', 'page 2')] }),
+                  h(TurnItem, { backCover: true }, {
+                    default: () => [h('div', 'back cover')],
+                    back: () => [h('div', 'inside-back')],
+                  }),
+                ],
+              },
+            ),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    // 封面纸(0,1) + 内容(2,3) + 封底纸(4,5) = 6 页，无补位空白
+    expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 1, 4, 5])
+    // 封面底/封底里作为独立离屏面被光栅化：6 个面全部有内容 → 6 次光栅化
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(6)
+    const calls = mocks.setStaticPages.mock.calls
+    const lastCall = calls[calls.length - 1]?.[0]
+    // 合书态：封面居中单页
+    expect(lastCall).toEqual([{ index: 0, slot: 'center' }])
+    wrapper.unmount()
+  })
+
+  it('recognizes kebab-case back-cover attribute from compiled templates', async () => {
+    // SFC 模板编译后属性以 kebab-case 落在 vnode.props 上（{ "back-cover": "" }），
+    // 回归：collectPages 必须按 kebab 键读取，否则封底声明被忽略、#back 面丢失
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const page = ref(1)
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                ref: turnRef,
+                modelValue: page.value,
+                'onUpdate:modelValue': (v: number) => {
+                  page.value = v
+                },
+              },
+              {
+                default: () => [
+                  h(TurnItem, { cover: true }, { default: () => [h('div', 'cover')] }),
+                  h(TurnItem, null, { default: () => [h('div', 'page 1')] }),
+                  h(TurnItem, { 'back-cover': true } as unknown as { backCover: boolean }, {
+                    default: () => [h('div', 'back cover')],
+                    back: () => [h('div', 'inside-back')],
+                  }),
+                ],
+              },
+            ),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    // 封底里作为独立离屏面被收集（封面无 #back → 4 面：cover / page 1 / inside-back / back cover）
+    const faces = wrapper.findAll('.page-source').map((d) => d.text())
+    expect(faces).toHaveLength(4)
+    expect(faces[2]).toContain('inside-back')
+    // 封底里 = 页索引 4、封底 = 5（内容区段 1 页为奇 → 页 3 补偶空白）
+    expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 1, 4, 5])
+    wrapper.unmount()
   })
 
   it('coverPreset=soft makes covers curl like soft paper', async () => {
@@ -1400,7 +1528,7 @@ describe('VueTurn', () => {
               },
               { default: () => pages(6) },
             ),
-            h('span', { id: 'indicator' }, `${externalPage.value}/6`),
+            h('span', { id: 'indicator' }, `${externalPage.value}/8`),
           ])
       },
     })
@@ -1409,7 +1537,7 @@ describe('VueTurn', () => {
     // 外部把页码改成 5：被 before-flip 拦截，书页停在原地
     externalPage.value = 5
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     // 组件回写当前页，把被拒绝的外部页码拉回同步（避免外部残留非法状态）
     expect(updates).toEqual([1])
   })
@@ -1419,7 +1547,7 @@ describe('VueTurn', () => {
     const wrapper = await mountTurn()
     const turn = wrapper.findComponent(VueTurn)
     const inst = turn.vm as unknown as TurnInstance
-    inst.goToPage(6)
+    inst.goToPage(8)
     await flushPromises()
     expect(turn.emitted('last')).toHaveLength(1)
     expect(turn.emitted('first')).toBeUndefined()
@@ -1475,7 +1603,7 @@ describe('VueTurn', () => {
     inst.stop()
     await flushPromises()
     expect(inst.isFlipping).toBe(false)
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     expect(turn.emitted('flip-end')).toEqual([['left']])
   })
 
@@ -1497,7 +1625,7 @@ describe('VueTurn', () => {
     expect(mocks.endDragFlip).toHaveBeenCalledWith(true, 900)
     expect(turn.emitted('released')).toHaveLength(1)
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
     expect(turn.emitted('flip-end')).toEqual([['left']])
   })
 
@@ -1512,7 +1640,7 @@ describe('VueTurn', () => {
     // 进度 10/540 未过阈值：回弹取消
     expect(mocks.endDragFlip).toHaveBeenCalledWith(false, 900)
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     expect(turn.emitted('flip-end')).toEqual([['left']])
   })
 
@@ -1555,11 +1683,12 @@ describe('VueTurn', () => {
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 300, buttons: 0 })
     expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
     // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览卷曲形变，
-    // 避免封面开合等场景悬停时整本书随指针抖动
+    // 避免封面开合等场景悬停时整本书随指针抖动。
+    // 封面纸张背面 = 空白封面底（页 1），无纹理 → back 传 null
     expect(mocks.beginDragFlip).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
-      expect.anything(),
+      null,
       expect.anything(),
       expect.anything(),
       true,
@@ -1579,7 +1708,7 @@ describe('VueTurn', () => {
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 450, clientY: 300, buttons: 0 })
     expect(mocks.endDragFlip).toHaveBeenCalledWith(false, 900)
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('folds the nearest page corner when hovering the corner zone with fold enabled', async () => {
@@ -1590,11 +1719,12 @@ describe('VueTurn', () => {
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.95, v: 0.1, spread: true })
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 480, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
-    // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览折角形变
+    // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览折角形变；
+    // 封面纸张背面 = 空白封面底（页 1），无纹理 → back 传 null
     expect(mocks.beginFoldDrag).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
-      expect.anything(),
+      null,
       expect.anything(),
       expect.anything(),
       expect.anything(),
@@ -1841,7 +1971,7 @@ describe('VueTurn', () => {
                 ],
               },
             ),
-            h('span', { id: 'indicator' }, `${page.value}/6`),
+            h('span', { id: 'indicator' }, `${page.value}/8`),
           ])
       },
     })
@@ -1854,13 +1984,13 @@ describe('VueTurn', () => {
     const turn = wrapper.findComponent(VueTurn)
     expect(turn.emitted('region-tap')).toEqual([[1, region]])
     // 命中热区时不翻页
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
     // 未命中热区时正常翻页
     mocks.pickPage.mockReturnValue({ index: 0, u: 0.05, v: 0.05, spread: false })
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     await viewport.trigger('click', { clientX: 700, clientY: 300 })
     await flushPromises()
-    expect(wrapper.find('#indicator').text()).toBe('2/6')
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
   })
 
   it('exposes zoom methods and emits zoom-change', async () => {
@@ -1931,7 +2061,7 @@ describe('VueTurn', () => {
               },
               { default: () => pages(6) },
             ),
-            h('span', { id: 'indicator' }, `${page.value}/6`),
+            h('span', { id: 'indicator' }, `${page.value}/8`),
           ])
       },
     })
@@ -1945,7 +2075,7 @@ describe('VueTurn', () => {
     await flushPromises()
     expect(mocks.setZoom).toHaveBeenLastCalledWith(3, true)
     expect(mocks.startFlip).not.toHaveBeenCalled()
-    expect(wrapper.find('#indicator').text()).toBe('1/6')
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
   it('delays single-click flip when dblClickZoom is enabled', async () => {
@@ -1970,7 +2100,7 @@ describe('VueTurn', () => {
                 },
                 { default: () => pages(6) },
               ),
-              h('span', { id: 'indicator' }, `${page.value}/6`),
+              h('span', { id: 'indicator' }, `${page.value}/8`),
             ])
         },
       })
@@ -1979,11 +2109,11 @@ describe('VueTurn', () => {
       const viewport = stubViewportRect(wrapper)
       await viewport.trigger('click', { clientX: 700, clientY: 300 })
       // 判定窗口内不翻页
-      expect(wrapper.find('#indicator').text()).toBe('1/6')
+      expect(wrapper.find('#indicator').text()).toBe('1/8')
       vi.advanceTimersByTime(300)
       await flushPromises()
       // 无第二次点击：延迟执行翻页
-      expect(wrapper.find('#indicator').text()).toBe('2/6')
+      expect(wrapper.find('#indicator').text()).toBe('2/8')
     } finally {
       vi.useRealTimers()
     }
@@ -2010,7 +2140,7 @@ describe('VueTurn', () => {
                 },
                 { default: () => pages(6) },
               ),
-              h('span', { id: 'indicator' }, `${page.value}/6`),
+              h('span', { id: 'indicator' }, `${page.value}/8`),
             ])
         },
       })
@@ -2036,7 +2166,7 @@ describe('VueTurn', () => {
       vi.advanceTimersByTime(400)
       await flushPromises()
       expect(mocks.startFlip).not.toHaveBeenCalled()
-      expect(wrapper.find('#indicator').text()).toBe('1/6')
+      expect(wrapper.find('#indicator').text()).toBe('1/8')
     } finally {
       vi.useRealTimers()
     }

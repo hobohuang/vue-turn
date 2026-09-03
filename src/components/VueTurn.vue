@@ -18,6 +18,8 @@ const VnodeHolder = defineComponent({
 import {
   Comment,
   computed,
+  Fragment,
+  h,
   nextTick,
   onMounted,
   onUpdated,
@@ -36,7 +38,7 @@ import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import { ZOOM_TOLERANCE } from '@/composables/useZoomPan'
 import { pageWidth as pageWidthOf, spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '@/lib/flipSpec'
 import { positive } from '@/lib/math'
-import { buildPageSources, coverPageIndices } from '@/lib/pageMapping'
+import { buildPageSources, coverPageIndices, type PageFaceKind } from '@/lib/pageMapping'
 import { resolveFold, resolveLook } from '@/lib/presets'
 import type {
   BeforeFlipContext,
@@ -288,6 +290,38 @@ interface PageItem {
   vnode: VNode
   spread: boolean
   regions: PageRegion[]
+  cover: boolean
+  backCover: boolean
+  /** #back 插槽内容（封面底/封底里），未定义或为空则为 null */
+  backVnode: VNode | null
+}
+
+function isTruthyProp(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== false
+}
+
+// 模板属性以原始大小写落在 vnode.props 上（如 back-cover），
+// 驼峰键读不到时回退 kebab-case 键
+function readItemProp(node: VNode, key: string): unknown {
+  const props = node.props
+  if (!props) return undefined
+  if (props[key] !== undefined) return props[key]
+  const kebab = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
+  return props[kebab]
+}
+
+// 提取 turn-item 的 #back 插槽内容为单个可渲染 vnode（空内容返回 null）
+function extractBackVnode(node: VNode): VNode | null {
+  const children = node.children
+  if (!children || typeof children !== 'object' || Array.isArray(children)) return null
+  const back = (children as Record<string, unknown>).back
+  if (typeof back !== 'function') return null
+  const rendered = (back as () => VNode | VNode[])()
+  const list = (Array.isArray(rendered) ? rendered : [rendered]).filter(
+    (child) => child && child.type !== Comment,
+  )
+  if (list.length === 0) return null
+  return list.length === 1 ? list[0]! : h(Fragment, null, list)
 }
 
 function collectPages(): PageItem[] {
@@ -297,12 +331,14 @@ function collectPages(): PageItem[] {
     for (const node of nodes) {
       if (node.type === TurnItem) {
         // 模板无值属性编译为 ""，动态绑定为 true/false，均按真值判定
-        const rawSpread = node.props?.spread
-        const regions = node.props?.regions
+        const regions = readItemProp(node, 'regions')
         result.push({
           vnode: node,
-          spread: rawSpread !== undefined && rawSpread !== null && rawSpread !== false,
+          spread: isTruthyProp(readItemProp(node, 'spread')),
           regions: Array.isArray(regions) ? (regions as PageRegion[]) : [],
+          cover: isTruthyProp(readItemProp(node, 'cover')),
+          backCover: isTruthyProp(readItemProp(node, 'backCover')),
+          backVnode: extractBackVnode(node),
         })
       } else if (Array.isArray(node.children)) {
         walk(node.children as VNode[])
@@ -318,9 +354,62 @@ function collectPages(): PageItem[] {
 
 const pageItems = computed(collectPages)
 
-// 页源映射：封面固定第 0 页、跨页奇数对齐、奇数总页数补空白、末项标封底
-// （纯函数实现见 lib/pageMapping.ts，含各规则的单测）
-const pageSources = computed(() => buildPageSources(pageItems.value))
+// 把 item 展开为"面"：封面/封底各占一张专用纸张，#back 插槽内容作为
+// 同一张纸的背面面；未声明 cover/backCover 时由 buildPageSources 按
+// 位置约定兜底（首 item=封面、末 item=封底）
+interface PageFace {
+  vnode: VNode
+  spread: boolean
+  regions: PageRegion[]
+  face: PageFaceKind
+}
+
+let warnedFacePlacement = false
+const pageFaces = computed<PageFace[]>(() => {
+  const items = pageItems.value
+  const single = items.length === 1
+  const faces: PageFace[] = []
+  const pushBackFace = (item: PageItem, kind: Extract<PageFaceKind, 'coverBack' | 'backCoverBack'>) => {
+    if (item.backVnode) faces.push({ vnode: item.backVnode, spread: false, regions: [], face: kind })
+  }
+  items.forEach((item, index) => {
+    const coverHere = item.cover && (index === 0 || single)
+    const backHere = item.backCover && (index === items.length - 1 || single)
+    if (item.cover && !coverHere && !warnedFacePlacement) {
+      warnedFacePlacement = true
+      console.warn('[vue-turn] cover 仅在首个 <turn-item> 上生效，其余项按普通页处理')
+    }
+    if (item.backCover && !backHere && !warnedFacePlacement) {
+      warnedFacePlacement = true
+      console.warn('[vue-turn] back-cover 仅在末个 <turn-item> 上生效，其余项按普通页处理')
+    }
+    // 同时声明 cover 与 back-cover 时按位置取其一（单 item 书两者兼用）
+    if (coverHere && backHere && !single && !warnedFacePlacement) {
+      warnedFacePlacement = true
+      console.warn('[vue-turn] 同一 <turn-item> 不能同时声明 cover 与 back-cover，已按位置取其一')
+    }
+    if (coverHere) {
+      faces.push({ vnode: item.vnode, spread: false, regions: item.regions, face: 'coverFront' })
+      pushBackFace(item, 'coverBack')
+      return
+    }
+    if (backHere) {
+      pushBackFace(item, 'backCoverBack')
+      faces.push({ vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverFront' })
+      return
+    }
+    if (item.backVnode && !warnedFacePlacement) {
+      warnedFacePlacement = true
+      console.warn('[vue-turn] #back 插槽仅在 cover / back-cover 项上生效，已忽略')
+    }
+    faces.push({ vnode: item.vnode, spread: item.spread, regions: item.regions, face: 'content' })
+  })
+  return faces
+})
+
+// 页源映射：封面/封底各占专用纸张（背面=#back 内容或空白衬页）、跨页
+// 奇数对齐补位、内页区段奇数补偶（纯函数实现见 lib/pageMapping.ts，含单测）
+const pageSources = computed(() => buildPageSources(pageFaces.value))
 
 const offscreenEl = ref<HTMLElement | null>(null)
 // 组件根元素：document 键盘监听据此排除组件内部目标（已由 viewport 处理）
@@ -593,7 +682,7 @@ const {
   foldEnabled: foldParams.enabled,
   foldBendWorld,
   pageSources,
-  regionsOf: (itemIndex) => pageItems.value[itemIndex]?.regions ?? [],
+  regionsOf: (itemIndex) => pageFaces.value[itemIndex]?.regions ?? [],
   getLastPlacements: () => lastPlacements.value,
   currentStackSides,
   sheetOptions,
@@ -781,17 +870,17 @@ defineExpose({
     </div>
     <div ref="offscreenEl" class="offscreen-pages" aria-hidden="true">
       <div
-        v-for="(item, index) in pageItems"
+        v-for="(face, index) in pageFaces"
         :key="index"
         ref="pageEls"
         class="page-source"
         :style="{
-          width: `${item.spread ? safePageWidth * 2 : safePageWidth}px`,
+          width: `${face.spread ? safePageWidth * 2 : safePageWidth}px`,
           height: `${safePageWidth / safePageAspect}px`,
           background: props.pageBackground,
         }"
       >
-        <VnodeHolder :vnode="item.vnode" />
+        <VnodeHolder :vnode="face.vnode" />
       </div>
     </div>
   </div>

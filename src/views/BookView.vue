@@ -95,11 +95,12 @@ function onZoomChange(level: number) {
 }
 
 // 目录热区：与页面内 .toc-box 的绝对定位百分比一一对应，
-// 点击命中后跳转对应页（region.data 为目标页码）
+// 点击命中后跳转对应页（region.data 为目标页码）。
+// 页码对应新映射：封面纸(0,1)+内容自页 3 起，跨页大图起始页 6、目录页 10
 const tocRegions: PageRegion[] = [
   { x: 0.08, y: 0.66, w: 0.24, h: 0.14, data: 1 },
-  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 5 },
-  { x: 0.68, y: 0.66, w: 0.24, h: 0.14, data: 11 },
+  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 6 },
+  { x: 0.68, y: 0.66, w: 0.24, h: 0.14, data: 10 },
 ]
 
 function onRegionTap(_page: number, region: PageRegion) {
@@ -124,13 +125,19 @@ function onRegionTap(_page: number, region: PageRegion) {
       @zoom-change="onZoomChange"
       @region-tap="onRegionTap"
     >
-      <turn-item>
+      <turn-item cover>
         <div class="demo-page cover">
           <span class="cover-badge">vue-turn</span>
           <h1 class="cover-title">TURN</h1>
           <p class="cover-subtitle">基于 Three.js 的真实卷曲翻页</p>
           <p class="cover-meta">Vue 3 · Three.js · TypeScript</p>
         </div>
+        <template #back>
+          <div class="demo-page endpaper">
+            <span class="endpaper-mark">vue-turn</span>
+            <p class="endpaper-note">翻开封面即见——这一面与封面同属一张专用纸张，按 coverPreset 观感渲染。</p>
+          </div>
+        </template>
       </turn-item>
 
       <turn-item>
@@ -214,8 +221,8 @@ export function curlPoint(s, θ, κ) {
             点击命中区域触发 region-tap 事件完成跳转。试试拖拽页面边缘翻页、悬停页角查看折角提示。
           </p>
           <div class="toc-box">第 1 页 · 封面</div>
-          <div class="toc-box toc-box-mid">第 5 页 · 跨页大图</div>
-          <div class="toc-box toc-box-end">第 11 页 · 目录</div>
+          <div class="toc-box toc-box-mid">第 6 页 · 跨页大图</div>
+          <div class="toc-box toc-box-end">第 10 页 · 目录</div>
         </div>
       </turn-item>
 
@@ -239,11 +246,17 @@ export function curlPoint(s, θ, κ) {
         </div>
       </turn-item>
 
-      <turn-item>
+      <turn-item back-cover>
         <div class="demo-page cover back-cover">
           <h1 class="cover-title small">FIN</h1>
           <p class="cover-subtitle">感谢阅读</p>
         </div>
+        <template #back>
+          <div class="demo-page endpaper">
+            <p class="endpaper-note">封底里——合上书前与最后一页相对的衬页。</p>
+            <span class="endpaper-mark">FIN · vue-turn</span>
+          </div>
+        </template>
       </turn-item>
     </VueTurn>
 
@@ -357,6 +370,34 @@ export function curlPoint(s, θ, κ) {
 .cover-meta {
   font-size: 20px;
   opacity: 0.55;
+  margin: 0;
+}
+
+/* 封面底/封底里：与封面同纸的衬页（#back 插槽），纸色暗于内页、纹理呼应封底 */
+.endpaper {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 28px;
+  background: linear-gradient(160deg, #e9e2d2 0%, #d9cfba 100%);
+}
+
+.endpaper-mark {
+  padding: 6px 18px;
+  border: 1px solid rgba(43, 42, 38, 0.3);
+  border-radius: 999px;
+  font-size: 18px;
+  letter-spacing: 4px;
+  color: #2b2a26;
+  opacity: 0.75;
+}
+
+.endpaper-note {
+  max-width: 30em;
+  font-size: 22px;
+  line-height: 1.9;
+  color: #2b2a26;
+  opacity: 0.65;
   margin: 0;
 }
 

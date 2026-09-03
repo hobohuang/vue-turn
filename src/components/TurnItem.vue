@@ -7,10 +7,15 @@ defineOptions({ name: 'TurnItem' })
 
 // 跨页项：内容横跨整个跨页（双倍宽度光栅化）。
 // 热区：占整页比例的可点击区域，命中后触发 region-tap 事件。
+// 封面/封底：声明该项为封面（首个 item）/封底（末个 item），其纸张
+// 独占一张（背面内容用 #back 插槽声明，未定义则为空白衬页），
+// 并按 coverPreset 观感翻页。
 // 均显式声明为 prop 以阻止 attrs 透传到内容根元素。
 defineProps<{
   spread?: boolean
   regions?: PageRegion[]
+  cover?: boolean
+  backCover?: boolean
 }>()
 </script>
 

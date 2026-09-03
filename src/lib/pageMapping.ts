@@ -1,82 +1,126 @@
 /**
- * 页源映射：把 turn-item 序列映射到页索引空间。
+ * 页源映射：把"面"序列（turn-item 展开后的正/背面）映射到页索引空间。
  *
  * 规则（与真实书籍一致）：
- * - 首个 item 固定为封面，占第 0 页（居中单页），spread 标记不生效
- * - 普通项占 1 页；跨页项占 2 页（左右各半），未对齐到奇数索引时
- *   自动插入空白页补位（跨页必须从奇数索引即左页开始）
- * - 总页数为奇数时补一张空白页保证偶数：末项为跨页时补在书末
- *   （补在跨页前会破坏其奇数起始对齐）；否则补在末项之前，
- *   让用户的封底仍落在最后一个索引（视觉上如真实书籍的衬页），
- *   否则封底合上动画（要求末索引为奇数）退化为常规翻页
- * - 末个 item 视为封底：其占用的所有页标记为 cover（挂封面图层独立光照）
+ * - 封面是一张专用纸张：正面（索引 0）= 标注为 coverFront 的面（未标注时
+ *   兜底提升首个内容面），背面（索引 1）= 标注为 coverBack 的封面底
+ *   （未定义则空白衬页）
+ * - 普通内容从索引 2（右页/阳面）开始占页；跨页项占 2 页（左右各半），
+ *   未对齐到奇数索引时自动插入空白页补位（跨页必须从奇数索引即左页开始）
+ * - 封底同样是一张专用纸张：背面（末索引）= 标注为 backCoverFront 的面
+ *   （未标注时兜底提升末个内容面），正面（末索引-1）= 标注为
+ *   backCoverBack 的封底里（未定义则空白衬页）
+ * - 内页区段计数为奇数时在封底里之前补一张空白页保证总页数为偶数：
+ *   补在内页区段末尾不会破坏跨页的奇数起始对齐，且封底固定占据末索引，
+ *   其合上动画（要求末索引为奇数）不受影响
+ * - 空白衬页与封面/封底同纸，标记 cover（挂封面图层独立光照）
  */
+
+/** 面的标注：由组件层按用户的 cover / backCover 声明与 #back 插槽生成 */
+export type PageFaceKind =
+  | 'content'
+  | 'coverFront'
+  | 'coverBack'
+  | 'backCoverFront'
+  | 'backCoverBack'
 
 /** 页源：页索引空间中一页的内容来源 */
 export interface PageSource {
-  /** 所属 turn-item 索引；-1 为自动补位的空白页 */
+  /** 所属面索引；-1 为自动补位的空白页 */
   itemIndex: number
-  /** 该页取 item 内容的区域：整页 / 跨页左半 / 跨页右半 */
+  /** 该页取面内容的区域：整页 / 跨页左半 / 跨页右半 */
   region: 'full' | 'left' | 'right'
   /** 自动补位的空白页（无内容，光栅化跳过） */
   blank: boolean
-  /** 封面/封底页：按 coverPreset 观感渲染与翻页（挂封面图层独立光照） */
+  /** 封面纸张页（封面/封面底/封底里/封底）：按 coverPreset 观感渲染与翻页 */
   cover: boolean
 }
 
-/** buildPageSources 的输入：页面项的最小结构（spread 是否跨页） */
+/** buildPageSources 的输入：面的最小结构（spread 是否跨页、face 标注） */
 export interface PageItemLike {
   spread: boolean
+  face?: PageFaceKind
+}
+
+function blankSource(cover: boolean): PageSource {
+  return { itemIndex: -1, region: 'full', blank: true, cover }
 }
 
 /**
- * 把 item 序列映射为页源序列。纯函数：相同输入恒产生相同输出，
+ * 把面序列映射为页源序列。纯函数：相同输入恒产生相同输出，
  * 空序列返回空数组（此时组件无书页可渲染）。
+ * face 标注重复时首个生效、其余按内容处理；标注面缺失时按位置约定
+ * 兜底（首面为封面、末面为封底）；仅有一个面时该面同时作封面与封底。
  */
 export function buildPageSources(items: ReadonlyArray<PageItemLike>): PageSource[] {
   const sources: PageSource[] = []
   if (items.length === 0) return sources
-  // 首个 item 视为封面，固定单页居中
-  sources.push({ itemIndex: 0, region: 'full', blank: false, cover: true })
-  let pageIndex = 1
-  for (let itemIndex = 1; itemIndex < items.length; itemIndex++) {
-    const item = items[itemIndex]
-    if (!item) continue
+
+  // 按标注分拣：封面/封底各面（重复标注首个生效，其余视作内容面）
+  let coverFront = -1
+  let coverBack = -1
+  let backCoverFront = -1
+  let backCoverBack = -1
+  const content: number[] = []
+  for (let index = 0; index < items.length; index++) {
+    switch (items[index]!.face) {
+      case 'coverFront':
+        if (coverFront < 0) coverFront = index
+        else content.push(index)
+        break
+      case 'coverBack':
+        if (coverBack < 0) coverBack = index
+        else content.push(index)
+        break
+      case 'backCoverFront':
+        if (backCoverFront < 0) backCoverFront = index
+        else content.push(index)
+        break
+      case 'backCoverBack':
+        if (backCoverBack < 0) backCoverBack = index
+        else content.push(index)
+        break
+      default:
+        content.push(index)
+    }
+  }
+  // 位置约定兜底：未标注封面提升首个内容面，未标注封底提升末个内容面
+  if (coverFront < 0 && content.length > 0) coverFront = content.shift()!
+  if (backCoverFront < 0 && content.length > 0) backCoverFront = content.pop()!
+  // 退化：仅剩封面面（单 item 或只有封面标注）→ 该面同时作封底
+  if (backCoverFront < 0) backCoverFront = coverFront
+
+  // 封面纸张：正面=封面（spread 标记不生效，固定居中单页）
+  sources.push({ itemIndex: coverFront, region: 'full', blank: false, cover: true })
+  sources.push(coverBack >= 0 ? { itemIndex: coverBack, region: 'full', blank: false, cover: true } : blankSource(true))
+
+  // 内页内容：从索引 2（右页）开始；跨页需从奇数索引（左页）开始，
+  // 落在偶数索引时插入空白页补位
+  for (const itemIndex of content) {
+    const item = items[itemIndex]!
     if (item.spread) {
-      // 跨页需从奇数索引（左页）开始；落在偶数索引时插入空白页补位
-      if (pageIndex % 2 === 0) {
-        sources.push({ itemIndex: -1, region: 'full', blank: true, cover: false })
-        pageIndex++
+      if (sources.length % 2 === 0) {
+        sources.push(blankSource(false))
       }
       sources.push({ itemIndex, region: 'left', blank: false, cover: false })
       sources.push({ itemIndex, region: 'right', blank: false, cover: false })
-      pageIndex += 2
     } else {
       sources.push({ itemIndex, region: 'full', blank: false, cover: false })
-      pageIndex++
     }
   }
-  // 总页数为奇数（末页索引为偶数）时补空白页保证偶数
-  if (sources.length >= 3 && sources.length % 2 === 1) {
-    const last = sources[sources.length - 1]!
-    if (last.region === 'right') {
-      sources.push({ itemIndex: -1, region: 'full', blank: true, cover: false })
-    } else {
-      const insertAt = sources.findIndex((s) => s.itemIndex === last.itemIndex)
-      if (insertAt > 0) {
-        sources.splice(insertAt, 0, { itemIndex: -1, region: 'full', blank: true, cover: false })
-      }
-    }
+  // 内页区段计数为奇数（末页索引为偶数）时补空白页保证偶数
+  if (sources.length % 2 === 1) {
+    sources.push(blankSource(false))
   }
-  // 末个 item 视为封底：其占用的所有页标记为 cover
-  const lastItemIndex = items.length - 1
-  for (const source of sources) {
-    if (source.itemIndex === lastItemIndex) source.cover = true
-  }
+
+  // 封底纸张：正面=封底里（未定义则空白衬页），背面=封底
+  sources.push(backCoverBack >= 0 ? { itemIndex: backCoverBack, region: 'full', blank: false, cover: true } : blankSource(true))
+  sources.push({ itemIndex: backCoverFront, region: 'full', blank: false, cover: true })
+
   return sources
 }
 
-/** 封面/封底页索引列表（挂封面图层独立光照用），按页索引升序 */
+/** 封面纸张页索引列表（挂封面图层独立光照用），按页索引升序 */
 export function coverPageIndices(sources: ReadonlyArray<PageSource>): number[] {
   const indices: number[] = []
   for (let i = 0; i < sources.length; i++) {
