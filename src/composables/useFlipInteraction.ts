@@ -4,7 +4,7 @@ import type * as THREE from 'three'
 
 import type { PagePick } from '@/lib/TurnScene'
 import { foldHitFromPick } from '@/lib/foldHit'
-import { pageWidth as pageWidthOf } from '@/lib/flipSpec'
+import { sheetWorldWidth } from '@/lib/flipSpec'
 import { PAGE_HEIGHT } from '@/lib/flipSpec'
 import { pageAtFraction } from '@/lib/pageStack'
 import type { PageSource } from '@/lib/pageMapping'
@@ -308,7 +308,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       pick,
       getLastPlacements(),
       props.forwardDirection ?? 'left',
-      pageWidthOf(safePageAspect),
+      sheetWorldWidth(safePageAspect),
       pageCount.value,
     )
   }
@@ -592,7 +592,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     anchorV: number,
     foldHit?: { cornerV: number; edge: boolean },
   ): DragState | null {
-    const foldW = pageWidthOf(safePageAspect)
+    const foldW = sheetWorldWidth(safePageAspect)
     const takeOverCorner = foldHit ? (foldHit.edge ? foldHit.cornerV : 0) : 0
     // 同方向同角悬停预览的纸张直接接管；其余情况收起后新建折角纸张
     const takeOver = ownership.isPeelMatch(trigger, takeOverCorner)

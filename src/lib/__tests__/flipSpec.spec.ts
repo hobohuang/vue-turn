@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildPageSources } from '@/lib/pageMapping'
-import { computeFlipSpec, mergeSpreadPlacements, PAGE_HEIGHT, pageWidth, spreadLayout } from '@/lib/flipSpec'
+import { computeFlipSpec, mergeSpreadPlacements, PAGE_HEIGHT, sheetWorldWidth, spreadLayout } from '@/lib/flipSpec'
 import type { FlipSpec, StaticPlacement } from '@/types/turn'
 
 const ASPECT = 0.75
@@ -18,9 +18,9 @@ function spec(overrides: Partial<Parameters<typeof computeFlipSpec>[0]>): FlipSp
   })
 }
 
-describe('pageWidth', () => {
+describe('sheetWorldWidth', () => {
   it('derives width from height and aspect', () => {
-    expect(pageWidth(0.75)).toBeCloseTo(PAGE_HEIGHT * 0.75, 10)
+    expect(sheetWorldWidth(0.75)).toBeCloseTo(PAGE_HEIGHT * 0.75, 10)
   })
 })
 
@@ -89,10 +89,10 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 1,
       staticPages: [{ index: 2, slot: 'right' }],
       delta: 1,
-      worldFromX: -pageWidth(ASPECT) / 2,
+      worldFromX: -sheetWorldWidth(ASPECT) / 2,
       worldToX: 0,
-      fromFitWidth: pageWidth(ASPECT),
-      toFitWidth: pageWidth(ASPECT) * 2,
+      fromFitWidth: sheetWorldWidth(ASPECT),
+      toFitWidth: sheetWorldWidth(ASPECT) * 2,
     })
   })
 
@@ -104,10 +104,10 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 1,
       staticPages: [{ index: 2, slot: 'left' }],
       delta: 1,
-      worldFromX: pageWidth(ASPECT) / 2,
+      worldFromX: sheetWorldWidth(ASPECT) / 2,
       worldToX: 0,
-      fromFitWidth: pageWidth(ASPECT),
-      toFitWidth: pageWidth(ASPECT) * 2,
+      fromFitWidth: sheetWorldWidth(ASPECT),
+      toFitWidth: sheetWorldWidth(ASPECT) * 2,
     })
   })
 
@@ -120,9 +120,9 @@ describe('computeFlipSpec in spread mode', () => {
       staticPages: [{ index: 2, slot: 'right' }],
       delta: -1,
       worldFromX: 0,
-      worldToX: -pageWidth(ASPECT) / 2,
-      fromFitWidth: pageWidth(ASPECT) * 2,
-      toFitWidth: pageWidth(ASPECT),
+      worldToX: -sheetWorldWidth(ASPECT) / 2,
+      fromFitWidth: sheetWorldWidth(ASPECT) * 2,
+      toFitWidth: sheetWorldWidth(ASPECT),
     })
   })
 
@@ -135,9 +135,9 @@ describe('computeFlipSpec in spread mode', () => {
       staticPages: [{ index: 2, slot: 'left' }],
       delta: -1,
       worldFromX: 0,
-      worldToX: pageWidth(ASPECT) / 2,
-      fromFitWidth: pageWidth(ASPECT) * 2,
-      toFitWidth: pageWidth(ASPECT),
+      worldToX: sheetWorldWidth(ASPECT) / 2,
+      fromFitWidth: sheetWorldWidth(ASPECT) * 2,
+      toFitWidth: sheetWorldWidth(ASPECT),
     })
   })
 
@@ -150,9 +150,9 @@ describe('computeFlipSpec in spread mode', () => {
       staticPages: [{ index: 7, slot: 'left' }],
       delta: 2,
       worldFromX: 0,
-      worldToX: pageWidth(ASPECT) / 2,
-      fromFitWidth: pageWidth(ASPECT) * 2,
-      toFitWidth: pageWidth(ASPECT),
+      worldToX: sheetWorldWidth(ASPECT) / 2,
+      fromFitWidth: sheetWorldWidth(ASPECT) * 2,
+      toFitWidth: sheetWorldWidth(ASPECT),
     })
   })
 
@@ -164,16 +164,16 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 8,
       staticPages: [{ index: 7, slot: 'left', fromSlot: 'center' }],
       delta: -2,
-      worldFromX: pageWidth(ASPECT) / 2,
+      worldFromX: sheetWorldWidth(ASPECT) / 2,
       worldToX: 0,
-      fromFitWidth: pageWidth(ASPECT),
-      toFitWidth: pageWidth(ASPECT) * 2,
+      fromFitWidth: sheetWorldWidth(ASPECT),
+      toFitWidth: sheetWorldWidth(ASPECT) * 2,
     })
   })
 })
 
 describe('computeFlipSpec in single-page mode', () => {
-  const hinge = pageWidth(ASPECT) / 2
+  const hinge = sheetWorldWidth(ASPECT) / 2
 
   it('flips forward ltr around the left edge', () => {
     expect(spec({ displayedPages: 1 })).toEqual({

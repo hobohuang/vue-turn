@@ -9,7 +9,9 @@ import type {
 
 export const PAGE_HEIGHT = 2
 
-export function pageWidth(pageAspect: number) {
+/** 单页世界宽度（世界单位，页高恒为 PAGE_HEIGHT=2）。
+ * 与组件的 pageWidth prop（离屏光栅化像素宽度）无关，命名已区分 */
+export function sheetWorldWidth(pageAspect: number) {
   return PAGE_HEIGHT * pageAspect
 }
 
@@ -35,7 +37,7 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
   const ltr = forwardDirection === 'left'
   const advancing = !backward
   const geometry: SheetGeometry = advancing === ltr ? 'A' : 'B'
-  const width = pageWidth(pageAspect)
+  const width = sheetWorldWidth(pageAspect)
 
   if (displayedPages === 2) {
     const last = numPages - 1

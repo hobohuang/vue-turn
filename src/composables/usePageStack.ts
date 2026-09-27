@@ -1,7 +1,7 @@
 import { computed, watch } from 'vue'
 import type { Ref } from 'vue'
 
-import { pageWidth } from '@/lib/flipSpec'
+import { sheetWorldWidth } from '@/lib/flipSpec'
 import {
   computeStackSides,
   isCenteredLayout,
@@ -48,13 +48,13 @@ export function usePageStack(options: PageStackOptions) {
       displayedPages: state.displayedPages.value,
       forwardDirection: forwardDirection(),
       numPages: pageCount.value,
-      sheetWidth: pageWidth(safePageAspect),
+      sheetWidth: sheetWorldWidth(safePageAspect),
     })
   }
 
   // 某页状态下的纸叠渲染几何
   function stackVisualFor(pageIndex: number): StackVisual {
-    const width = pageWidth(safePageAspect)
+    const width = sheetWorldWidth(safePageAspect)
     const sides = stackSidesFor(pageIndex)
     const maxDepth = width * STACK_DEPTH
     // 合页（居中单页）状态书页全部压紧叠放，条带按压实系数收窄；

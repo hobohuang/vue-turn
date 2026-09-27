@@ -180,7 +180,8 @@ const safePageAspect = Number.isFinite(props.pageAspect) && props.pageAspect > 0
 
 // 数值 prop 校验：非法值（NaN/非有限/非正）回退默认值（lib/math 共享实现）
 const safeFlipDuration = computed(() => positive(props.flipDuration, 900))
-const safePageWidth = computed(() => positive(props.pageWidth, 768))
+// 下限 64：过小值会产生无意义的微纹理（整页糊成一色），防御数量级异常
+const safePageWidth = computed(() => Math.max(64, positive(props.pageWidth, 768)))
 const safePixelRatio = computed(() => positive(props.pixelRatio, 1))
 const safePrefetchWindow = computed(() =>
   Number.isFinite(props.prefetchWindow) && props.prefetchWindow >= 0

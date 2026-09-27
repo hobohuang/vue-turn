@@ -4,7 +4,7 @@ import { defineComponent, h, reactive, ref } from 'vue'
 
 import TurnItem from '@/components/TurnItem.vue'
 import VueTurn from '@/components/VueTurn.vue'
-import { pageWidth } from '@/lib/flipSpec'
+import { sheetWorldWidth } from '@/lib/flipSpec'
 import type { FlipSheetOptions, FlipSpec, LookOptions, TurnInstance, TurnPreset } from '@/types/turn'
 
 // README「观感预设」与「封面与封底」两节的逐条对账：
@@ -241,12 +241,12 @@ describe('README：观感预设（preset）档位值', () => {
   it('look.bend 任何档位可设：折页动画收到 bend × 单页世界宽度', async () => {
     stubFoldFlipCommitting()
     const host = await mountBook({ preset: 'custom', look: { bend: 0.1 }, pageAspect: 0.75 })
-    expect(flipInnerOnce(host.inst).bendWorld).toBeCloseTo(0.1 * pageWidth(0.75), 6)
+    expect(flipInnerOnce(host.inst).bendWorld).toBeCloseTo(0.1 * sheetWorldWidth(0.75), 6)
 
     stubFoldFlipCommitting()
     const soft = await mountBook({ preset: 'soft', pageAspect: 0.75 })
     // 未传 look.bend 回退 soft 基线 0.04
-    expect(flipInnerOnce(soft.inst).bendWorld).toBeCloseTo(0.04 * pageWidth(0.75), 6)
+    expect(flipInnerOnce(soft.inst).bendWorld).toBeCloseTo(0.04 * sheetWorldWidth(0.75), 6)
   })
 
   it('非法 preset → 回退 soft 并 console.warn', async () => {
@@ -332,13 +332,13 @@ describe('README：封面与封底（coverPreset）', () => {
     const soft = await mountBook({ coverPreset: 'soft' })
     flipOnce(soft.inst)
     expect(mocks.startFoldFlip).toHaveBeenCalledTimes(1)
-    expect(mocks.startFoldFlip.mock.calls[0]?.[6]).toBeCloseTo(0.04 * pageWidth(0.75), 6)
+    expect(mocks.startFoldFlip.mock.calls[0]?.[6]).toBeCloseTo(0.04 * sheetWorldWidth(0.75), 6)
 
     stubFoldFlipCommitting()
     // coverLook.bend 独立覆盖封面折缝
     const bent = await mountBook({ coverPreset: 'soft', coverLook: { bend: 0.12 } })
     flipOnce(bent.inst)
-    expect(mocks.startFoldFlip.mock.calls[0]?.[6]).toBeCloseTo(0.12 * pageWidth(0.75), 6)
+    expect(mocks.startFoldFlip.mock.calls[0]?.[6]).toBeCloseTo(0.12 * sheetWorldWidth(0.75), 6)
   })
 
   it('非法 coverPreset → 回退 soft 并 console.warn', async () => {

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 
 import { CameraRig } from '@/lib/CameraRig'
 import { StackRenderer } from '@/lib/StackRenderer'
-import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
+import { PAGE_HEIGHT, sheetWorldWidth } from '@/lib/flipSpec'
 import { clamp, positive } from '@/lib/math'
 import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from '@/lib/pageFold'
 import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
@@ -229,7 +229,7 @@ export class TurnScene {
     // 会让卷曲形变整页塌缩到书脊
     this.nPolygons = Math.max(2, Math.round(positive(options.nPolygons ?? 64, 64)))
     this.curl = options.curl ?? 0.8
-    this.sheetWidth = pageWidth(this.pageAspect)
+    this.sheetWidth = sheetWorldWidth(this.pageAspect)
     this.pageFitWidth = this.sheetWidth * 2
     this.targetFitWidth = this.sheetWidth * 2
 

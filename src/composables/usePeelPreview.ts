@@ -2,7 +2,7 @@ import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
 import type { PagePick } from '@/lib/TurnScene'
-import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
+import { PAGE_HEIGHT, sheetWorldWidth } from '@/lib/flipSpec'
 import { FOLD_ZONE, foldStripFromPick } from '@/lib/foldHit'
 import type {
   FlipDirection,
@@ -159,7 +159,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     // 命中同心同半径）；折点跟随指针，与折角拖拽同一入口
     const peel = ownership.peel
     if (ownership.owner === 'peel' && peel?.isFold) {
-      const radius = FOLD_ZONE * pageWidth(safePageAspect)
+      const radius = FOLD_ZONE * sheetWorldWidth(safePageAspect)
       const dist = renderer.foldAnchorDistanceFromClient(event.clientX, event.clientY)
       if (dist !== null && dist <= radius) {
         renderer.setFoldDragFromClient(event.clientX, event.clientY)
@@ -193,7 +193,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
             pick,
             getLastPlacements(),
             forwardDirection(),
-            pageWidth(safePageAspect),
+            sheetWorldWidth(safePageAspect),
             pageCount.value,
           )
         : null
@@ -225,7 +225,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     releasePeelNow()
     const spec = computeFlipSpecFor(trigger)
     if (!spec) return
-    const w = pageWidth(safePageAspect)
+    const w = sheetWorldWidth(safePageAspect)
     // 与真实拖拽一致：先重设翻开前置布局再建纸张，折角下方露出的才是
     // 下一页而非当前页；世界偏移由 beginFoldDrag 统一叠加。收起时经
     // makeSheetDone 的 renderStatic 恢复空闲布局
