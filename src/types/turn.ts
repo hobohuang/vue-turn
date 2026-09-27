@@ -8,6 +8,11 @@ export type ZoomMode = 'off' | 'wheel' | 'dblclick' | 'both'
 // 显示模式：auto 按容器宽高自动判定，1/2 强制单/双页
 export type DisplayMode = 'auto' | 1 | 2
 
+// 键盘翻页模式：off 关闭、focus 聚焦视口后响应（默认）、global 追加
+// document 级兜底（焦点不在组件内也响应，会劫持宿主页面的方向键/空格）
+export type KeyboardMode = 'off' | 'focus' | 'global'
+
+
 // 观感预设：纸张类型。为专业渲染参数提供成组基线，look/coverLook 可逐项覆盖
 // - soft 普通纸张（默认）：哑光、可卷曲、支持角点折角
 // - hard 纸板：刚体旋转、强光泽、关闭折角

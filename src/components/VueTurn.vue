@@ -46,6 +46,7 @@ import type {
   FlipDirection,
   FlipSheetOptions,
   FlipSpec,
+  KeyboardMode,
   LookOptions,
   PageRegion,
   SheetFoldOptions,
@@ -87,12 +88,11 @@ const props = withDefaults(
     clickToFlip?: boolean
     /** 点击翻页中间死区宽度占比（0~0.5）：视口中轴该比例区域内的点击不翻页 */
     clickDeadZone?: number
-    /** 是否允许键盘翻页（方向键/PageUp/PageDown/Space/Home/End，需先聚焦组件） */
-    keyboard?: boolean
-    /** 全局键盘兜底：焦点不在组件内（如点击了外部工具栏）时也响应翻页键。
-     *  开启后会在 document 级拦截方向键/空格等按键（影响宿主页面滚动），
-     *  多实例时仅最近交互的实例响应；默认关闭，仅在确有需求时开启 */
-    globalKeyboard?: boolean
+    /** 键盘翻页模式：off 关闭、focus 聚焦视口后响应方向键/PageUp/PageDown/Space/Home/End（默认）、
+     *  global 追加 document 级兜底——焦点不在组件内（如点击了外部工具栏按钮）时也响应，
+     *  会在 document 级拦截方向键/空格等按键（影响宿主页面滚动），多实例时仅最近交互的实例响应；
+     *  按钮/链接/输入框等可交互元素内的按键不劫持，仅在确有需求时开启 */
+    keyboard?: KeyboardMode
     /** 无障碍标签 */
     ariaLabel?: string
     /** 光栅化时是否给图片加破缓存参数 */
@@ -126,8 +126,7 @@ const props = withDefaults(
     pageBackground: '#ffffff',
     clickToFlip: true,
     clickDeadZone: 0,
-    keyboard: true,
-    globalKeyboard: false,
+    keyboard: 'focus',
     ariaLabel: '翻书',
     cacheBust: true,
     prefetchWindow: 4,
@@ -753,7 +752,7 @@ defineExpose({
       class="viewport"
       role="group"
       :aria-label="ariaLabel"
-      :tabindex="keyboard ? 0 : undefined"
+      :tabindex="keyboard !== 'off' ? 0 : undefined"
       @click="onViewportClick"
       @dblclick="onDblClick"
       @wheel="onWheel"

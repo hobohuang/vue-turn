@@ -13,6 +13,7 @@ import type {
   FlipDirection,
   FlipSheetOptions,
   FlipSpec,
+  KeyboardMode,
   PageRegion,
   SheetFoldOptions,
   StaticPlacement,
@@ -44,9 +45,8 @@ const DRAG_MIN_MOVED_PX = 6
 
 /** 交互层关注的 props 子集（值由编排层传入，保持响应式） */
 export interface FlipInteractionProps {
-  keyboard?: boolean
-  /** document 级键盘兜底总开关（默认关闭，见 useKeyboardNav） */
-  globalKeyboard?: boolean
+  /** 键盘翻页模式（'off' | 'focus' | 'global'，见 useKeyboardNav） */
+  keyboard?: KeyboardMode
   clickToFlip?: boolean
   clickDeadZone?: number
   /** 缩放手势模式（'off' | 'wheel' | 'dblclick' | 'both'） */
@@ -212,9 +212,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   // ---------------------------------------------------------------------------
 
   const { onKeydown, claimKeyboardOwnership } = useKeyboardNav({
-    keyboardEnabled: () => props.keyboard === true,
+    keyboardEnabled: () => props.keyboard !== 'off',
     isDisabled,
-    docKeyboardEnabled: () => props.globalKeyboard === true,
+    docKeyboardEnabled: () => props.keyboard === 'global',
     forwardDirection: () => props.forwardDirection ?? 'left',
     rootEl,
     instanceToken,
