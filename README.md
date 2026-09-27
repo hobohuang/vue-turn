@@ -40,45 +40,45 @@ const page = ref(1)
 
 ## Props
 
-| Prop | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `modelValue` | `number` | - | 当前页码（从 1 开始），支持 v-model |
-| `preset` | `'soft' \| 'hard' \| 'custom'` | `'soft'` | 内页纸张类型：soft 普通纸张哑光（可卷曲/折角）、hard 纸板刚体强光泽、custom 自定义；为专业参数提供成组基线，`look` 可逐项覆盖（详见下文「观感预设」） |
-| `coverPreset` | `'soft' \| 'hard' \| 'custom'` | `'hard'` | 封面/封底纸张类型：控制封面纸张的卷曲、折页/折角开关与折缝、网格密度与光影（独立灯光组照亮）；`coverLook` 可逐项覆盖（详见下文「封面与封底」） |
-| `look` | `LookOptions` | - | 内页观感与折页参数，逐项覆盖 `preset` 基线：`nPolygons`（网格分段，回退 64）、`perspective`（透视参考距离，回退 2400，**全局相机参数**）、`ambient`（环境光，回退 1）、`gloss`（方向光，回退 0.15）、`curl`（卷曲幅度，0 为刚体，回退 0.8）、`fold`（折页变形开关，soft 开 / hard 关）、`bend`（折缝圆角占页宽比例，回退 0.04）。挂载时冻结 |
-| `coverLook` | `LookOptions` | - | 封面/封底观感与折页参数，逐项覆盖 `coverPreset` 基线，未传项回退 `look`（`perspective` 为全局参数在此无效）。挂载时冻结 |
-| `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），非法值（NaN/零/负数）回退 0.75；常见图书尺寸参考下文「常见图书宽高比」 |
-| `flipDuration` | `number` | `900` | 翻页动画时长（毫秒） |
-| `forwardDirection` | `'left' \| 'right'` | `'left'` | 阅读方向（决定往哪边翻算下一页）：`'left'` 左翻书（页码自左向右递增），`'right'` 右翻书（整体镜像）；运行时可改，详见下文「阅读方向」 |
-| `displayedPages` | `'auto' \| 1 \| 2` | `'auto'` | 一次摊开显示几页：`auto` 按容器宽高判定（宽 > 高取 2），`1`/`2` 为强制值；双页以跨页为单位翻页（页码 ±2），单页逐页翻（±1），详见下文「显示模式」 |
-| `pageWidth` | `number` | `768` | 离屏光栅化宽度（像素） |
-| `pixelRatio` | `number` | `1` | 纹理采样倍率（1~2 足够，见下文「分辨率与取景」） |
-| `pageBackground` | `string` | `'#ffffff'` | 页面底色 |
-| `fitMargin` | `number` | `1.12` | 相机适配边距（视口外扩比例） |
-| `clickToFlip` | `boolean` | `true` | 点击视口翻页（跟随阅读方向：LTR 右半前进、左半后退；RTL 相反） |
-| `clickDeadZone` | `number` | `0` | 点击翻页中间死区宽度占比（0~0.5）：视口中轴该比例区域内的点击不翻页 |
-| `keyboard` | `boolean` | `true` | 键盘翻页：方向键 / PageUp / PageDown / Space / Home / End（方向键跟随阅读方向）。**需先聚焦组件**（点击书页或 Tab 聚焦视口） |
-| `globalKeyboard` | `boolean` | `false` | 全局键盘兜底：焦点不在组件内（如点击了外部工具栏按钮）时也响应翻页键。开启后会在 document 级拦截方向键/空格等按键（影响宿主页面的键盘滚动），按钮/链接/输入框等可交互元素内的按键不劫持；多实例时仅最近交互过的实例响应。仅在确有需求时开启 |
-| `ariaLabel` | `string` | `'翻书'` | 视口无障碍标签 |
-| `cacheBust` | `boolean` | `true` | 手动重绘（`refresh`/`refreshPage`）时是否给图片加破缓存参数，避免拿到旧图；懒光栅化与 DOM 变化触发的自动光栅化不破缓存（详见下文「cacheBust 使用场景」） |
-| `prefetchWindow` | `number` | `4` | 懒光栅化预取窗口：当前可见页前后各 N 页预生成纹理，窗口外释放（设为 0 关闭懒加载，全量光栅化） |
-| `resourceTimeout` | `number` | `5000` | 光栅化前资源等待超时（毫秒）：等待 `<img>`、CSS background-image、文档字体；超时后放弃等待直接光栅化 |
-| `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
-| `peel` | `boolean` | `false` | 悬停预览总开关：开启后显示悬停预览——`fold` 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷（详见下文「拖拽翻页与折角交互」） |
-| `fold` / `bend` | - | 见 `look` | 已并入 `look` / `coverLook` 对象参数（折页变形开关与折缝圆角，语义不变，任何档位均可覆盖） |
-| `maxZoom` | `number` | `3` | 最大缩放倍数（响应式：运行中修改即生效，当前级别超出新上限时立即收敛） |
-| `zoomMode` | `'off' \| 'wheel' \| 'dblclick' \| 'both'` | `'off'` | 允许哪些**手势**触发缩放：`wheel` 滚轮按指数步进调级别、`dblclick` 双击在 1 倍与 `maxZoom` 间切换（含 `dblclick` 时单击翻页会延迟约 260ms 以区分双击）、`both` 两种都要、`off` 关闭。实例方法 `zoomIn`/`setZoom` 等不受此开关限制 |
-| `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
+| # | Prop | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| 1 | `modelValue` | `number` | - | 当前页码（从 1 开始），支持 v-model |
+| 2 | `preset` | `'soft' \| 'hard' \| 'custom'` | `'soft'` | 内页纸张类型：soft 普通纸张哑光（可卷曲/折角）、hard 纸板刚体强光泽、custom 自定义；为专业参数提供成组基线，`look` 可逐项覆盖（详见下文「观感预设」） |
+| 3 | `coverPreset` | `'soft' \| 'hard' \| 'custom'` | `'hard'` | 封面/封底纸张类型：控制封面纸张的卷曲、折页/折角开关与折缝、网格密度与光影（独立灯光组照亮）；`coverLook` 可逐项覆盖（详见下文「封面与封底」） |
+| 4 | `look` | `LookOptions` | - | 内页观感与折页参数，逐项覆盖 `preset` 基线：`nPolygons`（网格分段，回退 64）、`perspective`（透视参考距离，回退 2400，**全局相机参数**）、`ambient`（环境光，回退 1）、`gloss`（方向光，回退 0.15）、`curl`（卷曲幅度，0 为刚体，回退 0.8）、`fold`（折页变形开关，soft 开 / hard 关）、`bend`（折缝圆角占页宽比例，回退 0.04）。挂载时冻结 |
+| 5 | `coverLook` | `LookOptions` | - | 封面/封底观感与折页参数，逐项覆盖 `coverPreset` 基线，未传项回退 `look`（`perspective` 为全局参数在此无效）。挂载时冻结 |
+| 6 | `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），非法值（NaN/零/负数）回退 0.75；常见图书尺寸参考下文「常见图书宽高比」 |
+| 7 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒） |
+| 8 | `forwardDirection` | `'left' \| 'right'` | `'left'` | 阅读方向（决定往哪边翻算下一页）：`'left'` 左翻书（页码自左向右递增），`'right'` 右翻书（整体镜像）；运行时可改，详见下文「阅读方向」 |
+| 9 | `displayedPages` | `'auto' \| 1 \| 2` | `'auto'` | 一次摊开显示几页：`auto` 按容器宽高判定（宽 > 高取 2），`1`/`2` 为强制值；双页以跨页为单位翻页（页码 ±2），单页逐页翻（±1），详见下文「显示模式」 |
+| 10 | `pageWidth` | `number` | `768` | 离屏光栅化宽度（像素） |
+| 11 | `pixelRatio` | `number` | `1` | 纹理采样倍率（1~2 足够，见下文「分辨率与取景」） |
+| 12 | `pageBackground` | `string` | `'#ffffff'` | 页面底色 |
+| 13 | `fitMargin` | `number` | `1.12` | 相机适配边距（视口外扩比例） |
+| 14 | `clickToFlip` | `boolean` | `true` | 点击视口翻页（跟随阅读方向：LTR 右半前进、左半后退；RTL 相反） |
+| 15 | `clickDeadZone` | `number` | `0` | 点击翻页中间死区宽度占比（0~0.5）：视口中轴该比例区域内的点击不翻页 |
+| 16 | `keyboard` | `boolean` | `true` | 键盘翻页：方向键 / PageUp / PageDown / Space / Home / End（方向键跟随阅读方向）。**需先聚焦组件**（点击书页或 Tab 聚焦视口） |
+| 17 | `globalKeyboard` | `boolean` | `false` | 全局键盘兜底：焦点不在组件内（如点击了外部工具栏按钮）时也响应翻页键。开启后会在 document 级拦截方向键/空格等按键（影响宿主页面的键盘滚动），按钮/链接/输入框等可交互元素内的按键不劫持；多实例时仅最近交互过的实例响应。仅在确有需求时开启 |
+| 18 | `ariaLabel` | `string` | `'翻书'` | 视口无障碍标签 |
+| 19 | `cacheBust` | `boolean` | `true` | 手动重绘（`refresh`/`refreshPage`）时是否给图片加破缓存参数，避免拿到旧图；懒光栅化与 DOM 变化触发的自动光栅化不破缓存（详见下文「cacheBust 使用场景」） |
+| 20 | `prefetchWindow` | `number` | `4` | 懒光栅化预取窗口：当前可见页前后各 N 页预生成纹理，窗口外释放（设为 0 关闭懒加载，全量光栅化） |
+| 21 | `resourceTimeout` | `number` | `5000` | 光栅化前资源等待超时（毫秒）：等待 `<img>`、CSS background-image、文档字体；超时后放弃等待直接光栅化 |
+| 22 | `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
+| 23 | `peel` | `boolean` | `false` | 悬停预览总开关：开启后显示悬停预览——`fold` 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷（详见下文「拖拽翻页与折角交互」） |
+| 24 | `fold` / `bend` | - | 见 `look` | 已并入 `look` / `coverLook` 对象参数（折页变形开关与折缝圆角，语义不变，任何档位均可覆盖） |
+| 25 | `maxZoom` | `number` | `3` | 最大缩放倍数（响应式：运行中修改即生效，当前级别超出新上限时立即收敛） |
+| 26 | `zoomMode` | `'off' \| 'wheel' \| 'dblclick' \| 'both'` | `'off'` | 允许哪些**手势**触发缩放：`wheel` 滚轮按指数步进调级别、`dblclick` 双击在 1 倍与 `maxZoom` 间切换（含 `dblclick` 时单击翻页会延迟约 260ms 以区分双击）、`both` 两种都要、`off` 关闭。实例方法 `zoomIn`/`setZoom` 等不受此开关限制 |
+| 27 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
 
 ### 观感预设（preset）
 
 `nPolygons` / `perspective` / `ambient` / `gloss` / `curl` 五个渲染参数较为专业，`preset`（纸张类型）为它们提供成组基线，`look`（内页）/ `coverLook`（封面/封底）对象参数可逐项覆盖。预设同时给出折角（`fold`）开关与折缝圆角（`bend`，折缝圆弧弧长占页宽比例，越大折缝越圆润柔软）的基线：
 
-| 预设 | 定位 | nPolygons | perspective | ambient | gloss | curl | fold / bend |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `soft`（默认） | 普通纸张：哑光（弱方向光）、自然卷曲，支持折角拖拽 | 64 | 2400 | 1 | 0.15 | 0.8 | 开 / 0.04 |
-| `hard` | 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角；适合封面/封底（`coverPreset` 默认）或整本纸板书 | 32 | 2400 | 1 | 0.8 | 0 | 关 / - |
-| `custom` | 自定义声明：基线与 soft 一致，配合 `look` 完全自定义 | 64 | 2400 | 1 | 0.15 | 0.8 | 开 / 0.04 |
+| # | 预设 | 定位 | nPolygons | perspective | ambient | gloss | curl | fold / bend |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `soft`（默认） | 普通纸张：哑光（弱方向光）、自然卷曲，支持折角拖拽 | 64 | 2400 | 1 | 0.15 | 0.8 | 开 / 0.04 |
+| 2 | `hard` | 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角；适合封面/封底（`coverPreset` 默认）或整本纸板书 | 32 | 2400 | 1 | 0.8 | 0 | 关 / - |
+| 3 | `custom` | 自定义声明：基线与 soft 一致，配合 `look` 完全自定义 | 64 | 2400 | 1 | 0.15 | 0.8 | 开 / 0.04 |
 
 优先级语义：**preset 提供基线，`look` 逐项覆盖、对任何档位生效，未传项回退基线**。例如 `preset="hard" :look="{ curl: 0.6 }"` 在纸板刚体基线上单独打开卷曲；`:look="{ fold: false }"` 可在 soft 档关闭折角。未传 preset 时按 soft 档处理；非法 preset 值回退 soft 并 `console.warn`。
 
@@ -90,16 +90,16 @@ const page = ref(1)
 
 `pageAspect` 为单页宽/高（注意是宽除以高，不是开本习惯的高除以宽）。常见成品书的参考值：
 
-| 书籍类型 | 开本尺寸 | 宽高比（宽/高） |
-| --- | --- | --- |
-| 32 开口袋书（文学小说） | 130 × 184 mm | `0.71` |
-| 大众 16 开（畅销书/教材） | 185 × 260 mm | `0.71` |
-| B5（技术书/经管书） | 170 × 240 mm | `0.71` |
-| 标准 A4（杂志/画册） | 210 × 297 mm | `0.71` |
-| 24 开（绘本/图文书） | 150 × 210 mm | `0.71` |
-| 16 开方形画册 | 210 × 210 mm | `1.0` |
-| 6:9 现代小说（西方平装） | 152 × 229 mm | `0.66` |
-| 横版儿童绘本 | 260 × 210 mm | `1.24` |
+| # | 书籍类型 | 开本尺寸 | 宽高比（宽/高） |
+| --- | --- | --- | --- |
+| 1 | 32 开口袋书（文学小说） | 130 × 184 mm | `0.71` |
+| 2 | 大众 16 开（畅销书/教材） | 185 × 260 mm | `0.71` |
+| 3 | B5（技术书/经管书） | 170 × 240 mm | `0.71` |
+| 4 | 标准 A4（杂志/画册） | 210 × 297 mm | `0.71` |
+| 5 | 24 开（绘本/图文书） | 150 × 210 mm | `0.71` |
+| 6 | 16 开方形画册 | 210 × 210 mm | `1.0` |
+| 7 | 6:9 现代小说（西方平装） | 152 × 229 mm | `0.66` |
+| 8 | 横版儿童绘本 | 260 × 210 mm | `1.24` |
 
 实际取值以你的设计稿单页尺寸为准（跨页项按双倍宽度光栅化，`pageAspect` 仍按单页传）；多数大众图书集中在 `0.66 ~ 0.75`，这也是组件默认 `0.75` 的由来。
 
@@ -107,11 +107,11 @@ const page = ref(1)
 
 决定书本摊开时显示一页还是两页：
 
-| 取值 | 含义 |
-| --- | --- |
-| `'auto'`（默认） | 按容器形状判定：宽 > 高取 `2`，否则取 `1`（容器 resize 会重新判定） |
-| `1` | 强制单页：始终只显示一张页并居中 |
-| `2` | 强制双页：左右两页摊开成跨页 |
+| # | 取值 | 含义 |
+| --- | --- | --- |
+| 1 | `'auto'`（默认） | 按容器形状判定：宽 > 高取 `2`，否则取 `1`（容器 resize 会重新判定） |
+| 2 | `1` | 强制单页：始终只显示一张页并居中 |
+| 3 | `2` | 强制双页：左右两页摊开成跨页 |
 
 两种模式的行为差别（`lib/flipSpec.ts`）：
 
@@ -131,14 +131,14 @@ const page = ref(1)
 
 决定"往哪边翻算下一页"，也就是这本书是左翻还是右翻。值本身就是 `next()` 触发的翻页动作方向：`'left'` 为"向左翻即前进"（现代横排书、西文），`'right'` 为"向右翻即前进"（阿拉伯文、古籍右翻本）。
 
-| 表现 | `'left'`（默认） | `'right'` |
-| --- | --- | --- |
-| 跨页两侧页码 | 左页小、右页大（第 2 页在左，第 3 页在右） | 左页大、右页小 |
-| 点击视口 | 点右半前进、左半后退 | 点左半前进、右半后退 |
-| 拖拽起手半区 | 右半向前拖 | 左半向前拖 |
-| 方向键 | `→` 前进、`←` 后退 | `←` 前进、`→` 后退 |
-| 纸叠（`stack`） | 已读页堆在左侧、未读在右侧 | 两侧互换 |
-| 翻页纸张铰点/书体平移 | 按左翻几何 | 整体镜像 |
+| # | 表现 | `'left'`（默认） | `'right'` |
+| --- | --- | --- | --- |
+| 1 | 跨页两侧页码 | 左页小、右页大（第 2 页在左，第 3 页在右） | 左页大、右页小 |
+| 2 | 点击视口 | 点右半前进、左半后退 | 点左半前进、右半后退 |
+| 3 | 拖拽起手半区 | 右半向前拖 | 左半向前拖 |
+| 4 | 方向键 | `→` 前进、`←` 后退 | `←` 前进、`→` 后退 |
+| 5 | 纸叠（`stack`） | 已读页堆在左侧、未读在右侧 | 两侧互换 |
+| 6 | 翻页纸张铰点/书体平移 | 按左翻几何 | 整体镜像 |
 
 要点：
 
@@ -151,11 +151,11 @@ const page = ref(1)
 
 三个"装机调优"旋钮各管一段管线，别混用：
 
-| Prop | 管什么 | 什么时候动它 |
-| --- | --- | --- |
-| `pageWidth` | 离屏设计画布宽度（像素）。页面内容里的 `px` 尺寸都是相对它排的 | 只有当你按别宽度的设计稿做内容时才改（默认 768 对应常见竖版页）；改了要同步调整内容里的 px 值 |
-| `pixelRatio` | 纹理采样倍率：**不改排版**，只把同一张离屏 DOM 按 N 倍分辨率光栅化 | 文字/线条发糊时优先调它（2 足够；显存与耗时按平方增长） |
-| `fitMargin` | 相机取景外扩比例，书本四周留白 | 书显得太小/太挤时微调（1.0 贴边，越大越空） |
+| # | Prop | 管什么 | 什么时候动它 |
+| --- | --- | --- | --- |
+| 1 | `pageWidth` | 离屏设计画布宽度（像素）。页面内容里的 `px` 尺寸都是相对它排的 | 只有当你按别宽度的设计稿做内容时才改（默认 768 对应常见竖版页）；改了要同步调整内容里的 px 值 |
+| 2 | `pixelRatio` | 纹理采样倍率：**不改排版**，只把同一张离屏 DOM 按 N 倍分辨率光栅化 | 文字/线条发糊时优先调它（2 足够；显存与耗时按平方增长） |
+| 3 | `fitMargin` | 相机取景外扩比例，书本四周留白 | 书显得太小/太挤时微调（1.0 贴边，越大越空） |
 
 生效时机：`fitMargin` 与观感参数一样在挂载时读取一次，运行中改不热更新；`pageWidth`/`pixelRatio` 会即时改变离屏画布尺寸，但已生成的纹理要等下一次光栅化（翻页进入新窗口、页内容变化、或手动 `refresh()`）才按新值重画。
 
@@ -174,23 +174,23 @@ const page = ref(1)
 
 ## Events
 
-| 事件 | 参数 | 说明 |
-| --- | --- | --- |
-| `update:modelValue` | `page: number` | 页码变化（v-model） |
-| `change` | `page: number` | 页码变化（翻页与跳转均触发） |
-| `flip-start` | `direction: 'left' \| 'right'` | 翻页开始（含拖拽翻页按下） |
-| `flip-end` | `direction: 'left' \| 'right'` | 翻页结束（拖拽回弹取消也会触发，页码不变） |
-| `before-flip` | `context: BeforeFlipContext` | 翻页/跳转前拦截：`context` 含 `from`/`to`/`direction`（直接跳转为 `null`），调用 `context.preventDefault()` 取消本次导航；外部修改 `v-model` 同样受拦截，取消时页码回写为当前页 |
-| `first` | - | 翻到第一页（挂载初始页不触发） |
-| `last` | - | 翻到最后一页（挂载初始页不触发） |
-| `pressed` | `point: { x, y }` | 拖拽翻页按下（视口内坐标） |
-| `released` | `point: { x, y }` | 拖拽翻页松开（视口内坐标） |
-| `zoom-change` | `level: number` | 缩放级别变化（1 为未缩放） |
-| `region-tap` | `page: number, region: PageRegion` | 点击命中页面热区（`page` 从 1 开始；命中热区不触发翻页） |
-| `ready` | - | 首次纹理就绪 |
-| `rasterize-error` | `page: number, error: unknown` | 单页光栅化失败（页码从 1 开始）；失败页不影响其他页 |
-| `stack-hover` | `page: number \| null, point?: { x, y }` | 悬停纸叠层（`page` 从 1 开始，`null` 表示离开）；仅在命中页变化时触发，`point` 为视口内坐标 |
-| `stack-tap` | `page: number` | 点击纸叠层跳转（跳转自动对齐到所属跨页，`page` 从 1 开始） |
+| # | 事件 | 参数 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `update:modelValue` | `page: number` | 页码变化（v-model） |
+| 2 | `change` | `page: number` | 页码变化（翻页与跳转均触发） |
+| 3 | `flip-start` | `direction: 'left' \| 'right'` | 翻页开始（含拖拽翻页按下） |
+| 4 | `flip-end` | `direction: 'left' \| 'right'` | 翻页结束（拖拽回弹取消也会触发，页码不变） |
+| 5 | `before-flip` | `context: BeforeFlipContext` | 翻页/跳转前拦截：`context` 含 `from`/`to`/`direction`（直接跳转为 `null`），调用 `context.preventDefault()` 取消本次导航；外部修改 `v-model` 同样受拦截，取消时页码回写为当前页 |
+| 6 | `first` | - | 翻到第一页（挂载初始页不触发） |
+| 7 | `last` | - | 翻到最后一页（挂载初始页不触发） |
+| 8 | `pressed` | `point: { x, y }` | 拖拽翻页按下（视口内坐标） |
+| 9 | `released` | `point: { x, y }` | 拖拽翻页松开（视口内坐标） |
+| 10 | `zoom-change` | `level: number` | 缩放级别变化（1 为未缩放） |
+| 11 | `region-tap` | `page: number, region: PageRegion` | 点击命中页面热区（`page` 从 1 开始；命中热区不触发翻页） |
+| 12 | `ready` | - | 首次纹理就绪 |
+| 13 | `rasterize-error` | `page: number, error: unknown` | 单页光栅化失败（页码从 1 开始）；失败页不影响其他页 |
+| 14 | `stack-hover` | `page: number \| null, point?: { x, y }` | 悬停纸叠层（`page` 从 1 开始，`null` 表示离开）；仅在命中页变化时触发，`point` 为视口内坐标 |
+| 15 | `stack-tap` | `page: number` | 点击纸叠层跳转（跳转自动对齐到所属跨页，`page` 从 1 开始） |
 
 ## 插槽
 
@@ -338,29 +338,29 @@ function onRegionTap(_page: number, region: PageRegion) {
 
 通过模板引用调用：
 
-| 方法/属性 | 签名 | 说明 |
-| --- | --- | --- |
-| `flipLeft` | `() => void` | 向左翻页 |
-| `flipRight` | `() => void` | 向右翻页 |
-| `next` | `() => void` | 前进一页 |
-| `prev` | `() => void` | 后退一页 |
-| `goToPage` | `(page: number) => boolean` | 跳转到指定页（从 1 开始）；翻页中或页码越界时拒绝并返回 `false`（受 `before-flip` 拦截时同样返回 `false`） |
-| `stop` | `() => void` | 中断当前翻页并立即收尾：翻页动画按终点提交，拖拽按最近端点完成或取消 |
-| `disable` | `(disabled?: boolean) => void` | 禁用（不传参默认 `true`）/启用翻页与所有交互 |
-| `refresh` | `() => Promise<void>` | 重绘全部页面纹理 |
-| `refreshPage` | `(page: number) => Promise<void>` | 重绘指定页纹理（页码从 1 开始） |
-| `zoomIn` | `() => void` | 放大到最大倍数 |
-| `zoomOut` | `() => void` | 复位到 1 倍 |
-| `toggleZoom` | `() => void` | 在 1 倍与最大倍数间切换 |
-| `setZoom` | `(level: number) => void` | 设置缩放级别（钳制到 `[1, maxZoom]`） |
-| `state` | `TurnState`（只读响应式） | 响应式状态快照：`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`。在模板或 computed 中读取自动跟踪更新（推荐用此而非下方逐个只读属性） |
-| `page` | `number`（只读） | 当前页码 |
-| `numPages` | `number`（只读） | 总页数 |
-| `isFlipping` | `boolean`（只读） | 是否翻页中 |
-| `canNext` | `boolean`（只读） | 是否可前进 |
-| `canPrev` | `boolean`（只读） | 是否可后退 |
-| `disabled` | `boolean`（只读） | 是否处于禁用状态 |
-| `zoom` | `number`（只读） | 当前缩放级别（1 为未缩放） |
+| # | 方法/属性 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `flipLeft` | `() => void` | 向左翻页 |
+| 2 | `flipRight` | `() => void` | 向右翻页 |
+| 3 | `next` | `() => void` | 前进一页 |
+| 4 | `prev` | `() => void` | 后退一页 |
+| 5 | `goToPage` | `(page: number) => boolean` | 跳转到指定页（从 1 开始）；翻页中或页码越界时拒绝并返回 `false`（受 `before-flip` 拦截时同样返回 `false`） |
+| 6 | `stop` | `() => void` | 中断当前翻页并立即收尾：翻页动画按终点提交，拖拽按最近端点完成或取消 |
+| 7 | `disable` | `(disabled?: boolean) => void` | 禁用（不传参默认 `true`）/启用翻页与所有交互 |
+| 8 | `refresh` | `() => Promise<void>` | 重绘全部页面纹理 |
+| 9 | `refreshPage` | `(page: number) => Promise<void>` | 重绘指定页纹理（页码从 1 开始） |
+| 10 | `zoomIn` | `() => void` | 放大到最大倍数 |
+| 11 | `zoomOut` | `() => void` | 复位到 1 倍 |
+| 12 | `toggleZoom` | `() => void` | 在 1 倍与最大倍数间切换 |
+| 13 | `setZoom` | `(level: number) => void` | 设置缩放级别（钳制到 `[1, maxZoom]`） |
+| 14 | `state` | `TurnState`（只读响应式） | 响应式状态快照：`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`。在模板或 computed 中读取自动跟踪更新（推荐用此而非下方逐个只读属性） |
+| 15 | `page` | `number`（只读） | 当前页码 |
+| 16 | `numPages` | `number`（只读） | 总页数 |
+| 17 | `isFlipping` | `boolean`（只读） | 是否翻页中 |
+| 18 | `canNext` | `boolean`（只读） | 是否可前进 |
+| 19 | `canPrev` | `boolean`（只读） | 是否可后退 |
+| 20 | `disabled` | `boolean`（只读） | 是否处于禁用状态 |
+| 21 | `zoom` | `number`（只读） | 当前缩放级别（1 为未缩放） |
 
 ### 外置工具栏示例
 
