@@ -4,7 +4,7 @@ import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 
 import TurnItem from '@/components/TurnItem.vue'
 import VueTurn from '@/components/VueTurn.vue'
-import type { TurnInstance } from '@/types/turn'
+import type { LookOptions, TurnInstance } from '@/types/turn'
 
 // 组件卸载时会移除 document 级键盘监听并递减实例计数（多实例键盘互斥依赖
 // 该计数），必须每个用例后自动卸载，否则泄漏实例会跨用例干扰互斥判定
@@ -146,7 +146,7 @@ interface HostProps {
   displayedPages?: 'auto' | 1 | 2
   clickToFlip?: boolean
   peel?: boolean
-  fold?: boolean
+  look?: LookOptions
   preset?: 'soft' | 'hard' | 'custom'
   coverPreset?: 'soft' | 'hard' | 'custom'
   modelValue?: number
@@ -184,7 +184,7 @@ function createHost(props: HostProps = {}) {
               displayedPages: props.displayedPages,
               clickToFlip: props.clickToFlip,
               peel: props.peel,
-              fold: props.fold,
+              look: props.look,
               preset: props.preset,
               coverPreset: props.coverPreset,
               globalKeyboard: props.globalKeyboard,
@@ -254,7 +254,7 @@ async function mountTurn(
     displayedPages?: 'auto' | 1 | 2
     clickToFlip?: boolean
     peel?: boolean
-    fold?: boolean
+    look?: LookOptions
     preset?: 'soft' | 'hard' | 'custom'
     coverPreset?: 'soft' | 'hard' | 'custom'
     modelValue?: number
@@ -471,7 +471,7 @@ describe('VueTurn', () => {
   it('falls back to the curl animation for active flips when fold is disabled', async () => {
     // custom 档 + fold=false：主动翻页回退卷曲动画
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
-    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
+    const wrapper = await mountTurn(6, { preset: 'custom', look: { fold: false } })
     await wrapper.find('#next').trigger('click')
     await flushPromises()
     expect(mocks.startFlip).toHaveBeenCalledTimes(1)
@@ -1597,7 +1597,7 @@ describe('VueTurn', () => {
 
   it('stop cancels an in-flight drag at the nearest end', async () => {
     // custom 档关闭折页：测普通卷曲拖拽路径
-    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
+    const wrapper = await mountTurn(6, { preset: 'custom', look: { fold: false } })
     const turn = wrapper.findComponent(VueTurn)
     stubViewportRect(wrapper)
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 300 })
@@ -1613,7 +1613,7 @@ describe('VueTurn', () => {
 
   it('drags a page across and commits on release', async () => {
     // custom 档关闭折页：测普通卷曲拖拽路径
-    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
+    const wrapper = await mountTurn(6, { preset: 'custom', look: { fold: false } })
     const turn = wrapper.findComponent(VueTurn)
     stubViewportRect(wrapper)
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 300 })
@@ -1635,7 +1635,7 @@ describe('VueTurn', () => {
 
   it('springs back when the drag barely moves', async () => {
     // custom 档关闭折页：测普通卷曲拖拽路径
-    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
+    const wrapper = await mountTurn(6, { preset: 'custom', look: { fold: false } })
     const turn = wrapper.findComponent(VueTurn)
     stubViewportRect(wrapper)
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 700, clientY: 300 })
@@ -1680,7 +1680,7 @@ describe('VueTurn', () => {
 
   it('shows a peeled corner when hovering the page edge (legacy peel, fold off)', async () => {
     // custom 档 + fold=false：fold prop 仅在 custom 档生效，关闭折角走旧版整页轻卷
-    const wrapper = await mountTurn(6, { peel: true, preset: 'custom', fold: false })
+    const wrapper = await mountTurn(6, { peel: true, preset: 'custom', look: { fold: false } })
     stubViewportRect(wrapper)
     const stacksCallsBefore = mocks.setStacks.mock.calls.length
     // LTR 前进边缘（右缘）悬停：掀起页角，强度随深度渐变（无阶跃跳变）
@@ -1905,7 +1905,7 @@ describe('VueTurn', () => {
 
   it('starts a normal curl drag from the page middle when fold is disabled', async () => {
     // custom 档 + fold=false：中部按下回到普通整页卷曲拖拽（微曲翻页）
-    const wrapper = await mountTurn(6, { preset: 'custom', fold: false })
+    const wrapper = await mountTurn(6, { preset: 'custom', look: { fold: false } })
     stubViewportRect(wrapper)
     mocks.pickPage.mockReturnValue({ index: 2, u: 0.55, v: 0.5, spread: true })
     await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 520, clientY: 300 })

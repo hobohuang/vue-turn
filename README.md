@@ -43,16 +43,13 @@ const page = ref(1)
 | Prop | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `modelValue` | `number` | - | 当前页码（从 1 开始），支持 v-model |
-| `preset` | `'soft' \| 'hard' \| 'custom'` | `'soft'` | 内页纸张类型：soft 普通纸张哑光（可卷曲/折角）、hard 纸板刚体强光泽、custom 自定义；soft/hard 档位值最高优先级（下列专业参数不生效），仅 custom 档可逐项设置（详见下文「观感预设」） |
-| `coverPreset` | `'soft' \| 'hard' \| 'custom'` | `'hard'` | 封面/封底纸张类型：控制封面纸张的卷曲、折页/折角开关与折缝（fold/bend）、网格密度（nPolygons）与光影（独立灯光组照亮）；`perspective` 为全局相机参数不按页生效；custom 档与内页共用同一组自定义参数（详见下文「封面与封底」） |
+| `preset` | `'soft' \| 'hard' \| 'custom'` | `'soft'` | 内页纸张类型：soft 普通纸张哑光（可卷曲/折角）、hard 纸板刚体强光泽、custom 自定义；为专业参数提供成组基线，`look` 可逐项覆盖（详见下文「观感预设」） |
+| `coverPreset` | `'soft' \| 'hard' \| 'custom'` | `'hard'` | 封面/封底纸张类型：控制封面纸张的卷曲、折页/折角开关与折缝、网格密度与光影（独立灯光组照亮）；`coverLook` 可逐项覆盖（详见下文「封面与封底」） |
+| `look` | `LookOptions` | - | 内页观感与折页参数，逐项覆盖 `preset` 基线：`nPolygons`（网格分段，回退 64）、`perspective`（透视参考距离，回退 2400，**全局相机参数**）、`ambient`（环境光，回退 1）、`gloss`（方向光，回退 0.15）、`curl`（卷曲幅度，0 为刚体，回退 0.8）、`fold`（折页变形开关，soft 开 / hard 关）、`bend`（折缝圆角占页宽比例，回退 0.04）。挂载时冻结 |
+| `coverLook` | `LookOptions` | - | 封面/封底观感与折页参数，逐项覆盖 `coverPreset` 基线，未传项回退 `look`（`perspective` 为全局参数在此无效）。挂载时冻结 |
 | `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），非法值（NaN/零/负数）回退 0.75；常见图书尺寸参考下文「常见图书宽高比」 |
 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒） |
 | `startPage` | `number` | `1` | 初始页码（未提供 modelValue 时生效） |
-| `nPolygons` | `number` | 取 preset | 翻页网格纵向分段数，越大卷曲越平滑（仅 `preset="custom"` 时生效，回退 64） |
-| `perspective` | `number` | 取 preset | 透视参考距离（像素），越小透视越强（仅 `preset="custom"` 时生效，回退 2400） |
-| `ambient` | `number` | 取 preset | 环境光强度（仅 `preset="custom"` 时生效，回退 1） |
-| `gloss` | `number` | 取 preset | 方向光（纸张光泽）强度（仅 `preset="custom"` 时生效，回退 0.15） |
-| `curl` | `number` | 取 preset | 卷曲幅度（0 为纯刚体旋转）（仅 `preset="custom"` 时生效，回退 0.8） |
 | `forwardDirection` | `'left' \| 'right'` | `'left'` | 阅读方向（决定往哪边翻算下一页）：`'left'` 左翻书（页码自左向右递增），`'right'` 右翻书（整体镜像）；运行时可改，详见下文「阅读方向」 |
 | `displayedPages` | `'auto' \| 1 \| 2` | `'auto'` | 一次摊开显示几页：`auto` 按容器宽高判定（宽 > 高取 2），`1`/`2` 为强制值；双页以跨页为单位翻页（页码 ±2），单页逐页翻（±1），详见下文「显示模式」 |
 | `pageWidth` | `number` | `768` | 离屏光栅化宽度（像素） |
@@ -69,27 +66,24 @@ const page = ref(1)
 | `resourceTimeout` | `number` | `5000` | 光栅化前资源等待超时（毫秒）：等待 `<img>`、CSS background-image、文档字体；超时后放弃等待直接光栅化 |
 | `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
 | `peel` | `boolean` | `false` | 悬停预览总开关：开启后显示悬停预览——`fold` 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷（详见下文「拖拽翻页与折角交互」） |
-| `peelZone` | `number` | `0.12` | 整页轻卷预览区域宽度占视口宽度的比例（两侧边缘条带，0~0.5，仅 `fold` 关闭时使用） |
-| `fold` | `boolean` | 取 preset（`soft` 开启，`hard` 关闭；仅 `custom` 档可设置）；封面/封底纸张取 **coverPreset** 档 | 折页变形总开关（turn.js 4 风格）：开启时按下页面任意位置均为折角变形拖拽（四角为折角拖拽、其余为折页拖拽——拎起的书页沿竖直折线对折翻页）；关闭时全部为整页卷曲（详见下文「拖拽翻页与折角交互」） |
-| `bend` | `number` | 取 preset（仅 `custom` 档可设置，回退 0.04） | 折缝圆角弧长占页宽比例。折缝几何 = 窄圆弧（真实纸张折弯处的圆角）+ 翻起平面绕折线微翘约 4.6°，整条折缝读作一条略带厚度的折痕：弧内高度单调升至翘面、弧末端相切衔接（无"塌回"形成的第二条平行折线）；翻页进度推进时弧与微翘随进度压平，落页时纸摊平无缝衔接。调大弧变宽变软（≥0.1 呈"布匹感"），0 = 完全锐利的直角折痕 |
+| `fold` / `bend` | - | 见 `look` | 已并入 `look` / `coverLook` 对象参数（折页变形开关与折缝圆角，语义不变，任何档位均可覆盖） |
 | `maxZoom` | `number` | `3` | 最大缩放倍数（响应式：运行中修改即生效，当前级别超出新上限时立即收敛） |
 | `zoomMode` | `'off' \| 'wheel' \| 'dblclick' \| 'both'` | `'off'` | 允许哪些**手势**触发缩放：`wheel` 滚轮按指数步进调级别、`dblclick` 双击在 1 倍与 `maxZoom` 间切换（含 `dblclick` 时单击翻页会延迟约 260ms 以区分双击）、`both` 两种都要、`off` 关闭。实例方法 `zoomIn`/`setZoom` 等不受此开关限制 |
 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
-| `stackDepth` | `number` | `0.02` | 纸叠最大厚度占单页宽度的比例（0~0.5） |
 
 ### 观感预设（preset）
 
-`nPolygons` / `perspective` / `ambient` / `gloss` / `curl` 五个渲染参数较为专业，`preset`（纸张类型）为它们提供成组值。预设同时决定折角（`fold`）的开关与折缝圆角（`bend`，折缝圆弧弧长占页宽比例，越大折缝越圆润柔软）：
+`nPolygons` / `perspective` / `ambient` / `gloss` / `curl` 五个渲染参数较为专业，`preset`（纸张类型）为它们提供成组基线，`look`（内页）/ `coverLook`（封面/封底）对象参数可逐项覆盖。预设同时给出折角（`fold`）开关与折缝圆角（`bend`，折缝圆弧弧长占页宽比例，越大折缝越圆润柔软）的基线：
 
 | 预设 | 定位 | nPolygons | perspective | ambient | gloss | curl | fold / bend |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `soft`（默认） | 普通纸张：哑光（弱方向光）、自然卷曲，支持折角拖拽 | 64 | 2400 | 1 | 0.15 | 0.8 | 开 / 0.04 |
 | `hard` | 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角；适合封面/封底（`coverPreset` 默认）或整本纸板书 | 32 | 2400 | 1 | 0.8 | 0 | 关 / - |
-| `custom` | 自定义：下列专业参数与 `fold`/`bend` 逐项取显式传入值，未传项回退 soft 基线 | 64 | 2400 | 1 | 0.15 | 0.8 | 开 / 0.04 |
+| `custom` | 自定义声明：基线与 soft 一致，配合 `look` 完全自定义 | 64 | 2400 | 1 | 0.15 | 0.8 | 开 / 0.04 |
 
-优先级语义：**soft/hard 档位值为最高优先级，显式传入的专业参数不生效**。例如 `preset="hard" :curl="0.6"` 卷曲仍为 0——想调整任何参数必须切换到 `preset="custom"`，此时 `nPolygons`/`perspective`/`ambient`/`gloss`/`curl`/`fold`/`bend` 逐项取显式值、未传项回退 soft 基线。未传 preset 时按 soft 档处理；非法 preset 值回退 soft 并 `console.warn`。
+优先级语义：**preset 提供基线，`look` 逐项覆盖、对任何档位生效，未传项回退基线**。例如 `preset="hard" :look="{ curl: 0.6 }"` 在纸板刚体基线上单独打开卷曲；`:look="{ fold: false }"` 可在 soft 档关闭折角。未传 preset 时按 soft 档处理；非法 preset 值回退 soft 并 `console.warn`。
 
-档位按**纸张归属**生效，不是全局一刀切：一张纸的正反两面同档——内页纸张读 `preset`，封面/封底专用纸张读 `coverPreset`。因此默认的 `preset="soft" coverPreset="hard"` 下，内页可折角卷曲、封面为纸板刚体，互不干扰。`perspective` 例外：它是全局相机参数，只取 `preset` 档。
+档位按**纸张归属**生效，不是全局一刀切：一张纸的正反两面同档——内页纸张读 `preset` + `look`，封面/封底专用纸张读 `coverPreset` + `coverLook`（未传项逐项回退 `look`）。因此默认的 `preset="soft" coverPreset="hard"` 下，内页可折角卷曲、封面为纸板刚体，互不干扰。`perspective` 例外：它是全局相机参数，只读 `look.perspective`（`coverLook.perspective` 无效）。
 
 这些参数在组件挂载时读取一次（与此前行为一致），运行中切换 preset 或专业参数不会热更新。
 
@@ -250,24 +244,24 @@ const page = ref(1)
 
 - **专用纸张**：封面纸张 = 封面（正）+ 封面底（背），封底纸张 = 封底里（正）+ 封底（背）；背面页计入页数，翻开封面/合上前看到的就是它们。空白衬页无内容，渲染为纸色。
 - **声明约束**：`cover` 仅在首个 item 上生效、`back-cover` 仅在末个 item 上生效，其余位置声明会被忽略并 `console.warn`；两者都未声明时按位置约定兜底（首个 item 为封面、末个 item 为封底，背面空白）。
-- **生效范围**：卷曲（curl）、折页开关与折缝（fold/bend）、网格密度（nPolygons）与光影（ambient/gloss，由封面专属灯光组照亮，与内页灯光独立）；`perspective` 为全局相机参数，只取内页 `preset` 档。折页开关也按封面档判定意味着：`coverPreset="hard"`（默认）时封面**不响应**角点折角拖拽与角区悬停折角预览（纸板不折角），`coverPreset="soft"` 时封面与内页完全一致地支持折角/折页。
+- **生效范围**：卷曲（curl）、折页开关与折缝（fold/bend）、网格密度（nPolygons）与光影（ambient/gloss，由封面专属灯光组照亮，与内页灯光独立）；`perspective` 为全局相机参数，只读 `look.perspective`。折页开关也按封面档判定意味着：`coverPreset="hard"`（默认）时封面**不响应**角点折角拖拽与角区悬停折角预览（纸板不折角），`coverPreset="soft"` 时封面与内页完全一致地支持折角/折页。
 - **翻页规则**：封面/封底纸张正反两面均为封面档渲染，整张按封面档翻转——默认 `hard` 为刚体旋转（零卷曲、无折缝），`soft` 按普通纸张卷曲/折页；翻页中封面灯光组与内页灯光组按面独立照亮。
 - **软封面**：杂志/画册类软封面传 `coverPreset="soft"`，封面即按普通纸张卷曲，并同样支持角点折角拖拽与角区悬停折角预览。
 - **整本纸板书**：`preset="hard"` 让全部内页也刚体翻转（此时折角自动关闭）。
-- `coverPreset` 取档位默认值；`custom` 档与内页共用同一组自定义参数（即封面与内页观感一致）。非法值回退 soft 并 `console.warn`。挂载时读取一次，运行中切换不热更新。
+- `coverPreset` 取档位基线；`coverLook` 逐项覆盖（未传项回退 `look`，可实现封面与内页观感一致或各自独立）。非法值回退 soft 并 `console.warn`。挂载时读取一次，运行中切换不热更新。
 
 ## 拖拽翻页与折角交互
 
 - **拖拽翻页**（`dragToFlip`，默认开启）：按住页面拖动即可跟手翻页——LTR 右半区向前、左半区向后（RTL 相反）。松手时拖动超过约 45% 满程或朝翻页方向快速甩动即完成翻页，否则回弹取消；回弹同样触发 `flip-end`（页码不变）。按下/松开分别触发 `pressed`/`released` 事件，拖拽开始同样受 `before-flip` 拦截。
-- **折页变形**（`fold`，soft 默认开启，turn.js 4 风格）：翻页交互的变形模式总开关。开启时按下页面**任意位置**均为折角变形拖拽，本质都是"拎起页面的一部分对折"——锚点与拖点自由度按命中区分两种：
+- **折页变形**（`look.fold`，soft 基线开启，turn.js 4 风格）：翻页交互的变形模式总开关。开启时按下页面**任意位置**均为折角变形拖拽，本质都是"拎起页面的一部分对折"——锚点与拖点自由度按命中区分两种：
   - **外角区**（距最近外角 22% 页宽的圆形区域，跨页按实际宽度折算）为**折角拖拽**：锚点取最近外角，斜折线，拖点纵向自由、页角跟手折起；
   - **其余位置**为**折页拖拽**：锚点取指针同高度的外页边缘点，竖直折线——拖点**钉在按下高度**，上下移动指针只改变对折进度、不改变折线方向，拎起的书页始终沿竖直折线对折翻页（等效普通翻页的进度/方向，但带折叠感，区别于普通拖拽的微曲卷绕）。
   - 折线由锚点与拖点实时计算；折缝为「窄圆弧圆角 + 翻起平面微翘约 4.6°」的组合，读作一条略带厚度的折痕（弧内高度单调升至翘面、无第二条平行折线），圆角弧长由 `bend` 控制。翻页进度推进时折缝圆角与微翘随进度压平，落页时纸摊平衔接静态布局。**书脊约束**：折线不会切入书脊边内侧（装订处的书页永不被翻折拉离书脊），折角拖拽斜拉过度时自动停在极限位。松手时进度超过约 45% 或快速甩动即完成翻页，否则收回展平。折前进侧的页等于向前翻页，折后退侧等于向后翻页。
   - **封面/封底（合书态居中单页）按封面档取形变方式**：`coverPreset="soft"` 时与内页完全一致，支持折角/折页拖拽与折页翻页动画——拎起封面一角为折角拖拽（封面只能向前翻开、封底只能向后翻回，外缘为可折侧），书体（静态页、纸叠、开合平移）随拖拽进度联动的方式与内页翻页一致，松手提交完成开合、回弹则收回合书态。`coverPreset="hard"`（默认）时封面为纸板档：角点不折角、悬停不折角预览，按下与主动翻页都是整张刚体翻转。
-  - **主动翻页（点击翻页、`next`/`prev`）同样走折页动画**：锚点取外缘中部，竖直折线扫过整页完成翻页；渲染不可用时自动回退卷曲动画。**书页外（视口空白处）按下拖拽**也走折页拖拽（方向按视口半区判定，拖点钉在外缘中部高度）。所有翻页（含封面开合等布局切换）中书体（静态页、纸叠）随进度同步平移，拖拽与主动动画行为一致。关闭时（该纸张的档位为 `hard`，或 custom 档 `:fold="false"`）其交互与主动翻页回到整页卷曲模式——内页与封面/封底各按自己的档位判定，可以一张折页、另一张刚体。
+  - **主动翻页（点击翻页、`next`/`prev`）同样走折页动画**：锚点取外缘中部，竖直折线扫过整页完成翻页；渲染不可用时自动回退卷曲动画。**书页外（视口空白处）按下拖拽**也走折页拖拽（方向按视口半区判定，拖点钉在外缘中部高度）。所有翻页（含封面开合等布局切换）中书体（静态页、纸叠）随进度同步平移，拖拽与主动动画行为一致。关闭时（该纸张的档位为 `hard`，或 `look`/`coverLook` 中 `fold: false`）其交互与主动翻页回到整页卷曲模式——内页与封面/封底各按自己的档位判定，可以一张折页、另一张刚体。
 - **悬停预览**（`peel`，默认关闭）：悬停预览总开关，与 `fold` 组合决定预览形态——
   - `peel` + `fold`（开启）：指针移入页面外角区域（与折角拖拽同款的圆形判定）时渐进掀起最近页角（真实折角预览，越靠近角点掀得越高，进入/离开平滑过渡）；边缘中部、顶/底边中部不触发任何悬停预览。
-  - `peel` + `fold`（关闭）：指针悬停到视口边缘条带（宽度由 `peelZone` 控制）时整页轻微卷曲弯折——越靠近外缘翘得越高。
+  - `peel` + `fold`（关闭）：指针悬停到视口边缘条带时整页轻微卷曲弯折——越靠近外缘翘得越高。
   - `peel` 关闭：无任何悬停预览（按下拖拽行为不受影响）。
   - 悬停仅预览页角，不改变纸叠布局；预览中按下可直接接管拖拽。
 
@@ -292,7 +286,7 @@ const page = ref(1)
 - **合书压实**：封面/封底朝上（居中单页）时书页全部压紧叠放，条带按约 0.6 压实系数收窄；翻开状态的纸叠页边微张，保持蓬松厚度。
 - **封面/封底**：合书状态（封面/封底朝上）纸叠为除封面外的整本书；打开封面时纸叠贴合书体滑动，厚度从满厚渐隐到开书状态。平躺显示的封面/封底已作为页面渲染，不计入纸叠层数。
 - **悬停与跳页**：悬停到条带上高亮对应页层并显示页码标签，点击跳转到该页（自动对齐到所属跨页）；触发 `stack-hover` / `stack-tap` 事件。层过薄时高亮条带保证最小可见宽度。
-- **超多页/无限书页**：厚度按 `min(总页数, 100)` 归一后封顶到 `stackDepth × 单页宽`，条带不会随页数无限增长；悬停页码按比例映射，与厚度解耦。
+- **超多页/无限书页**：厚度按 `min(总页数, 100)` 归一后封顶（最大厚度约为单页宽的 2%），条带不会随页数无限增长；悬停页码按比例映射，与厚度解耦。
 - 单页显示模式（`displayedPages=1`）下条带贴合半页宽外缘，同样生效。
 - 翻页中、禁用状态或 WebGL 不可用时不响应悬停/点击。
 
@@ -360,6 +354,7 @@ function onRegionTap(_page: number, region: PageRegion) {
 | `zoomOut` | `() => void` | 复位到 1 倍 |
 | `toggleZoom` | `() => void` | 在 1 倍与最大倍数间切换 |
 | `setZoom` | `(level: number) => void` | 设置缩放级别（钳制到 `[1, maxZoom]`） |
+| `state` | `TurnState`（只读响应式） | 响应式状态快照：`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`。在模板或 computed 中读取自动跟踪更新（推荐用此而非下方逐个只读属性） |
 | `page` | `number`（只读） | 当前页码 |
 | `numPages` | `number`（只读） | 总页数 |
 | `isFlipping` | `boolean`（只读） | 是否翻页中 |
@@ -377,21 +372,13 @@ import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn'
 
 const turnRef = ref<TurnInstance | null>(null)
 const page = ref(1)
-const total = ref(10)
-const flipping = ref(false)
 
-const canNext = computed(() => (flipping.value ? false : turnRef.value?.canNext ?? false))
-const canPrev = computed(() => (flipping.value ? false : turnRef.value?.canPrev ?? false))
+// 响应式状态：指示器/按钮状态全部自动跟踪，无需事件回调强刷
+const state = computed(() => turnRef.value?.state)
 </script>
 
 <template>
-  <VueTurn
-    ref="turnRef"
-    v-model="page"
-    @flip-start="flipping = true"
-    @flip-end="flipping = false"
-    @ready="total = turnRef?.numPages ?? total"
-  >
+  <VueTurn ref="turnRef" v-model="page">
     <TurnItem>封面</TurnItem>
     <TurnItem>第 1 页</TurnItem>
     <!-- ... -->
@@ -399,14 +386,12 @@ const canPrev = computed(() => (flipping.value ? false : turnRef.value?.canPrev 
   </VueTurn>
 
   <div class="toolbar">
-    <button :disabled="!canPrev" @click="turnRef?.prev()">上一页</button>
-    <span>{{ page }} / {{ total }}</span>
-    <button :disabled="!canNext" @click="turnRef?.next()">下一页</button>
+    <button :disabled="!state?.canPrev" @click="turnRef?.prev()">上一页</button>
+    <span>{{ state?.page ?? page }} / {{ state?.numPages ?? '…' }}</span>
+    <button :disabled="!state?.canNext" @click="turnRef?.next()">下一页</button>
   </div>
 </template>
 ```
-
-> `canNext` / `canPrev` 是实例 getter，非响应式；翻页/`change`/`ready` 等事件触发后需让外部组件重渲（如上例通过 `flipping` 等 ref 驱动 computed）。
 
 ## 已知限制
 

@@ -16,36 +16,37 @@ const VnodeHolder = defineComponent({
 
 <script setup lang="ts">
 import {
-  Comment,
   computed,
-  Fragment,
-  h,
   nextTick,
   onMounted,
   onUpdated,
+  reactive,
+  readonly,
   ref,
   shallowRef,
   useSlots,
   watch,
 } from 'vue'
 
-import TurnItem from '@/components/TurnItem.vue'
 import { useBookState } from '@/composables/useBookState'
 import { useFlipInteraction } from '@/composables/useFlipInteraction'
+import { useFoldProfiles } from '@/composables/useFoldProfiles'
+import { usePageSources } from '@/composables/usePageSources'
 import { usePageStack } from '@/composables/usePageStack'
 import { usePageTextures } from '@/composables/usePageTextures'
 import { useTurnRenderer } from '@/composables/useTurnRenderer'
 import { ZOOM_TOLERANCE } from '@/composables/useZoomPan'
-import { pageWidth as pageWidthOf, spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '@/lib/flipSpec'
+import { spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '@/lib/flipSpec'
 import { positive } from '@/lib/math'
-import { buildPageSources, coverPageIndices, type PageFaceKind } from '@/lib/pageMapping'
-import { resolveFold, resolveLook } from '@/lib/presets'
+import { buildPageSources, coverPageIndices } from '@/lib/pageMapping'
+import { mergeLook, resolveFold, resolveLook } from '@/lib/presets'
 import type {
   BeforeFlipContext,
   DisplayMode,
   FlipDirection,
   FlipSheetOptions,
   FlipSpec,
+  LookOptions,
   PageRegion,
   SheetFoldOptions,
   StaticPlacement,
@@ -64,20 +65,14 @@ const props = withDefaults(
     flipDuration?: number
     /** 初始页码（未提供 modelValue 时生效） */
     startPage?: number
-    /** 观感预设（纸张类型）：soft 普通纸张哑光（默认）、hard 纸板刚体强光泽、custom 自定义；soft/hard 档位值最高优先级（下列专业参数不生效），仅 custom 档可逐项设置 */
+    /** 观感预设（纸张类型）：为专业渲染参数提供成组基线——soft 普通纸张哑光（默认）、hard 纸板刚体强光泽、custom 自定义；look 可逐项覆盖 */
     preset?: TurnPreset
-    /** 封面/封底观感预设（默认 hard 纸板）：控制封面与封底的纸张（卷曲/折角/网格密度）与光影（独立灯光组）；perspective 为全局相机参数不按页生效 */
+    /** 封面/封底观感预设（默认 hard 纸板）：控制封面与封底的纸张（卷曲/折角/网格密度）与光影（独立灯光组）；coverLook 可逐项覆盖 */
     coverPreset?: TurnPreset
-    /** 翻页网格纵向分段数，越大卷曲越平滑（仅 preset="custom" 时生效，未传回退 custom 基线 64） */
-    nPolygons?: number
-    /** 透视参考距离（像素），越小透视越强（仅 preset="custom" 时生效，未传回退 2400） */
-    perspective?: number
-    /** 环境光强度（仅 preset="custom" 时生效，未传回退 1） */
-    ambient?: number
-    /** 方向光（纸张光泽）强度（仅 preset="custom" 时生效，未传回退 0.15） */
-    gloss?: number
-    /** 卷曲幅度（0 为纯刚体旋转）（仅 preset="custom" 时生效，未传回退 0.8） */
-    curl?: number
+    /** 内页观感与折页参数（逐项覆盖 preset 基线）。perspective 为全局相机参数，仅此处生效 */
+    look?: LookOptions
+    /** 封面/封底观感与折页参数（逐项覆盖 coverPreset 基线，未传项回退 look）；perspective 为全局参数在此无效 */
+    coverLook?: LookOptions
     /** 前进方向：left 为从左向右阅读 */
     forwardDirection?: FlipDirection
     /** 显示模式：auto 按容器宽高自动判定，1/2 强制单/双页 */
@@ -112,12 +107,6 @@ const props = withDefaults(
     dragToFlip?: boolean
     /** 悬停预览总开关：开启后显示悬停预览——fold 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷 */
     peel?: boolean
-    /** 折角提示区域宽度占视口宽度的比例（两侧边缘条带，0~0.5，仅 fold 关闭时的整页卷曲预览使用） */
-    peelZone?: number
-    /** 折角交互（turn.js 4 风格）：开启时四角区域悬停预览与按下拖拽均为真实折角变形；关闭时全部为整页卷曲（仅 preset="custom" 时生效，soft 开启 / hard 关闭） */
-    fold?: boolean
-    /** 折缝圆角弧长占页宽比例：真实纸张折弯处的圆角，与翻起平面微翘组合成一条折痕（仅 preset="custom" 时生效，未传回退 0.04，0 为完全锐利折痕） */
-    bend?: number
     /** 最大缩放倍数 */
     maxZoom?: number
     /** 缩放手势模式：'off' 关闭（默认）、'wheel' 滚轮步进、'dblclick' 双击切换
@@ -126,8 +115,6 @@ const props = withDefaults(
     zoomMode?: ZoomMode
     /** 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页变化，可悬停/点击跳页） */
     stack?: boolean
-    /** 纸叠最大厚度占单页宽度的比例（0~0.5） */
-    stackDepth?: number
   }>(),
   {
     pageAspect: 0.75,
@@ -150,13 +137,9 @@ const props = withDefaults(
     resourceTimeout: 5000,
     dragToFlip: true,
     peel: false,
-    peelZone: 0.12,
-    /** 角点拖拽折角（turn.js 4 风格）：未传时取 preset 默认（soft 开启，hard 关闭） */
-    fold: undefined,
     maxZoom: 3,
     zoomMode: 'off',
     stack: true,
-    stackDepth: 0.02,
   },
 )
 
@@ -213,39 +196,19 @@ const safeResourceTimeout = computed(() =>
 const safeMaxZoom = computed(() =>
   Number.isFinite(props.maxZoom) && props.maxZoom > 1 ? props.maxZoom : 3,
 )
-const safePeelZone = computed(() => {
-  const value = Number(props.peelZone)
-  return Number.isFinite(value) ? Math.min(Math.max(value, 0), 0.5) : 0.12
-})
-const safeStackDepth = computed(() => {
-  const value = Number(props.stackDepth)
-  // 非法值回退默认值 0.02（与 prop 默认值一致，而非任意常数）
-  return Number.isFinite(value) && value > 0 ? Math.min(value, 0.5) : 0.02
-})
 
 const state = useBookState()
 
-// 封面/封底观感：coverPreset 独立解析（挂载时读取一次）。soft/hard 取档位值；
-// custom 档与内页共用同一组自定义参数。摄像头 perspective 为全局参数，
-// 不按页生效，此处仅取光影与纸张参数
-const coverLook = resolveLook(props.coverPreset, {
-  nPolygons: props.nPolygons,
-  perspective: props.perspective,
-  ambient: props.ambient,
-  gloss: props.gloss,
-  curl: props.curl,
-})
+// 观感解析（挂载时读取一次）：preset/coverPreset 档位为基线，look/coverLook
+// 逐项覆盖；封面未传项逐项回退内页 look
+const innerLook = resolveLook(props.preset, props.look)
+const coverLookOptions = mergeLook(props.coverLook, props.look)
+const coverLook = resolveLook(props.coverPreset, coverLookOptions)
 
 const renderer = useTurnRenderer({
   pageAspect: safePageAspect,
-  // 观感参数：soft/hard 取档位值（显式传入不生效），仅 custom 档采用显式参数
-  ...resolveLook(props.preset, {
-    nPolygons: props.nPolygons,
-    perspective: props.perspective,
-    ambient: props.ambient,
-    gloss: props.gloss,
-    curl: props.curl,
-  }),
+  // 内页观感参数：preset 基线 + look 覆盖
+  ...innerLook,
   // 封面/封底光影：coverPreset 独立灯光组
   coverAmbient: coverLook.ambient,
   coverGloss: coverLook.gloss,
@@ -276,130 +239,9 @@ const {
 
 const slots = useSlots()
 
-// 在模板渲染期收集 turn-item vnode（展平 v-for 产生的 Fragment），
-// 非 turn-item 子节点忽略并提示。必须在渲染函数内调用插槽，
-// 才能让父组件的内容变化正常触发本组件更新
-let warnedInvalidChild = false
-interface PageItem {
-  vnode: VNode
-  spread: boolean
-  regions: PageRegion[]
-  cover: boolean
-  backCover: boolean
-  /** #back 插槽内容（封面底/封底里），未定义或为空则为 null */
-  backVnode: VNode | null
-}
-
-function isTruthyProp(value: unknown): boolean {
-  return value !== undefined && value !== null && value !== false
-}
-
-// 模板属性以原始大小写落在 vnode.props 上（如 back-cover），
-// 驼峰键读不到时回退 kebab-case 键
-function readItemProp(node: VNode, key: string): unknown {
-  const props = node.props
-  if (!props) return undefined
-  if (props[key] !== undefined) return props[key]
-  const kebab = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
-  return props[kebab]
-}
-
-// 提取 turn-item 的 #back 插槽内容为单个可渲染 vnode（空内容返回 null）
-function extractBackVnode(node: VNode): VNode | null {
-  const children = node.children
-  if (!children || typeof children !== 'object' || Array.isArray(children)) return null
-  const back = (children as Record<string, unknown>).back
-  if (typeof back !== 'function') return null
-  const rendered = (back as () => VNode | VNode[])()
-  const list = (Array.isArray(rendered) ? rendered : [rendered]).filter(
-    (child) => child && child.type !== Comment,
-  )
-  if (list.length === 0) return null
-  return list.length === 1 ? list[0]! : h(Fragment, null, list)
-}
-
-function collectPages(): PageItem[] {
-  const root = slots.default?.() ?? []
-  const result: PageItem[] = []
-  const walk = (nodes: VNode[]) => {
-    for (const node of nodes) {
-      if (node.type === TurnItem) {
-        // 模板无值属性编译为 ""，动态绑定为 true/false，均按真值判定
-        const regions = readItemProp(node, 'regions')
-        result.push({
-          vnode: node,
-          spread: isTruthyProp(readItemProp(node, 'spread')),
-          regions: Array.isArray(regions) ? (regions as PageRegion[]) : [],
-          cover: isTruthyProp(readItemProp(node, 'cover')),
-          backCover: isTruthyProp(readItemProp(node, 'backCover')),
-          backVnode: extractBackVnode(node),
-        })
-      } else if (Array.isArray(node.children)) {
-        walk(node.children as VNode[])
-      } else if (!warnedInvalidChild && node.type !== Comment && typeof node.type !== 'symbol') {
-        warnedInvalidChild = true
-        console.warn('[vue-turn] 默认插槽中仅支持 <turn-item>，其余子节点将被忽略')
-      }
-    }
-  }
-  walk(root)
-  return result
-}
-
-const pageItems = computed(collectPages)
-
-// 把 item 展开为"面"：封面/封底各占一张专用纸张，#back 插槽内容作为
-// 同一张纸的背面面；未声明 cover/backCover 时由 buildPageSources 按
-// 位置约定兜底（首 item=封面、末 item=封底）
-interface PageFace {
-  vnode: VNode
-  spread: boolean
-  regions: PageRegion[]
-  face: PageFaceKind
-}
-
-let warnedFacePlacement = false
-const pageFaces = computed<PageFace[]>(() => {
-  const items = pageItems.value
-  const single = items.length === 1
-  const faces: PageFace[] = []
-  const pushBackFace = (item: PageItem, kind: Extract<PageFaceKind, 'coverBack' | 'backCoverBack'>) => {
-    if (item.backVnode) faces.push({ vnode: item.backVnode, spread: false, regions: [], face: kind })
-  }
-  items.forEach((item, index) => {
-    const coverHere = item.cover && (index === 0 || single)
-    const backHere = item.backCover && (index === items.length - 1 || single)
-    if (item.cover && !coverHere && !warnedFacePlacement) {
-      warnedFacePlacement = true
-      console.warn('[vue-turn] cover 仅在首个 <turn-item> 上生效，其余项按普通页处理')
-    }
-    if (item.backCover && !backHere && !warnedFacePlacement) {
-      warnedFacePlacement = true
-      console.warn('[vue-turn] back-cover 仅在末个 <turn-item> 上生效，其余项按普通页处理')
-    }
-    // 同时声明 cover 与 back-cover 时按位置取其一（单 item 书两者兼用）
-    if (coverHere && backHere && !single && !warnedFacePlacement) {
-      warnedFacePlacement = true
-      console.warn('[vue-turn] 同一 <turn-item> 不能同时声明 cover 与 back-cover，已按位置取其一')
-    }
-    if (coverHere) {
-      faces.push({ vnode: item.vnode, spread: false, regions: item.regions, face: 'coverFront' })
-      pushBackFace(item, 'coverBack')
-      return
-    }
-    if (backHere) {
-      pushBackFace(item, 'backCoverBack')
-      faces.push({ vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverFront' })
-      return
-    }
-    if (item.backVnode && !warnedFacePlacement) {
-      warnedFacePlacement = true
-      console.warn('[vue-turn] #back 插槽仅在 cover / back-cover 项上生效，已忽略')
-    }
-    faces.push({ vnode: item.vnode, spread: item.spread, regions: item.regions, face: 'content' })
-  })
-  return faces
-})
+// 页面收集与面映射（插槽 → turn-item → 正/背面序列）：
+// 纯领域逻辑见 composables/usePageSources.ts
+const { pageFaces } = usePageSources(slots)
 
 // 页源映射：封面/封底各占专用纸张（背面=#back 内容或空白衬页）、跨页
 // 奇数对齐补位、内页区段奇数补偶（纯函数实现见 lib/pageMapping.ts，含单测）
@@ -410,43 +252,48 @@ const offscreenEl = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 // 本实例标识：多实例时最近交互过的实例获得 document 级键盘响应权
 const instanceToken: object = {}
+// 缩放级别镜像：state.zoom 的响应式来源（级别本身存在场景内，非响应式源）。
+// 全部变化来源（滚轮/双击/实例方法经交互层 onZoomChange、翻页复位、
+// maxZoom 收敛）都汇入此 ref
+const zoomLevel = ref(1)
 const pageEls = ref<HTMLElement[]>([])
 const pageCount = ref(0)
 // v-model 跳转目标：翻页中推迟到动画结束
 let pendingTarget: number | null = null
 
-// maxZoom 运行时变化同步到场景（挂载时已传 safeMaxZoom 初始值）
+// maxZoom 运行时变化同步到场景（挂载时已传 safeMaxZoom 初始值）；
+// 级别超出新上限时场景立即收敛，收敛不发 zoom-change，此处补镜像与事件
 watch(safeMaxZoom, (value) => {
   renderer.setMaxZoom(value)
+  const level = getZoom()
+  if (zoomLevel.value !== level) {
+    zoomLevel.value = level
+    emit('zoom-change', level)
+  }
 })
 
-// 折角（fold）参数挂载时读取一次（运行时修改不生效，与场景观感参数策略一致）：
-// soft/hard 档取预设值；仅 custom 档由 fold/bend prop 设置。
-// 内页按 preset 解析、封面/封底纸张按 coverPreset 解析——与 curl/nPolygons
-// 一样按纸张归属取档，否则 hard 封面在 soft 内页下会被拖进折页形变路径
-// （折页形变不读 curl，纸板的刚体观感就丢了）。bend 为折线圆弧过渡占页宽比例
-const innerFold = toSheetFold(resolveFold(props.preset, props.fold, props.bend))
-const coverFold = toSheetFold(resolveFold(props.coverPreset, props.fold, props.bend))
-
-function toSheetFold(params: { enabled: boolean; bend: number }): SheetFoldOptions {
-  return { enabled: params.enabled, bendWorld: params.bend * pageWidthOf(safePageAspect) }
+// 开发期提示：观感/几何参数挂载时冻结（与场景初始化策略一致），运行时
+// 修改不生效也不报错——业务方最容易踩的"改了没反应"静默坑
+if (import.meta.env.DEV) {
+  watch(
+    () => [props.pageAspect, props.fitMargin, props.preset, props.coverPreset, props.look, props.coverLook],
+    () => {
+      console.warn(
+        '[vue-turn] 观感/几何参数（preset/coverPreset/look/coverLook/pageAspect/fitMargin）' +
+          '在挂载时冻结，运行时修改不生效；如需变更请用 key 重建组件',
+      )
+    },
+  )
 }
 
-/** 页索引是否属于封面/封底专用纸张（一张纸正反两面同档） */
-function isCoverSheet(indices: (number | undefined)[]): boolean {
-  const sources = pageSources.value
-  return indices.some((index) => index !== undefined && sources[index]?.cover === true)
-}
-
-/** 该次翻页所属纸张的折页参数 */
-function foldOfSpec(spec: FlipSpec): SheetFoldOptions {
-  return isCoverSheet([spec.frontIndex, spec.backIndex]) ? coverFold : innerFold
-}
-
-/** 某个静态页（拾取命中）所属纸张的折页参数 */
-function foldOfPage(index: number | undefined): SheetFoldOptions {
-  return isCoverSheet([index]) ? coverFold : innerFold
-}
+// 折页档位（内页按 preset/look、封面/封底纸张按 coverPreset/coverLook 各取一档，
+// 挂载时读取一次）：解析与归属判定见 composables/useFoldProfiles.ts
+const { isCoverSheet, foldOfSpec, foldOfPage } = useFoldProfiles({
+  innerFold: resolveFold(props.preset, props.look),
+  coverFold: resolveFold(props.coverPreset, coverLookOptions),
+  pageSources: () => pageSources.value,
+  pageAspect: safePageAspect,
+})
 
 // ---------------------------------------------------------------------------
 // 纹理生命周期与光栅化调度（usePageTextures）
@@ -565,7 +412,6 @@ const { applyStacksIdle, applyStacksFlip, currentStackSides } = usePageStack({
   state,
   pageCount,
   safePageAspect,
-  safeStackDepth,
   stackEnabled: () => props.stack,
   forwardDirection: () => props.forwardDirection,
   setStacks,
@@ -684,33 +530,39 @@ const {
   props,
   state,
   emit,
+  onZoomChange: (level) => {
+    zoomLevel.value = level
+  },
   renderer,
-  textures,
-  pageCount,
-  containerSize,
-  webglSupported,
-  rootEl,
-  instanceToken,
-  safePageAspect,
-  safeFlipDuration,
-  safePeelZone,
-  safeMaxZoom,
-  foldOfSpec,
-  foldOfPage,
-  pageSources,
-  regionsOf: (itemIndex) => pageFaces.value[itemIndex]?.regions ?? [],
-  getLastPlacements: () => lastPlacements.value,
-  currentStackSides,
-  sheetOptions,
-  computeFlipSpecFor,
-  emitBeforeFlip,
-  next: () => next(),
-  prev: () => prev(),
-  goToPage: (page: number) => goToPage(page),
-  renderStatic,
-  applyStacksFlip,
-  rasterizeWindow,
-  releaseOutsideWindow,
+  query: {
+    textures,
+    pageCount,
+    containerSize,
+    webglSupported,
+    rootEl,
+    instanceToken,
+    safePageAspect,
+    safeFlipDuration,
+    safeMaxZoom,
+    pageSources,
+    currentStackSides,
+    getLastPlacements: () => lastPlacements.value,
+    regionsOf: (itemIndex: number) => pageFaces.value[itemIndex]?.regions ?? [],
+    foldOfSpec,
+    foldOfPage,
+    sheetOptions,
+    computeFlipSpecFor,
+  },
+  actions: {
+    emitBeforeFlip,
+    next: () => next(),
+    prev: () => prev(),
+    goToPage: (page: number) => goToPage(page),
+    renderStatic,
+    applyStacksFlip,
+    rasterizeWindow,
+    releaseOutsideWindow,
+  },
 })
 
 // ---------------------------------------------------------------------------
@@ -737,7 +589,10 @@ function flip(trigger: FlipDirection) {
     renderStatic()
     emit('flip-end', trigger)
     // 翻页会将相机复位到适配距离，缩放级别随之归 1
-    if (prevZoom > 1 + ZOOM_TOLERANCE) emit('zoom-change', 1)
+    if (prevZoom > 1 + ZOOM_TOLERANCE) {
+      zoomLevel.value = 1
+      emit('zoom-change', 1)
+    }
     // 懒光栅化：翻页结束后预取新窗口内缺失纹理，再释放窗口外纹理控制显存
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
   }
@@ -822,6 +677,33 @@ onUpdated(() => {
 })
 
 // satisfies 约束：实例 API 与 TurnInstance 接口保持一致，防止两者漂移
+// 响应式状态快照：readonly 代理使运行时写入告警，getter 读取时触发依赖收集
+const instanceState = readonly(
+  reactive({
+    get page() {
+      return state.page.value
+    },
+    get numPages() {
+      return pageCount.value
+    },
+    get isFlipping() {
+      return state.isFlipping.value
+    },
+    get canNext() {
+      return state.canGoForward.value
+    },
+    get canPrev() {
+      return state.canGoBack.value
+    },
+    get disabled() {
+      return disabledRef.value
+    },
+    get zoom() {
+      return zoomLevel.value
+    },
+  }),
+)
+
 defineExpose({
   flipLeft: () => flip('left'),
   flipRight: () => flip('right'),
@@ -836,6 +718,7 @@ defineExpose({
   zoomOut,
   toggleZoom,
   setZoom: setZoomLevel,
+  state: instanceState,
   get page() {
     return state.page.value
   },
@@ -886,6 +769,8 @@ defineExpose({
       {{ stackHover.page }}
     </div>
     <div ref="offscreenEl" class="offscreen-pages" aria-hidden="true">
+      <!-- :key 必须保持位置索引：pageEls 数组按下标对齐 pageSources[itemIndex]，
+           Vue 的 v-for ref 数组不保证顺序，仅位置键（增删只动尾部）下可靠 -->
       <div
         v-for="(face, index) in pageFaces"
         :key="index"

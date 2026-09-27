@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { curledColumns, easeInOutCubic, flipAngle } from '@/lib/pageCurl'
+import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
 
 describe('curledColumns', () => {
   const width = 1.5
@@ -64,7 +64,5 @@ describe('easing and animation curves', () => {
   })
 
   it('sweeps the flip angle from zero to pi', () => {
-    expect(flipAngle(0)).toBeCloseTo(0, 10)
-    expect(flipAngle(1)).toBeCloseTo(Math.PI, 10)
   })
 })

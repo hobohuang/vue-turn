@@ -1,5 +1,5 @@
 import { computed, watch } from 'vue'
-import type { ComputedRef, Ref } from 'vue'
+import type { Ref } from 'vue'
 
 import { pageWidth } from '@/lib/flipSpec'
 import {
@@ -14,13 +14,14 @@ import type { FlipDirection, FlipSpec, StackVisual } from '@/types/turn'
 
 import type { useBookState } from './useBookState'
 
+// 纸叠最大厚度占单页宽度的比例（内部常量，不对外暴露）
+const STACK_DEPTH = 0.02
+
 export interface PageStackOptions {
   state: ReturnType<typeof useBookState>
   pageCount: Ref<number>
   /** 校验后的页宽高比（挂载期冻结） */
   safePageAspect: number
-  /** 校验后的纸叠厚度比例（响应式，运行时修改生效） */
-  safeStackDepth: ComputedRef<number>
   /** 纸叠开关（props.stack，响应式） */
   stackEnabled: () => boolean
   /** 阅读方向（props.forwardDirection，响应式） */
@@ -39,8 +40,7 @@ export interface PageStackOptions {
  *   在 from/to 中清除，避免动画中悬浮细线
  */
 export function usePageStack(options: PageStackOptions) {
-  const { state, pageCount, safePageAspect, safeStackDepth, stackEnabled, forwardDirection } =
-    options
+  const { state, pageCount, safePageAspect, stackEnabled, forwardDirection } = options
 
   function stackSidesFor(pageIndex: number): StackSides {
     return computeStackSides({
@@ -56,7 +56,7 @@ export function usePageStack(options: PageStackOptions) {
   function stackVisualFor(pageIndex: number): StackVisual {
     const width = pageWidth(safePageAspect)
     const sides = stackSidesFor(pageIndex)
-    const maxDepth = width * safeStackDepth.value
+    const maxDepth = width * STACK_DEPTH
     // 合页（居中单页）状态书页全部压紧叠放，条带按压实系数收窄；
     // 翻开状态的纸叠页边微张，保持蓬松厚度
     const compact = isCenteredLayout(pageIndex, state.displayedPages.value, pageCount.value)
@@ -99,8 +99,8 @@ export function usePageStack(options: PageStackOptions) {
   // 当前布局下的纸叠页面映射（悬停命中换算页码用）
   const currentStackSides = computed(() => stackSidesFor(state.currentPage.value))
 
-  // 纸叠开关/厚度变化：空闲时立即生效（翻页中由结束后 renderStatic 收敛）
-  watch([stackEnabled, safeStackDepth], () => {
+  // 纸叠开关变化：空闲时立即生效（翻页中由结束后 renderStatic 收敛）
+  watch(stackEnabled, () => {
     if (!state.isFlipping.value) applyStacksIdle()
   })
 

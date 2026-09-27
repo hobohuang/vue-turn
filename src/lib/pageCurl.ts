@@ -2,13 +2,20 @@ export function easeInOutCubic(t: number) {
   return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2
 }
 
-export function flipAngle(t: number) {
-  return Math.PI * easeInOutCubic(t)
-}
+// 分段数 → 采样缓冲的复用缓存：curledColumns 由 deformSheet 每帧调用，
+// 每帧新建 Float32Array 是纯 GC 压力；同分段数复用同一组缓冲（单线程
+// 渲染循环内同步使用，无并发问题）
+const curlBufferCache = new Map<number, { xs: Float32Array; zs: Float32Array }>()
 
 export function curledColumns(theta: number, amp: number, width: number, columns: number) {
-  const xs = new Float32Array(columns + 1)
-  const zs = new Float32Array(columns + 1)
+  let buffers = curlBufferCache.get(columns)
+  if (!buffers) {
+    buffers = { xs: new Float32Array(columns + 1), zs: new Float32Array(columns + 1) }
+    curlBufferCache.set(columns, buffers)
+  }
+  const { xs, zs } = buffers
+  xs[0] = 0
+  zs[0] = 0
   const sub = 4
   const total = columns * sub
   const ds = width / total

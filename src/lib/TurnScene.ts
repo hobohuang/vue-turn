@@ -105,6 +105,9 @@ interface SheetBase {
   curl: number
   /** 折线圆弧过渡宽度（世界单位）；卷曲模式不使用 */
   bend: number
+  /** 本张纸的网格横向分段数：形变场采样必须与建网格时的分段一致
+   *  （封面档经 options.nPolygons 覆盖，与场景级值可不同） */
+  nPolygons: number
   fromFitWidth: number
   toFitWidth: number
   /** 悬停预览纸张：书体平移/静态页滑动/纸叠插值钉在起始态（slideP=0），只预览纸角形变；真实按下接管时清除 */
@@ -222,7 +225,9 @@ export class TurnScene {
   constructor(options: TurnSceneOptions) {
     this.container = options.container
     this.pageAspect = positive(options.pageAspect, 0.75)
-    this.nPolygons = Math.round(positive(options.nPolygons ?? 64, 64))
+    // 下限钳制 2：round 可能把 (0,0.5) 的输入收敛为 0，colW=width/0=Infinity
+    // 会让卷曲形变整页塌缩到书脊
+    this.nPolygons = Math.max(2, Math.round(positive(options.nPolygons ?? 64, 64)))
     this.curl = options.curl ?? 0.8
     this.sheetWidth = pageWidth(this.pageAspect)
     this.pageFitWidth = this.sheetWidth * 2
@@ -308,6 +313,9 @@ export class TurnScene {
       this.removeSheet()
       onDone?.(false)
     }
+    // 相机动画同样失效：冻结在当前位置，恢复后由 refit/下一次动画收敛
+    // （否则恢复前 rig.update 仍对着失效上下文插值，恢复后停在陈旧终点）
+    this.rig.cancelAnimation()
     // 清空静态网格：上下文丢失后几何体/材质失效，恢复时由调用方重建
     for (const entry of this.staticMeshes.values()) {
       this.scene.remove(entry.mesh)
@@ -540,7 +548,10 @@ export class TurnScene {
     const uvs = geometry.attributes.uv
     const normals = geometry.attributes.normal
     const index = geometry.getIndex()
-    if (!positions || !uvs || !normals || !index) return null
+    if (!positions || !uvs || !normals || !index) {
+      geometry.dispose()
+      return null
+    }
     const sign = spec.geometry === 'A' ? 1 : -1
     const baseS = new Float32Array(positions.count)
     const baseY = new Float32Array(positions.count)
@@ -624,6 +635,7 @@ export class TurnScene {
       curl,
       // 折缝圆弧兜底宽度：与 soft/custom 预设一致（4% 页宽窄圆角）
       bend: 0.04 * this.sheetWidth,
+      nPolygons,
       fromFitWidth,
       toFitWidth,
     }
@@ -907,7 +919,13 @@ export class TurnScene {
   // 否则拖点收回抓取点展平；动画结束统一走 finishSheet 收敛布局
   endFoldDrag(commit: boolean, baseDuration: number) {
     const sheet = this.sheet
-    if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return
+    if (!sheet || sheet.mode !== 'drag') return
+    // 卷曲纸张误入折角收尾：按卷曲语义收尾（调用方配对错误时的兜底，
+    // 避免静默 no-op 冻结画面与 isFlipping）
+    if (sheet.kind === 'curl') {
+      this.endDragFlip(commit, baseDuration)
+      return
+    }
     const { pu, pv, qu, qv } = sheet.fold
     const target = commit ? 1 : 0
     const toQ: [number, number] = commit ? [-this.sheetWidth, pv] : [pu, pv]
@@ -938,7 +956,13 @@ export class TurnScene {
   // 拖拽结束：commit 为 true 动画补完翻页，否则回弹取消
   endDragFlip(commit: boolean, baseDuration: number) {
     const sheet = this.sheet
-    if (!sheet || sheet.kind !== 'curl' || sheet.mode !== 'drag') return
+    if (!sheet || sheet.mode !== 'drag') return
+    // 折角纸张误入卷曲收尾：按折角语义收尾（调用方配对错误时的兜底，
+    // 避免静默 no-op 冻结画面与 isFlipping）
+    if (sheet.kind === 'fold') {
+      this.endFoldDrag(commit, baseDuration)
+      return
+    }
     const target = commit ? 1 : 0
     if (sheet.progress === target) {
       this.finishSheet(sheet, commit)
@@ -1048,18 +1072,21 @@ export class TurnScene {
     return null
   }
 
-  // 纸张卷曲形变：pe 为翻页进度 [0,1]
+  // 纸张卷曲形变：pe 为翻页进度 [0,1]。
+  // 分段数取纸张自身值（建网格与形变场采样必须同源，否则封面档 32 段
+  // 网格会被场景级 64 段的形变场欠采样/越界采样）
   private deformSheet(sheet: CurlSheet, pe: number) {
     const theta = Math.PI * pe
     const amp = sheet.curl * Math.sin(theta)
-    const columns = curledColumns(theta, amp, this.sheetWidth, this.nPolygons)
+    const n = sheet.nPolygons
+    const columns = curledColumns(theta, amp, this.sheetWidth, n)
     const positions = sheet.geometry.attributes.position
     if (!positions) return
-    const colW = this.sheetWidth / this.nPolygons
+    const colW = this.sheetWidth / n
     for (let i = 0; i < positions.count; i++) {
       const s = sheet.baseS[i] ?? 0
       const f = s / colW
-      const c0 = Math.min(this.nPolygons, Math.floor(f))
+      const c0 = Math.min(n, Math.floor(f))
       const frac = f - c0
       const x = (columns.xs[c0] ?? 0) * (1 - frac) + (columns.xs[c0 + 1] ?? 0) * frac
       const z = (columns.zs[c0] ?? 0) * (1 - frac) + (columns.zs[c0 + 1] ?? 0) * frac
@@ -1172,8 +1199,7 @@ export class TurnScene {
         return
       }
     }
-    // 铰点 + 世界偏移插值：跨页/封面 hingeX=0 与历史行为一致，
-    // 单页模式 hingeX=±半页宽 不再被清零
+    // 铰点 + 世界偏移插值：跨页/封面 hingeX=0（单页模式 hingeX=±半页宽）
     sheet.group.position.x =
       sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
     for (const entry of this.staticMeshes.values()) {
@@ -1185,6 +1211,9 @@ export class TurnScene {
     this.deformSheet(sheet, pe)
   }
 
+  // 静默替换纸张：不触发其 onDone（语义上被替换的纸张已被新交互接管/废弃）。
+  // 依赖被替换纸张 onDone 做布局恢复的调用方（悬停预览路径）须先 stopFlip
+  // 强制收尾——否则翻开前置布局等中间态会残留（见 usePeelPreview.ensurePeel）
   removeSheet() {
     const sheet = this.sheet
     if (!sheet) return
@@ -1213,6 +1242,12 @@ export class TurnScene {
 
   private tick = (now: number) => {
     if (this.disposed) return
+    if (this.contextLost) {
+      // 上下文丢失：渲染不可能发生，dirty 无法清除，继续排帧是满频空转。
+      // 停帧，恢复时 onContextRestoredHandler 的 markDirty 会重新唤醒
+      this.rafId = 0
+      return
+    }
     this.updateSheet(now)
     // 相机动画结束帧显式标脏，保证终点帧被渲染
     if (this.rig.update(now)) this.dirty = true
@@ -1225,8 +1260,7 @@ export class TurnScene {
       this.dirty = false
     }
     // 空闲（无逐帧动画、无脏标记）时停帧节能；之后的任何状态变化经
-    // wake()/markDirty() 重新挂起循环。上下文丢失期间 dirty 无法被渲染
-    // 清除，循环保持运转直至恢复/销毁（与停帧前行为一致）
+    // wake()/markDirty() 重新挂起循环。上下文丢失在 tick 入口停帧
     if (!animating && !this.dirty) {
       this.rafId = 0
       return
@@ -1254,6 +1288,10 @@ export class TurnScene {
         'webglcontextrestored',
         this.onContextRestoredHandler,
       )
+      // 主动释放 WebGL 上下文：浏览器对活跃 context 有数量配额（本文件
+      // createRenderer 注释），仅靠 renderer.dispose + GC 释放不及时，
+      // 频繁挂载/卸载（v-if、HMR）会加速配额耗尽
+      this.renderer.forceContextLoss()
       this.renderer.dispose()
       this.renderer.domElement.remove()
     }

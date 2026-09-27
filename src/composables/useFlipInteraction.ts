@@ -22,7 +22,8 @@ import type {
 
 import type { useBookState } from './useBookState'
 import { useKeyboardNav } from './useKeyboardNav'
-import { usePeelPreview, type PaperOwnership } from './usePeelPreview'
+import { PaperOwnership } from './paperOwnership'
+import { usePeelPreview } from './usePeelPreview'
 import { useStackHover } from './useStackHover'
 import type { useTurnRenderer } from './useTurnRenderer'
 import { useZoomPan } from './useZoomPan'
@@ -52,7 +53,6 @@ export interface FlipInteractionProps {
   zoomMode?: ZoomMode
   dragToFlip?: boolean
   peel?: boolean
-  peelZone?: number
   stack?: boolean
   forwardDirection?: FlipDirection
 }
@@ -69,11 +69,8 @@ export interface FlipInteractionEmits {
   (event: 'zoom-change', level: number): void
 }
 
-export interface FlipInteractionOptions {
-  props: FlipInteractionProps
-  state: ReturnType<typeof useBookState>
-  emit: FlipInteractionEmits
-  renderer: ReturnType<typeof useTurnRenderer>
+/** 场景查询（只读）：交互层做命中判定与翻页构造所需的数据与纯函数 */
+export interface FlipInteractionQuery {
   textures: Map<number, THREE.Texture>
   pageCount: Ref<number>
   containerSize: { width: number }
@@ -83,21 +80,25 @@ export interface FlipInteractionOptions {
   instanceToken: object
   safePageAspect: number
   safeFlipDuration: ComputedRef<number>
-  safePeelZone: ComputedRef<number>
   safeMaxZoom: ComputedRef<number>
+  pageSources: ComputedRef<PageSource[]>
+  /** 当前布局下的纸叠页面映射（悬停命中换算页码用） */
+  currentStackSides: ComputedRef<StackSides>
+  /** 最近一次静态布局（由编排层提供） */
+  getLastPlacements: () => StaticPlacement[]
+  /** item 索引 → 热区配置（无热区返回空数组） */
+  regionsOf: (itemIndex: number) => PageRegion[]
   /** 翻页纸张所属档位（内页 preset / 封面封底 coverPreset）的折页参数 */
   foldOfSpec: (spec: FlipSpec) => SheetFoldOptions
   /** 拾取命中的静态页所属纸张的折页参数 */
   foldOfPage: (index: number | undefined) => SheetFoldOptions
-  pageSources: ComputedRef<PageSource[]>
-  /** item 索引 → 热区配置（无热区返回空数组） */
-  regionsOf: (itemIndex: number) => PageRegion[]
-  /** 最近一次静态布局（由编排层提供） */
-  getLastPlacements: () => StaticPlacement[]
-  /** 当前布局下的纸叠页面映射（悬停命中换算页码用） */
-  currentStackSides: ComputedRef<StackSides>
   sheetOptions: (spec: FlipSpec) => FlipSheetOptions
   computeFlipSpecFor: (trigger: FlipDirection) => FlipSpec | null
+}
+
+/** 编排动作（有副作用，由编排层提供） */
+export interface FlipInteractionActions {
+  /** 翻页/跳转前拦截：返回 false 表示被 before-flip 取消 */
   emitBeforeFlip: (direction: FlipDirection | null, from: number, to: number) => boolean
   next: () => void
   prev: () => void
@@ -106,6 +107,21 @@ export interface FlipInteractionOptions {
   applyStacksFlip: (spec: FlipSpec) => void
   rasterizeWindow: (force?: boolean) => Promise<void>
   releaseOutsideWindow: () => void
+}
+
+export interface FlipInteractionOptions {
+  /** 声明式输入（props 子集，值保持响应式） */
+  props: FlipInteractionProps
+  state: ReturnType<typeof useBookState>
+  emit: FlipInteractionEmits
+  /** zoom-change 同步回调：缩放级别每次变化时调用（编排层据此镜像响应式 state.zoom） */
+  onZoomChange: (level: number) => void
+  /** 场景能力（useTurnRenderer） */
+  renderer: ReturnType<typeof useTurnRenderer>
+  /** 场景查询（只读）：交互层不得经由 query 产生副作用 */
+  query: FlipInteractionQuery
+  /** 编排动作：翻页编排与渲染调度由编排层提供 */
+  actions: FlipInteractionActions
 }
 
 interface DragState {
@@ -140,11 +156,8 @@ interface PanState {
  * 本层不感知 v-model 与路由。
  */
 export function useFlipInteraction(options: FlipInteractionOptions) {
+  const { props, state, emit, renderer, query, actions, onZoomChange } = options
   const {
-    props,
-    state,
-    emit,
-    renderer,
     textures,
     pageCount,
     containerSize,
@@ -153,23 +166,26 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     instanceToken,
     safePageAspect,
     safeFlipDuration,
-    safePeelZone,
     safeMaxZoom,
+    pageSources,
+    currentStackSides,
+    getLastPlacements,
+    regionsOf,
     foldOfSpec,
     foldOfPage,
-    pageSources,
-    regionsOf,
-    getLastPlacements,
-    currentStackSides,
     sheetOptions,
     computeFlipSpecFor,
+  } = query
+  const {
     emitBeforeFlip,
+    next,
+    prev,
     goToPage,
     renderStatic,
     applyStacksFlip,
     rasterizeWindow,
     releaseOutsideWindow,
-  } = options
+  } = actions
 
   const disabledRef = ref(false)
   const isDisabled = () => disabledRef.value
@@ -179,17 +195,16 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
 
   // 场景纸张归属（PaperOwnership，见 usePeelPreview）：'drag' 需要状态机收尾，
   // 'peel' 仅悬停预览。悬停预览的内部状态（PeelState）与归属标记同置同清
-  const ownership: PaperOwnership = { owner: null, peel: null }
+  const ownership = new PaperOwnership()
   let drag: DragState | null = null
   let pan: PanState | null = null
   let suppressClick = false
   let clickTimer: ReturnType<typeof setTimeout> | null = null
 
   // 纸张转为真实拖拽归属：一并清除可能残留的悬停预览标记
-  // （peel → drag 的接管路径同样适用：'peel' 直接改写为 'drag'）
+  // （peel → drag 的接管路径同样适用）
   function claimDragOwnership() {
-    ownership.owner = 'drag'
-    ownership.peel = null
+    ownership.claimDrag()
   }
 
   // ---------------------------------------------------------------------------
@@ -204,8 +219,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     rootEl,
     instanceToken,
     pageCount,
-    next: options.next,
-    prev: options.prev,
+    next,
+    prev,
     goToPage,
   })
 
@@ -229,7 +244,10 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     isBusy: () => drag !== null || pan !== null || ownership.owner !== null,
     renderer,
     safeMaxZoom,
-    emit: (event, level) => emit(event, level),
+    emit: (event, level) => {
+      onZoomChange(level)
+      emit(event, level)
+    },
   })
 
   // 纸张完成/取消的统一收尾：拖拽提交或回弹后恢复状态机，悬停预览仅恢复布局。
@@ -238,8 +256,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   function makeSheetDone(spec: FlipSpec, trigger: FlipDirection) {
     return (committed: boolean) => {
       const owner = ownership.owner
-      ownership.owner = null
-      ownership.peel = null
+      ownership.clear()
       if (owner === 'drag') {
         if (committed) state.commitFlip(spec.delta)
         else state.cancelFlip()
@@ -262,7 +279,6 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     renderer,
     textures,
     safePageAspect,
-    safePeelZone,
     safeFlipDuration,
     foldOfSpec,
     foldOfPage,
@@ -420,9 +436,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     const rightSide = ratio > 0.5
     const forward = props.forwardDirection === 'left' ? rightSide : !rightSide
     if (forward) {
-      options.next()
+      next()
     } else {
-      options.prev()
+      prev()
     }
   }
 
@@ -494,7 +510,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     }
     // 该方向的悬停预览已创建纸张：直接接管纸张，避免重建；
     // 纸叠过渡在此补设（悬停预览不动纸叠，真实翻页才过渡）
-    const takeOver = ownership.owner === 'peel' && ownership.peel?.trigger === trigger
+    const takeOver = ownership.isPeelMatch(trigger)
     // 翻页前置布局：相机由拖拽结束动画接管。接管悬停预览的纸张时同样
     // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）
     renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
@@ -578,14 +594,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   ): DragState | null {
     const foldW = pageWidthOf(safePageAspect)
     const takeOverCorner = foldHit ? (foldHit.edge ? foldHit.cornerV : 0) : 0
-    const peel = ownership.peel
-    // 同方向同模式悬停预览的纸张直接接管；其余情况收起后新建折角纸张
-    const takeOver =
-      ownership.owner === 'peel' &&
-      peel !== null &&
-      peel.trigger === trigger &&
-      peel.isFold &&
-      peel.corner === takeOverCorner
+    // 同方向同角悬停预览的纸张直接接管；其余情况收起后新建折角纸张
+    const takeOver = ownership.isPeelMatch(trigger, takeOverCorner)
     if (!takeOver && ownership.owner === 'peel') releasePeelNow()
     // 翻页前置布局：相机不动，折角在页内完成。接管悬停预览的纸张时同样
     // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）

@@ -11,25 +11,10 @@ const router = useRouter()
 
 const turnRef = ref<TurnInstance | null>(null)
 const currentPage = ref(1)
-const total = ref(10)
-const flipping = ref(false)
-const zoom = ref(1)
 const MAX_ZOOM = 3
-// canNext/canPrev 是实例 getter，非响应式；用 tick 在事件后强制重渲按钮状态
-const tick = ref(0)
-const bump = () => {
-  tick.value++
-}
 
-// 工具栏按钮状态：翻页中统一禁用，否则取实例 getter
-const canNext = computed(() => {
-  void tick.value
-  return flipping.value ? false : (turnRef.value?.canNext ?? false)
-})
-const canPrev = computed(() => {
-  void tick.value
-  return flipping.value ? false : (turnRef.value?.canPrev ?? false)
-})
+// 响应式状态快照：指示器/按钮状态全部由 state 自动跟踪，无需事件回调强刷
+const state = computed(() => turnRef.value?.state)
 
 let syncing = false
 
@@ -58,6 +43,10 @@ watch(() => route.params.page, applyRoutePage)
 
 watch(currentPage, (value) => {
   if (syncing) return
+  // URL 已是目标页码（URL 发起的同步）时跳过，避免冗余导航
+  const raw = route.params.page
+  const current = Array.isArray(raw) ? raw[0] : raw
+  if (current === String(value)) return
   syncing = true
   router.replace({ name: 'book', params: { page: String(value) } }).finally(() => {
     syncing = false
@@ -65,34 +54,6 @@ watch(currentPage, (value) => {
 })
 
 applyRoutePage()
-
-function onPrev() {
-  turnRef.value?.prev()
-}
-function onNext() {
-  turnRef.value?.next()
-}
-function onZoomIn() {
-  turnRef.value?.zoomIn()
-}
-function onZoomOut() {
-  turnRef.value?.zoomOut()
-}
-function onFlipStart() {
-  flipping.value = true
-  bump()
-}
-function onFlipEnd() {
-  flipping.value = false
-  bump()
-}
-function onReady() {
-  total.value = turnRef.value?.numPages ?? total.value
-  bump()
-}
-function onZoomChange(level: number) {
-  zoom.value = level
-}
 
 // 目录热区：与页面内 .toc-box 的绝对定位百分比一一对应，
 // 点击命中后跳转对应页（region.data 为目标页码）。
@@ -118,11 +79,6 @@ function onRegionTap(_page: number, region: PageRegion) {
       v-model="currentPage"
       :page-aspect="0.75"
       :peel="true"
-      @change="bump"
-      @flip-start="onFlipStart"
-      @flip-end="onFlipEnd"
-      @ready="onReady"
-      @zoom-change="onZoomChange"
       @region-tap="onRegionTap"
     >
       <turn-item cover>
@@ -261,13 +217,25 @@ export function curlPoint(s, θ, κ) {
     </VueTurn>
 
     <div class="toolbar">
-      <button class="nav-btn" :disabled="!canPrev" @click="onPrev">上一页</button>
-      <span class="indicator">第 {{ currentPage }} / {{ total }} 页</span>
-      <button class="nav-btn" :disabled="!canNext" @click="onNext">下一页</button>
-      <button class="nav-btn" :disabled="flipping || zoom >= MAX_ZOOM" @click="onZoomIn">
+      <button class="nav-btn" :disabled="!state?.canPrev" @click="turnRef?.prev()">上一页</button>
+      <span class="indicator">
+        第 {{ state?.page ?? currentPage }} / {{ state?.numPages ?? '…' }} 页
+      </span>
+      <button class="nav-btn" :disabled="!state?.canNext" @click="turnRef?.next()">下一页</button>
+      <button
+        class="nav-btn"
+        :disabled="state?.isFlipping || (state?.zoom ?? 1) >= MAX_ZOOM"
+        @click="turnRef?.zoomIn()"
+      >
         放大
       </button>
-      <button class="nav-btn" :disabled="flipping || zoom <= 1" @click="onZoomOut">缩小</button>
+      <button
+        class="nav-btn"
+        :disabled="state?.isFlipping || (state?.zoom ?? 1) <= 1"
+        @click="turnRef?.zoomOut()"
+      >
+        缩小
+      </button>
     </div>
   </div>
 </template>

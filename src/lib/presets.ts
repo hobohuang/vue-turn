@@ -1,6 +1,6 @@
-import type { TurnPreset } from '@/types/turn'
+import type { LookOptions, TurnPreset } from '@/types/turn'
 
-// 观感参数：五个专业渲染参数的集合，预设为其提供成组默认值
+/** 观感参数：五个专业渲染参数的集合，预设为其提供成组默认值 */
 export interface LookParams {
   /** 翻页网格纵向分段数，越大卷曲越平滑 */
   nPolygons: number
@@ -14,7 +14,7 @@ export interface LookParams {
   curl: number
 }
 
-// 折角（fold）参数：是否开启角点拖拽折角及其柔软程度
+/** 折角（fold）参数：是否开启角点拖拽折角及其柔软程度 */
 export interface FoldParams {
   /** 是否开启角点拖拽折角（turn.js 4 风格） */
   enabled: boolean
@@ -24,15 +24,12 @@ export interface FoldParams {
 
 interface PresetEntry extends LookParams, FoldParams {}
 
-// 纸张类型观感预设：
+// 纸张类型观感预设（各参数的成组基线，look/coverLook 可逐项覆盖）：
 // - soft 普通纸张（默认）：哑光（弱方向光）、自然卷曲，开启角点折角拖拽
 // - hard 纸板：纯刚体旋转（零卷曲）、较强光泽（覆膜观感），关闭折角
-// - custom 自定义基线：与 soft 一致，供 custom 档未传参数回退
-// bend 默认 0.04（4% 页宽）：折缝处的窄圆弧圆角——真实纸张折弯处被
-// 压出的那段小圆弧，与微开角（FOLD_TILT）组合后整条折缝读作"一条略带
-// 厚度的折痕"：弧带内 z 单调升到翘起的翻起平面，不再"塌回"平面形成
-// 第二条平行折线（旧版 ψ→π 的弧先升后降，降回处即第二折痕）。
-// 带过宽（≥0.1）会独立成"圆柱"、两侧各显一条折线（布匹感）
+// - custom 自定义：与 soft 基线一致，供完全自定义时显式声明意图
+// bend 默认 0.04（4% 页宽）：折缝处的窄圆弧圆角，与翻起平面微翘组合成
+// "一条略带厚度的折痕"；带过宽（≥0.1）会呈现"布匹感"
 export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
   soft: {
     nPolygons: 64,
@@ -63,47 +60,45 @@ export const TURN_PRESETS: Record<TurnPreset, PresetEntry> = {
   },
 }
 
-// 解析观感参数：soft/hard 档位值为最高优先级，overrides（显式传入的专业参数）
-// 不生效；仅 custom 档逐项采用 overrides，未传项回退 custom 基线。
+// 解析观感参数：preset 档位值为基线，look 未传项逐项取基线。
 // 非法 preset 回退 soft 并警告。
-export function resolveLook(
-  preset: TurnPreset | undefined,
-  overrides: Partial<LookParams>,
-): LookParams {
+export function resolveLook(preset: TurnPreset | undefined, look?: LookOptions): LookParams {
   if (preset && !TURN_PRESETS[preset]) {
     console.warn(`[vue-turn] 未知 preset "${String(preset)}"，已回退为 soft`)
   }
   const base = presetBase(preset)
-  if (preset !== 'custom') {
-    return {
-      nPolygons: base.nPolygons,
-      perspective: base.perspective,
-      ambient: base.ambient,
-      gloss: base.gloss,
-      curl: base.curl,
-    }
-  }
   return {
-    nPolygons: overrides.nPolygons ?? base.nPolygons,
-    perspective: overrides.perspective ?? base.perspective,
-    ambient: overrides.ambient ?? base.ambient,
-    gloss: overrides.gloss ?? base.gloss,
-    curl: overrides.curl ?? base.curl,
+    nPolygons: look?.nPolygons ?? base.nPolygons,
+    perspective: look?.perspective ?? base.perspective,
+    ambient: look?.ambient ?? base.ambient,
+    gloss: look?.gloss ?? base.gloss,
+    curl: look?.curl ?? base.curl,
   }
 }
 
-// 解析折角参数：soft/hard 档取预设值（fold prop 不生效）；仅 custom 档
-// 由 fold/bend prop 显式设置，未传回退 custom 基线
-export function resolveFold(
-  preset: TurnPreset | undefined,
-  fold?: boolean,
-  bend?: number,
-): FoldParams {
+// 解析折角参数：preset 档位值为基线，look.fold / look.bend 逐项覆盖
+export function resolveFold(preset: TurnPreset | undefined, look?: LookOptions): FoldParams {
   const base = presetBase(preset)
-  if (preset !== 'custom') {
-    return { enabled: base.enabled, bend: base.bend }
+  return {
+    enabled: look?.fold ?? base.enabled,
+    bend: look?.bend ?? base.bend,
   }
-  return { enabled: fold ?? base.enabled, bend: bend ?? base.bend }
+}
+
+/**
+ * 合并封面观感与内页观感：coverLook 未传项逐项回退 look。
+ * 只把 coverLook 中显式定义（非 undefined）的项视为覆盖。
+ */
+export function mergeLook(coverLook?: LookOptions, look?: LookOptions): LookOptions {
+  if (!coverLook) return look ?? {}
+  if (!look) return coverLook
+  const merged: LookOptions = { ...look }
+  const target = merged as Record<keyof LookOptions, unknown>
+  for (const key of Object.keys(coverLook) as (keyof LookOptions)[]) {
+    const value = coverLook[key]
+    if (value !== undefined) target[key] = value
+  }
+  return merged
 }
 
 function presetBase(preset: TurnPreset | undefined): PresetEntry {

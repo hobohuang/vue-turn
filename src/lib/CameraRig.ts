@@ -66,6 +66,19 @@ export class CameraRig {
     this.camera.lookAt(0, 0, 0)
   }
 
+  // 按相机距离动态更新裁剪面：near/far 比恒为 1/200（默认 0.01/100 的比
+  // 是 1/10000）。超宽书（pageAspect 大）适配距离可达 ~75，固定 far=100
+  // 时深度精度不足，纸张背贴（偏移 0.002）会 z-fighting；near 随距离放大
+  // 后精度恢复。每帧按当前距离收敛，动画中途也正确
+  private updateClipping(z: number) {
+    const near = Math.max(0.01, z * 0.02)
+    const far = Math.max(100, z * 4)
+    if (near === this.camera.near && far === this.camera.far) return
+    this.camera.near = near
+    this.camera.far = far
+    this.camera.updateProjectionMatrix()
+  }
+
   /** 画布尺寸变化：更新纵横比与 fov（首次调用后相机视为就绪） */
   resize(width: number, height: number) {
     this.canvasW = width
@@ -110,11 +123,14 @@ export class CameraRig {
     return true
   }
 
-  // 设置缩放级别（钳制到 [1, maxZoom]），距离按当前适配宽度换算
+  // 设置缩放级别（钳制到 [1, maxZoom]），距离按当前适配宽度换算。
+  // 画布尺寸未知（容器 0 尺寸/display:none）时适配距离非有限，跳过——
+  // 否则相机被推到 Infinity/NaN，画面全空且缩放路径不会自愈
   setZoom(level: number, animate = true, duration = 200) {
     const clamped = clamp(Number.isFinite(level) ? level : 1, 1, this.maxZoom)
-    this.zoomLevel = clamped
     const z = this.fitDistance(this.fitWidth) / clamped
+    if (!Number.isFinite(z) || z <= 0) return
+    this.zoomLevel = clamped
     const x = this.clampPanX(this.camTarget.x, z)
     const y = this.clampPanY(this.camTarget.y, z)
     if (animate && duration > 0) {
@@ -124,15 +140,24 @@ export class CameraRig {
     }
   }
 
-  // 按屏幕像素平移相机（放大后拖动查看），平移量钳制在可视范围内
+  // 按屏幕像素平移相机（放大后拖动查看），平移量钳制在可视范围内。
+  // 相机动画进行中：从当前位置继续平移并打断动画——若基于动画目标距离
+  // 计算，相机会在一帧内跳到目标距离
   panBy(dxPixels: number, dyPixels: number) {
     if (this.canvasW <= 0 || this.canvasH <= 0) return
+    if (this.camAnim) {
+      this.camTarget = {
+        x: this.camera.position.x,
+        y: this.camera.position.y,
+        z: this.camera.position.z,
+      }
+      this.camAnim = null
+    }
     const z = this.camTarget.z
     const vFov = (this.camera.fov * Math.PI) / 180
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect)
     const worldPerPxX = (2 * z * Math.tan(hFov / 2)) / this.canvasW
     const worldPerPxY = (2 * z * Math.tan(vFov / 2)) / this.canvasH
-    this.camAnim = null
     this.camTarget = {
       x: this.clampPanX(this.camTarget.x + dxPixels * worldPerPxX, z),
       y: this.clampPanY(this.camTarget.y - dyPixels * worldPerPxY, z),
@@ -141,15 +166,29 @@ export class CameraRig {
   }
 
   // 相机复位到指定适配宽度对应的距离，缩放级别归 1。
-  // duration > 0 从当前位置动画过渡，否则直接吸附（翻页动画接管/收尾用）
+  // duration > 0 从当前位置动画过渡，否则直接吸附（翻页动画接管/收尾用）。
+  // 画布尺寸未知时适配距离非有限，跳过（随后由 resize 收敛）
   resetTo(fitWidth: number, duration: number, startTime?: number) {
-    this.zoomLevel = 1
     const z = this.fitDistance(fitWidth)
+    if (!Number.isFinite(z) || z <= 0) return
+    this.zoomLevel = 1
     if (duration > 0) {
       this.animateCameraTo(z, 0, 0, duration, startTime)
     } else {
       this.snapCamera(z, 0, 0)
     }
+  }
+
+  // 冻结相机动画：停在当前位置（上下文丢失等渲染中断场景用，
+  // 恢复后由 refit/下一次动画收敛）
+  cancelAnimation() {
+    if (!this.camAnim) return
+    this.camTarget = {
+      x: this.camera.position.x,
+      y: this.camera.position.y,
+      z: this.camera.position.z,
+    }
+    this.camAnim = null
   }
 
   // 逐帧驱动：动画中插值相机位置；静止时贴合 camTarget。
@@ -164,6 +203,7 @@ export class CameraRig {
         anim.from.y + (anim.to.y - anim.from.y) * eased,
         anim.from.z + (anim.to.z - anim.from.z) * eased,
       )
+      this.updateClipping(this.camera.position.z)
       if (t >= 1) {
         this.camAnim = null
         return true
@@ -171,6 +211,7 @@ export class CameraRig {
       return false
     }
     this.camera.position.set(this.camTarget.x, this.camTarget.y, this.camTarget.z)
+    this.updateClipping(this.camTarget.z)
     return false
   }
 

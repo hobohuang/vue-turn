@@ -10,6 +10,9 @@
     "src/views/*"
   ],
   "compilerOptions": {
+    // 库构建的 include 覆盖了父配置（不含根目录 env.d.ts），显式补 vite/client
+    // 类型，源码中的 import.meta.env.DEV 才可类型检查
+    "types": ["vite/client"],
     "composite": true,
     "noEmit": false,
     "emitDeclarationOnly": true,

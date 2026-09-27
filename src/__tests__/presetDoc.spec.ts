@@ -5,10 +5,10 @@ import { defineComponent, h, reactive, ref } from 'vue'
 import TurnItem from '@/components/TurnItem.vue'
 import VueTurn from '@/components/VueTurn.vue'
 import { pageWidth } from '@/lib/flipSpec'
-import type { FlipSheetOptions, FlipSpec, TurnInstance, TurnPreset } from '@/types/turn'
+import type { FlipSheetOptions, FlipSpec, LookOptions, TurnInstance, TurnPreset } from '@/types/turn'
 
 // README「观感预设」与「封面与封底」两节的逐条对账：
-// 档位值、显式参数优先级、custom 回退、非法值回退、封面纸张独立档。
+// 档位基线、look/coverLook 逐项覆盖、非法值回退、封面纸张独立档。
 enableAutoUnmount(beforeEach)
 
 type FakeTexture = { dispose: () => void }
@@ -93,13 +93,8 @@ vi.mock('@/lib/textureFactory', () => ({
 interface HostProps {
   preset?: TurnPreset
   coverPreset?: TurnPreset
-  curl?: number
-  gloss?: number
-  ambient?: number
-  nPolygons?: number
-  perspective?: number
-  fold?: boolean
-  bend?: number
+  look?: LookOptions
+  coverLook?: LookOptions
   pageAspect?: number
 }
 
@@ -206,56 +201,51 @@ describe('README：观感预设（preset）档位值', () => {
     })
   })
 
-  it('soft/hard 档位值最高优先级：显式传入的专业参数不生效', async () => {
-    await mountBook({ preset: 'hard', curl: 0.6, gloss: 0.1, ambient: 3, nPolygons: 128, perspective: 800 })
-    expect(mocks.rendererOptions).toMatchObject({
-      nPolygons: 32,
-      perspective: 2400,
-      ambient: 1,
-      gloss: 0.8,
-      curl: 0,
+  it('look 逐项覆盖任何档位（未传项回退档位基线）', async () => {
+    await mountBook({
+      preset: 'hard',
+      look: { curl: 0.6, gloss: 0.1, ambient: 3, nPolygons: 128, perspective: 800 },
     })
-  })
-
-  it('custom 档逐项取显式值，未传项回退 soft 基线', async () => {
-    await mountBook({ preset: 'custom', curl: 0.6, gloss: 0.4 })
     expect(mocks.rendererOptions).toMatchObject({
-      nPolygons: 64,
-      perspective: 2400,
-      ambient: 1,
-      gloss: 0.4,
+      nPolygons: 128,
+      perspective: 800,
+      ambient: 3,
+      gloss: 0.1,
       curl: 0.6,
     })
   })
 
-  it('fold 仅 custom 档可设：soft 恒开、hard 恒关，fold prop 不生效', async () => {
-    // 断言对象为内页翻页（封面另按 coverPreset 取档，见下方封面用例）
-    stubFoldFlipCommitting()
-    let host = await mountBook({ preset: 'soft', fold: false })
-    expect(flipInnerOnce(host.inst).folded).toBe(true)
-
-    stubFoldFlipCommitting()
-    host = await mountBook({ preset: 'hard', fold: true })
-    const hard = flipInnerOnce(host.inst)
-    // hard 档 fold prop 被忽略：折角关闭 → 主动翻页回退卷曲动画
-    expect(hard.folded).toBe(false)
-    expect(mocks.startFlip).toHaveBeenCalledTimes(1)
-
-    stubFoldFlipCommitting()
-    host = await mountBook({ preset: 'custom', fold: false })
-    const custom = flipInnerOnce(host.inst)
-    expect(custom.folded).toBe(false)
-    expect(mocks.startFlip).toHaveBeenCalledTimes(1)
+  it('look 未传项回退档位基线', async () => {
+    await mountBook({ preset: 'hard', look: { gloss: 0.42 } })
+    expect(mocks.rendererOptions).toMatchObject({
+      nPolygons: 32,
+      perspective: 2400,
+      ambient: 1,
+      gloss: 0.42,
+      curl: 0,
+    })
   })
 
-  it('bend 仅 custom 档生效：折页动画收到 bend × 单页世界宽度', async () => {
+  it('look.fold 任何档位可设：soft 关闭折角、hard 开启折角', async () => {
+    // 断言对象为内页翻页（封面另按 coverPreset 取档，见下方封面用例）
     stubFoldFlipCommitting()
-    const host = await mountBook({ preset: 'custom', bend: 0.1, pageAspect: 0.75 })
+    let host = await mountBook({ preset: 'soft', look: { fold: false } })
+    expect(flipInnerOnce(host.inst).folded).toBe(false)
+    expect(mocks.startFlip).toHaveBeenCalledTimes(1)
+
+    stubFoldFlipCommitting()
+    host = await mountBook({ preset: 'hard', look: { fold: true } })
+    expect(flipInnerOnce(host.inst).folded).toBe(true)
+  })
+
+  it('look.bend 任何档位可设：折页动画收到 bend × 单页世界宽度', async () => {
+    stubFoldFlipCommitting()
+    const host = await mountBook({ preset: 'custom', look: { bend: 0.1 }, pageAspect: 0.75 })
     expect(flipInnerOnce(host.inst).bendWorld).toBeCloseTo(0.1 * pageWidth(0.75), 6)
 
     stubFoldFlipCommitting()
-    const soft = await mountBook({ preset: 'soft', bend: 0.1 })
-    // soft 档 bend 固定 0.04
+    const soft = await mountBook({ preset: 'soft', pageAspect: 0.75 })
+    // 未传 look.bend 回退 soft 基线 0.04
     expect(flipInnerOnce(soft.inst).bendWorld).toBeCloseTo(0.04 * pageWidth(0.75), 6)
   })
 
@@ -311,16 +301,22 @@ describe('README：封面与封底（coverPreset）', () => {
     expect(mocks.startFlip.mock.calls[0]?.[5]).toEqual({ curl: 0.8, nPolygons: 64 })
   })
 
-  it('coverPreset="custom" 与内页共用同一组自定义参数', async () => {
-    const host = await mountBook({ preset: 'custom', coverPreset: 'custom', curl: 0.5, gloss: 0.42, nPolygons: 20 })
+  it('coverLook 可独立于内页设置：未传项回退 look', async () => {
+    const host = await mountBook({
+      preset: 'custom',
+      coverPreset: 'custom',
+      look: { curl: 0.5, gloss: 0.42, nPolygons: 20 },
+      coverLook: { nPolygons: 40, gloss: 0.6 },
+    })
     expect(mocks.rendererOptions).toMatchObject({
       curl: 0.5,
       gloss: 0.42,
       nPolygons: 20,
       coverAmbient: 1,
-      coverGloss: 0.42,
+      coverGloss: 0.6,
     })
-    expect(flipOnce(host.inst)).toEqual({ curl: 0.5, nPolygons: 20 })
+    // 封面纸张翻页：nPolygons 取 coverLook 覆盖值，curl 回退 look
+    expect(flipOnce(host.inst)).toEqual({ curl: 0.5, nPolygons: 40 })
   })
 
   it('封面折页档按 coverPreset：hard 封面刚体翻转、soft 封面走折页', async () => {
@@ -337,6 +333,12 @@ describe('README：封面与封底（coverPreset）', () => {
     flipOnce(soft.inst)
     expect(mocks.startFoldFlip).toHaveBeenCalledTimes(1)
     expect(mocks.startFoldFlip.mock.calls[0]?.[6]).toBeCloseTo(0.04 * pageWidth(0.75), 6)
+
+    stubFoldFlipCommitting()
+    // coverLook.bend 独立覆盖封面折缝
+    const bent = await mountBook({ coverPreset: 'soft', coverLook: { bend: 0.12 } })
+    flipOnce(bent.inst)
+    expect(mocks.startFoldFlip.mock.calls[0]?.[6]).toBeCloseTo(0.12 * pageWidth(0.75), 6)
   })
 
   it('非法 coverPreset → 回退 soft 并 console.warn', async () => {

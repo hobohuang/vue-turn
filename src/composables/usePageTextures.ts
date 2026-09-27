@@ -47,6 +47,8 @@ export function usePageTextures(options: PageTexturesOptions) {
   const spreadBasePromises = new Map<number, { seq: number; promise: Promise<THREE.Texture> }>()
   let disposed = false
   let pendingRaster = false
+  // 排队补刷是否需要破缓存（refreshPage 的 cacheBust 意图跨翻页保留）
+  let pendingRasterBust = false
   let rasterSeq = 0
   let rasterScheduled = false
   let readyEmitted = false
@@ -214,8 +216,9 @@ export function usePageTextures(options: PageTexturesOptions) {
     }
   }
 
-  // 懒光栅化：仅生成窗口内缺失的纹理（force=true 时强制刷新窗口内全部页面）
-  async function rasterizeWindow(force = false) {
+  // 懒光栅化：仅生成窗口内缺失的纹理（force=true 时强制刷新窗口内全部页面，
+  // bust=true 时强制刷新附带破缓存——refreshPage 翻页中排队的补刷路径）
+  async function rasterizeWindow(force = false, bust = false) {
     const seq = ++rasterSeq
     await nextTick()
     if (disposed || seq !== rasterSeq) return
@@ -223,7 +226,7 @@ export function usePageTextures(options: PageTexturesOptions) {
     const tasks: Promise<void>[] = []
     for (let i = start; i < end; i++) {
       if (force || !textures.has(i)) {
-        tasks.push(rasterizePage(i, seq))
+        tasks.push(rasterizePage(i, seq, bust))
       }
     }
     await Promise.all(tasks)
@@ -235,18 +238,28 @@ export function usePageTextures(options: PageTexturesOptions) {
     }
   }
 
-  // 手动重绘指定页面纹理（页码从 1 开始）；翻页中排队，结束后补刷
+  // 手动重绘指定页面纹理（页码从 1 开始）；翻页中排队，结束后补刷。
+  // 跨页半图两半共刷：重光栅化会为 item 生成新基准纹理，只刷一半会让
+  // 左右两半出自不同基准（一半新内容一半旧内容）
   async function refreshPage(page: number) {
     const index = Math.max(0, Math.round(page) - 1)
     if (index >= options.pageSources.value.length) return
     if (options.isFlipping.value) {
       pendingRaster = true
+      pendingRasterBust = true
       return
     }
     const seq = rasterSeq
     await nextTick()
     if (disposed || seq !== rasterSeq) return
-    await rasterizePage(index, seq, true)
+    const source = options.pageSources.value[index]
+    const targets: number[] = [index]
+    if (source && !source.blank && source.itemIndex >= 0) {
+      for (const [i, s] of options.pageSources.value.entries()) {
+        if (i !== index && s.itemIndex === source.itemIndex && !s.blank) targets.push(i)
+      }
+    }
+    await Promise.all(targets.map((i) => rasterizePage(i, seq, true)))
     if (disposed || seq !== rasterSeq) return
     options.renderStatic()
   }
@@ -338,7 +351,9 @@ export function usePageTextures(options: PageTexturesOptions) {
       if (flipping) return
       if (pendingRaster) {
         pendingRaster = false
-        void rasterizeWindow(true)
+        const bust = pendingRasterBust
+        pendingRasterBust = false
+        void rasterizeWindow(true, bust)
       }
     },
   )

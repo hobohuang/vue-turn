@@ -13,29 +13,13 @@ import type {
 } from '@/types/turn'
 
 import type { useBookState } from './useBookState'
+import type { PaperOwnership } from './paperOwnership'
 import type { useTurnRenderer } from './useTurnRenderer'
 
 // 整页轻卷悬停的最大进度
 const PEEL_PROGRESS = 0.07
-
-/** 悬停预览当前状态（拖点/折角元信息，供按下接管判定） */
-export interface PeelState {
-  trigger: FlipDirection
-  isFold: boolean
-  corner: number
-}
-
-/**
- * 场景纸张归属：唯一事实来源（状态对象由 useFlipInteraction 持有）。
- * - owner 'drag'：真实拖拽占用的纸张，状态机收尾（提交/回弹 + flip-end）
- * - owner 'peel'：悬停预览占用的纸张，收起时仅恢复静态布局
- * - peel 仅在 owner === 'peel' 时非空，两者同置同清——
- *   "peel 预览激活 ⟺ owner === 'peel'" 的不变式由读写约定结构化保证
- */
-export interface PaperOwnership {
-  owner: 'drag' | 'peel' | null
-  peel: PeelState | null
-}
+// 整页轻卷预览的两侧边缘条带宽度占视口宽度的比例（内部常量，不对外暴露）
+const PEEL_ZONE = 0.12
 
 export interface PeelPreviewOptions {
   /** props.peel（响应式读取） */
@@ -57,11 +41,11 @@ export interface PeelPreviewOptions {
     | 'foldAnchorDistanceFromClient'
     | 'endDragFlip'
     | 'endFoldDrag'
+    | 'stopFlip'
     | 'pickPage'
   >
   textures: Map<number, THREE.Texture>
   safePageAspect: number
-  safePeelZone: ComputedRef<number>
   safeFlipDuration: ComputedRef<number>
   /** fold 交互是否启用（preset 解析结果，挂载期冻结） */
   /** 翻页纸张所属档位的折页参数（内页 preset / 封面封底 coverPreset） */
@@ -83,10 +67,11 @@ export interface PeelPreviewOptions {
  * 悬停预览（peel）：不动相机、不改纸叠，只预览纸角形变。
  * - fold 开启：仅四角区域为折角预览（turn.js 风格），折点跟随指针，
  *   与折角拖拽同一张纸张、同一条形变路径（preview=true 差异见下）
- * - fold 关闭：视口边缘条带整页轻卷（旧版 peel 行为）
+ * - fold 关闭：视口边缘条带整页轻卷
  *
- * 纸张归属记录在共享的 PaperOwnership 上：悬停创建的预览纸张可被
- * 真实按下无缝接管；归属的建立/清除与本模块内部标记同置同清。
+ * 纸张归属记录在共享的 PaperOwnership 状态机上（composables/paperOwnership.ts）：
+ * 悬停创建的预览纸张可被真实按下无缝接管；归属的建立/清除经状态机的
+ * claimPeel / clear 方法完成。
  */
 export function usePeelPreview(options: PeelPreviewOptions) {
   const {
@@ -98,7 +83,6 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     renderer,
     textures,
     safePageAspect,
-    safePeelZone,
     safeFlipDuration,
     foldOfSpec,
     foldOfPage,
@@ -112,10 +96,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
 
   // 丢弃悬停预览（不触发收尾动画，供 startFlip 即将静默替换纸张时使用）
   function discardPeel() {
-    if (ownership.owner === 'peel') {
-      ownership.owner = null
-      ownership.peel = null
-    }
+    ownership.releasePeel()
   }
 
   // 立即收起悬停预览的纸张（同步触发取消收尾）
@@ -123,8 +104,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     const peel = ownership.peel
     if (ownership.owner !== 'peel' || !peel) return
     const wasFold = peel.isFold
-    ownership.owner = null
-    ownership.peel = null
+    ownership.clear()
     if (wasFold) {
       renderer.endFoldDrag(false, safeFlipDuration.value)
     } else {
@@ -132,7 +112,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     }
   }
 
-  // 旧版整页弯折条带（fold 关闭 + peel 开启时使用）：
+  // 整页弯折条带（fold 关闭 + peel 开启时的预览形态）：
   // t 为条带强度 [0,1]，乘以 PEEL_PROGRESS 得拖拽进度；同向重复悬停只更新
   // 进度，不重建纸张。悬停仅预览页角：不动相机、不改纸叠、不替换静态布局
   // ——静态布局一旦被替换成翻开布局，悬停侧（后退方向的左半边）可能不再
@@ -148,6 +128,10 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     releasePeelNow()
     const spec = computeFlipSpecFor(trigger)
     if (!spec) return
+    // 强制收尾在途 settle：curl 预览不重设静态布局，若上一步是 fold 预览
+    // （布局已被重设为翻开前置态且世界偏移已叠加），其收起动画的 onDone
+    // 会被场景静默替换丢弃，翻开前置布局残留到下一次真实翻页
+    renderer.stopFlip()
     // preview=true：悬停预览不动书体/静态页/纸叠，只预览整页卷曲
     // （静态布局保持空闲态，命中判定所依赖的网格不随预览变化）
     const ok = renderer.beginDragFlip(
@@ -159,8 +143,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       true,
     )
     if (!ok) return
-    ownership.owner = 'peel'
-    ownership.peel = { trigger, isFold: false, corner: 0 }
+    ownership.claimPeel({ trigger, isFold: false, corner: 0 })
     renderer.setDragProgress(progress)
   }
 
@@ -190,7 +173,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     if (!rect || rect.width <= 0) return
     const ratio = (event.clientX - rect.left) / rect.width
     const ltr = forwardDirection() === 'left'
-    const zone = safePeelZone.value
+    const zone = PEEL_ZONE
     const forwardTrigger: FlipDirection = ltr ? 'left' : 'right'
     const backwardTrigger: FlipDirection = ltr ? 'right' : 'left'
     // 指针距两侧外缘的深度（0=贴外缘，zone=条带内缘）：折角强度随深度渐变，
@@ -218,7 +201,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       else releasePeelNow()
       return
     }
-    // fold 关闭：视口边缘条带整页轻微卷曲（旧版 peel 行为）
+    // fold 关闭：视口边缘条带整页轻微卷曲
     if (fwdDepth < zone && state.canGoForward.value) {
       ensurePeel(forwardTrigger, 1 - fwdDepth / zone)
     } else if (backDepth < zone && state.canGoBack.value) {
@@ -259,8 +242,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       true,
     )
     if (!ok) return
-    ownership.owner = 'peel'
-    ownership.peel = { trigger, isFold: true, corner: cornerV }
+    ownership.claimPeel({ trigger, isFold: true, corner: cornerV })
     // 创建时拖点先落在锚点外角（平展），立即移到指针当前位置
     renderer.setFoldDragFromClient(event.clientX, event.clientY)
   }

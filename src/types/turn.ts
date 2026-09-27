@@ -8,11 +8,10 @@ export type ZoomMode = 'off' | 'wheel' | 'dblclick' | 'both'
 // 显示模式：auto 按容器宽高自动判定，1/2 强制单/双页
 export type DisplayMode = 'auto' | 1 | 2
 
-// 观感预设：纸张类型。soft/hard 档位值为最高优先级（显式传入的专业参数不生效），
-// 仅 custom 档可逐项设置 nPolygons/perspective/ambient/gloss/curl/fold/bend（见 lib/presets.ts）
+// 观感预设：纸张类型。为专业渲染参数提供成组基线，look/coverLook 可逐项覆盖
 // - soft 普通纸张（默认）：哑光、可卷曲、支持角点折角
 // - hard 纸板：刚体旋转、强光泽、关闭折角
-// - custom 自定义：各参数取显式传入值，未传项回退 soft 基线
+// - custom 自定义：基线与 soft 一致，供完全自定义时显式声明意图
 export type TurnPreset = 'soft' | 'hard' | 'custom'
 
 export type Slot = 'left' | 'right' | 'center'
@@ -93,6 +92,28 @@ export interface ViewportPoint {
   y: number
 }
 
+/**
+ * 观感与折页参数（均可选）：逐项覆盖 preset 档位基线，未传项取预设值。
+ * `look` 用于内页，`coverLook` 用于封面/封底纸张（未传项回退 `look`）。
+ * 与 preset 一样在挂载时冻结，运行时修改不生效。
+ */
+export interface LookOptions {
+  /** 翻页网格纵向分段数，越大卷曲越平滑 */
+  nPolygons?: number
+  /** 透视参考距离（像素），越小透视越强 */
+  perspective?: number
+  /** 环境光强度 */
+  ambient?: number
+  /** 方向光（纸张光泽）强度 */
+  gloss?: number
+  /** 卷曲幅度（0 为纯刚体旋转） */
+  curl?: number
+  /** 是否开启折角/折页形变（turn.js 4 风格） */
+  fold?: boolean
+  /** 折缝圆角弧长占页宽比例，越大折缝越柔软 */
+  bend?: number
+}
+
 /** 拖拽翻页参数 */
 export interface FlipSheetOptions {
   /** 卷曲幅度覆盖；硬页（纸板页）传 0 做纯刚体翻转 */
@@ -111,6 +132,19 @@ export interface SheetFoldOptions {
   enabled: boolean
   /** 折缝圆角弧长（世界单位） */
   bendWorld: number
+}
+
+/** 实例响应式状态快照：模板/computed 中读取自动跟踪更新，运行时只读 */
+export interface TurnState {
+  /** 当前页码（从 1 开始） */
+  readonly page: number
+  readonly numPages: number
+  readonly isFlipping: boolean
+  readonly canNext: boolean
+  readonly canPrev: boolean
+  readonly disabled: boolean
+  /** 当前缩放级别（1 为未缩放） */
+  readonly zoom: number
 }
 
 export interface TurnInstance {
@@ -134,6 +168,8 @@ export interface TurnInstance {
   toggleZoom: () => void
   /** 设置缩放级别（钳制到 [1, maxZoom]） */
   setZoom: (level: number) => void
+  /** 响应式状态（模板/computed 直接读取，自动跟踪更新） */
+  readonly state: TurnState
   readonly page: number
   readonly numPages: number
   readonly isFlipping: boolean
