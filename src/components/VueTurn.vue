@@ -63,8 +63,6 @@ const props = withDefaults(
     pageAspect?: number
     /** 单次翻页动画时长（毫秒） */
     flipDuration?: number
-    /** 初始页码（未提供 modelValue 时生效） */
-    startPage?: number
     /** 观感预设（纸张类型）：为专业渲染参数提供成组基线——soft 普通纸张哑光（默认）、hard 纸板刚体强光泽、custom 自定义；look 可逐项覆盖 */
     preset?: TurnPreset
     /** 封面/封底观感预设（默认 hard 纸板）：控制封面与封底的纸张（卷曲/折角/网格密度）与光影（独立灯光组）；coverLook 可逐项覆盖 */
@@ -119,7 +117,6 @@ const props = withDefaults(
   {
     pageAspect: 0.75,
     flipDuration: 900,
-    startPage: 1,
     preset: 'soft',
     coverPreset: 'hard',
     forwardDirection: 'left',
@@ -663,8 +660,9 @@ onMounted(async () => {
   // （刷新页面带 /book/:page 深度链接时表现为回到第 1 页）
   syncPageCount()
   state.setNumPages(pageCount.value)
-  const initial = props.modelValue ?? props.startPage
-  state.goToPage((Number.isFinite(initial) ? Math.round(initial) : 1) - 1)
+  // 初始页码全权由 modelValue 决定；未绑定时从第 1 页开始
+  const initial = props.modelValue
+  state.goToPage((initial !== undefined && Number.isFinite(initial) ? Math.round(initial) : 1) - 1)
   await nextTick()
   // 初始页码同步完成后才允许 first/last 事件（避免挂载即触发）
   mountedDone = true

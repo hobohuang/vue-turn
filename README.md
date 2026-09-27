@@ -49,7 +49,6 @@ const page = ref(1)
 | `coverLook` | `LookOptions` | - | 封面/封底观感与折页参数，逐项覆盖 `coverPreset` 基线，未传项回退 `look`（`perspective` 为全局参数在此无效）。挂载时冻结 |
 | `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），非法值（NaN/零/负数）回退 0.75；常见图书尺寸参考下文「常见图书宽高比」 |
 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒） |
-| `startPage` | `number` | `1` | 初始页码（未提供 modelValue 时生效） |
 | `forwardDirection` | `'left' \| 'right'` | `'left'` | 阅读方向（决定往哪边翻算下一页）：`'left'` 左翻书（页码自左向右递增），`'right'` 右翻书（整体镜像）；运行时可改，详见下文「阅读方向」 |
 | `displayedPages` | `'auto' \| 1 \| 2` | `'auto'` | 一次摊开显示几页：`auto` 按容器宽高判定（宽 > 高取 2），`1`/`2` 为强制值；双页以跨页为单位翻页（页码 ±2），单页逐页翻（±1），详见下文「显示模式」 |
 | `pageWidth` | `number` | `768` | 离屏光栅化宽度（像素） |
