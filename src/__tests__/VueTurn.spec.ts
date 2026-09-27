@@ -927,11 +927,9 @@ describe('VueTurn', () => {
     expect(wrapper.find('#indicator').text()).toBe('2/8')
   })
 
-  it('exposes accessibility attributes on the viewport', async () => {
+  it('makes the viewport focusable for keyboard mode', async () => {
     const wrapper = await mountTurn()
     const viewport = wrapper.find('.viewport')
-    expect(viewport.attributes('role')).toBe('group')
-    expect(viewport.attributes('aria-label')).toBe('翻书')
     expect(viewport.attributes('tabindex')).toBe('0')
   })
 

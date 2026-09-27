@@ -93,8 +93,6 @@ const props = withDefaults(
      *  会在 document 级拦截方向键/空格等按键（影响宿主页面滚动），多实例时仅最近交互的实例响应；
      *  按钮/链接/输入框等可交互元素内的按键不劫持，仅在确有需求时开启 */
     keyboard?: KeyboardMode
-    /** 无障碍标签 */
-    ariaLabel?: string
     /** 光栅化时是否给图片加破缓存参数 */
     cacheBust?: boolean
     /** 懒光栅化预取窗口：当前可见页前后各 N 页预生成纹理，窗口外释放 */
@@ -127,7 +125,6 @@ const props = withDefaults(
     clickToFlip: true,
     clickDeadZone: 0,
     keyboard: 'focus',
-    ariaLabel: '翻书',
     cacheBust: true,
     prefetchWindow: 4,
     resourceTimeout: 5000,
@@ -750,8 +747,6 @@ defineExpose({
       v-show="webglSupported"
       ref="container"
       class="viewport"
-      role="group"
-      :aria-label="ariaLabel"
       :tabindex="keyboard !== 'off' ? 0 : undefined"
       @click="onViewportClick"
       @dblclick="onDblClick"
@@ -763,10 +758,10 @@ defineExpose({
       @pointercancel="onPointerCancel"
       @pointerleave="onPointerLeave"
     ></div>
-    <div v-if="stackHover" class="stack-tooltip" :style="stackTooltipStyle" aria-hidden="true">
+    <div v-if="stackHover" class="stack-tooltip" :style="stackTooltipStyle">
       {{ stackHover.page }}
     </div>
-    <div ref="offscreenEl" class="offscreen-pages" aria-hidden="true">
+    <div ref="offscreenEl" class="offscreen-pages">
       <!-- :key 必须保持位置索引：pageEls 数组按下标对齐 pageSources[itemIndex]，
            Vue 的 v-for ref 数组不保证顺序，仅位置键（增删只动尾部）下可靠 -->
       <div
