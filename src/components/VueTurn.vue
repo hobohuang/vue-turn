@@ -43,14 +43,15 @@ import { resolveFold, resolveLook } from '@/lib/presets'
 import type {
   BeforeFlipContext,
   DisplayMode,
-  EasingFn,
   FlipDirection,
   FlipSheetOptions,
   FlipSpec,
   PageRegion,
+  SheetFoldOptions,
   StaticPlacement,
   TurnInstance,
   TurnPreset,
+  ZoomMode,
 } from '@/types/turn'
 
 const props = withDefaults(
@@ -89,10 +90,6 @@ const props = withDefaults(
     pageBackground?: string
     /** 相机适配边距（视口外扩比例），越大留白越多 */
     fitMargin?: number
-    /** 渲染像素比上限 */
-    maxPixelRatio?: number
-    /** 翻页进度缓动函数 */
-    easing?: EasingFn
     /** 是否允许点击视口翻页（跟随阅读方向：LTR 右半前进，RTL 左半前进） */
     clickToFlip?: boolean
     /** 点击翻页中间死区宽度占比（0~0.5）：视口中轴该比例区域内的点击不翻页 */
@@ -123,10 +120,10 @@ const props = withDefaults(
     bend?: number
     /** 最大缩放倍数 */
     maxZoom?: number
-    /** 是否允许滚轮缩放 */
-    zoomEnabled?: boolean
-    /** 是否允许双击切换缩放（开启后单击翻页会延迟约 260ms 以区分双击） */
-    dblClickZoom?: boolean
+    /** 缩放手势模式：'off' 关闭（默认）、'wheel' 滚轮步进、'dblclick' 双击切换
+     *  （开启双击后单击翻页会延迟约 260ms 以区分双击）、'both' 两者都开。
+     *  命名避开实例暴露的只读 zoom（当前缩放级别） */
+    zoomMode?: ZoomMode
     /** 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页变化，可悬停/点击跳页） */
     stack?: boolean
     /** 纸叠最大厚度占单页宽度的比例（0~0.5） */
@@ -157,8 +154,7 @@ const props = withDefaults(
     /** 角点拖拽折角（turn.js 4 风格）：未传时取 preset 默认（soft 开启，hard 关闭） */
     fold: undefined,
     maxZoom: 3,
-    zoomEnabled: false,
-    dblClickZoom: false,
+    zoomMode: 'off',
     stack: true,
     stackDepth: 0.02,
   },
@@ -254,11 +250,9 @@ const renderer = useTurnRenderer({
   coverAmbient: coverLook.ambient,
   coverGloss: coverLook.gloss,
   fitMargin: props.fitMargin,
-  maxPixelRatio: props.maxPixelRatio,
   // 传入校验后的值并 watch 同步：maxZoom 为交互参数（非挂载冻结的观感
   // 参数），运行时修改应生效，避免交互层钳制与场景钳制漂移
   maxZoom: safeMaxZoom.value,
-  easing: props.easing,
   onContextRestored: () => {
     // 上下文恢复后重建静态页并强制重光栅化窗口内纹理
     renderStatic()
@@ -428,9 +422,31 @@ watch(safeMaxZoom, (value) => {
 
 // 折角（fold）参数挂载时读取一次（运行时修改不生效，与场景观感参数策略一致）：
 // soft/hard 档取预设值；仅 custom 档由 fold/bend prop 设置。
-// bend 为折线圆弧过渡占页宽比例
-const foldParams = resolveFold(props.preset, props.fold, props.bend)
-const foldBendWorld = foldParams.bend * pageWidthOf(safePageAspect)
+// 内页按 preset 解析、封面/封底纸张按 coverPreset 解析——与 curl/nPolygons
+// 一样按纸张归属取档，否则 hard 封面在 soft 内页下会被拖进折页形变路径
+// （折页形变不读 curl，纸板的刚体观感就丢了）。bend 为折线圆弧过渡占页宽比例
+const innerFold = toSheetFold(resolveFold(props.preset, props.fold, props.bend))
+const coverFold = toSheetFold(resolveFold(props.coverPreset, props.fold, props.bend))
+
+function toSheetFold(params: { enabled: boolean; bend: number }): SheetFoldOptions {
+  return { enabled: params.enabled, bendWorld: params.bend * pageWidthOf(safePageAspect) }
+}
+
+/** 页索引是否属于封面/封底专用纸张（一张纸正反两面同档） */
+function isCoverSheet(indices: (number | undefined)[]): boolean {
+  const sources = pageSources.value
+  return indices.some((index) => index !== undefined && sources[index]?.cover === true)
+}
+
+/** 该次翻页所属纸张的折页参数 */
+function foldOfSpec(spec: FlipSpec): SheetFoldOptions {
+  return isCoverSheet([spec.frontIndex, spec.backIndex]) ? coverFold : innerFold
+}
+
+/** 某个静态页（拾取命中）所属纸张的折页参数 */
+function foldOfPage(index: number | undefined): SheetFoldOptions {
+  return isCoverSheet([index]) ? coverFold : innerFold
+}
 
 // ---------------------------------------------------------------------------
 // 纹理生命周期与光栅化调度（usePageTextures）
@@ -619,9 +635,9 @@ function emitBeforeFlip(direction: FlipDirection | null, from: number, to: numbe
 // 封面/封底按 coverPreset 翻页：正反任一为封面时采用封面档卷曲与网格密度；
 // 光影由场景封面灯光组按面独立照亮，不在此处传递
 function sheetOptions(spec: FlipSpec): FlipSheetOptions {
-  const sources = pageSources.value
-  const cover = [spec.frontIndex, spec.backIndex].some((index) => sources[index]?.cover)
-  return cover ? { curl: coverLook.curl, nPolygons: coverLook.nPolygons } : {}
+  return isCoverSheet([spec.frontIndex, spec.backIndex])
+    ? { curl: coverLook.curl, nPolygons: coverLook.nPolygons }
+    : {}
 }
 
 function computeFlipSpecFor(trigger: FlipDirection): FlipSpec | null {
@@ -679,8 +695,8 @@ const {
   safeFlipDuration,
   safePeelZone,
   safeMaxZoom,
-  foldEnabled: foldParams.enabled,
-  foldBendWorld,
+  foldOfSpec,
+  foldOfPage,
   pageSources,
   regionsOf: (itemIndex) => pageFaces.value[itemIndex]?.regions ?? [],
   getLastPlacements: () => lastPlacements.value,
@@ -726,9 +742,10 @@ function flip(trigger: FlipDirection) {
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
   }
   // fold 开启时走折页动画（锚点外缘中部、竖直折线扫过整页），场景不可用
-  // 或 fold 关闭回退卷曲动画
+  // 或该纸张所属档位 fold 关闭（如 hard 封面）回退卷曲动画
+  const fold = foldOfSpec(spec)
   if (
-    !foldParams.enabled ||
+    !fold.enabled ||
     !startFoldFlip(
       spec,
       textures.get(spec.frontIndex) ?? null,
@@ -736,7 +753,7 @@ function flip(trigger: FlipDirection) {
       safeFlipDuration.value,
       onDone,
       sheetOptions(spec),
-      foldBendWorld,
+      fold.bendWorld,
     )
   ) {
     startFlip(

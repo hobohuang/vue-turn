@@ -7,7 +7,6 @@ import { clamp, positive } from '@/lib/math'
 import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from '@/lib/pageFold'
 import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
 import type {
-  EasingFn,
   FlipSheetOptions,
   FlipSpec,
   StackHover,
@@ -57,11 +56,8 @@ export interface TurnSceneOptions {
   // 相机适配边距（视口外扩比例）
   fitMargin?: number
   // 渲染像素比上限
-  maxPixelRatio?: number
   // 最大缩放倍数
   maxZoom?: number
-  // 翻页进度缓动函数
-  easing?: EasingFn
   // WebGL 上下文恢复回调：调用方应重建静态页并重光栅化窗口内纹理
   onContextRestored?: () => void
 }
@@ -198,7 +194,6 @@ export class TurnScene {
   private readonly pageAspect: number
   private readonly nPolygons: number
   private readonly curl: number
-  private readonly easing: EasingFn
   private readonly sheetWidth: number
   private readonly renderer: THREE.WebGLRenderer | null
   private contextLost = false
@@ -229,7 +224,6 @@ export class TurnScene {
     this.pageAspect = positive(options.pageAspect, 0.75)
     this.nPolygons = Math.round(positive(options.nPolygons ?? 64, 64))
     this.curl = options.curl ?? 0.8
-    this.easing = options.easing ?? easeInOutCubic
     this.sheetWidth = pageWidth(this.pageAspect)
     this.pageFitWidth = this.sheetWidth * 2
     this.targetFitWidth = this.sheetWidth * 2
@@ -237,11 +231,9 @@ export class TurnScene {
     this.renderer = createRenderer()
     this.onContextRestored = options.onContextRestored
     if (this.renderer) {
-      const maxPixelRatio = positive(
-        options.maxPixelRatio ?? DEFAULT_MAX_PIXEL_RATIO,
-        DEFAULT_MAX_PIXEL_RATIO,
-      )
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio))
+      // 画布像素比上限内收为常量：DPR 封顶 2 已覆盖全部现实设备，
+      // 更高只增负载不增观感（原 maxPixelRatio prop 无消费方、无测试）
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DEFAULT_MAX_PIXEL_RATIO))
       this.renderer.setClearColor(0x000000, 0)
       this.container.appendChild(this.renderer.domElement)
       this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost)
@@ -253,7 +245,6 @@ export class TurnScene {
       perspective: options.perspective ?? 2400,
       fitMargin: options.fitMargin ?? 1.12,
       maxZoom: options.maxZoom ?? 3,
-      easing: this.easing,
       initialFitWidth: this.targetFitWidth,
     })
     this.scene.add(this.rig.camera)
@@ -1161,7 +1152,7 @@ export class TurnScene {
     if (sheet.mode === 'time') {
       const t = Math.min(1, (now - sheet.startTime) / sheet.duration)
       pe = easeInOutCubic(t)
-      slideP = this.easing(t)
+      slideP = pe
       if (t >= 1) {
         this.finishSheet(sheet, true)
         return

@@ -4,7 +4,13 @@ import type * as THREE from 'three'
 import type { PagePick } from '@/lib/TurnScene'
 import { PAGE_HEIGHT, pageWidth } from '@/lib/flipSpec'
 import { FOLD_ZONE, foldStripFromPick } from '@/lib/foldHit'
-import type { FlipDirection, FlipSheetOptions, FlipSpec, StaticPlacement } from '@/types/turn'
+import type {
+  FlipDirection,
+  FlipSheetOptions,
+  FlipSpec,
+  SheetFoldOptions,
+  StaticPlacement,
+} from '@/types/turn'
 
 import type { useBookState } from './useBookState'
 import type { useTurnRenderer } from './useTurnRenderer'
@@ -58,8 +64,10 @@ export interface PeelPreviewOptions {
   safePeelZone: ComputedRef<number>
   safeFlipDuration: ComputedRef<number>
   /** fold 交互是否启用（preset 解析结果，挂载期冻结） */
-  foldEnabled: boolean
-  foldBendWorld: number
+  /** 翻页纸张所属档位的折页参数（内页 preset / 封面封底 coverPreset） */
+  foldOfSpec: (spec: FlipSpec) => SheetFoldOptions
+  /** 拾取命中的静态页所属纸张的折页参数 */
+  foldOfPage: (index: number | undefined) => SheetFoldOptions
   /** 最近一次静态布局（由编排层提供） */
   getLastPlacements: () => StaticPlacement[]
   computeFlipSpecFor: (trigger: FlipDirection) => FlipSpec | null
@@ -92,8 +100,8 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     safePageAspect,
     safePeelZone,
     safeFlipDuration,
-    foldEnabled,
-    foldBendWorld,
+    foldOfSpec,
+    foldOfPage,
     getLastPlacements,
     computeFlipSpecFor,
     sheetOptions,
@@ -163,40 +171,20 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       releasePeelNow()
       return
     }
-    // fold 开启：仅四角区域悬停为折角预览（turn.js 风格）
-    if (foldEnabled) {
-      // 折角预览已激活：静态布局已是翻开前置布局，pickPage 命中的是底页，
-      // 角区进出改按指针到折角锚点（外角）的世界距离判定（与折角条带
-      // 命中同心同半径）；折点跟随指针，与折角拖拽同一入口
-      const peel = ownership.peel
-      if (ownership.owner === 'peel' && peel?.isFold) {
-        const radius = FOLD_ZONE * pageWidth(safePageAspect)
-        const dist = renderer.foldAnchorDistanceFromClient(event.clientX, event.clientY)
-        if (dist !== null && dist <= radius) {
-          renderer.setFoldDragFromClient(event.clientX, event.clientY)
-        } else {
-          releasePeelNow()
-        }
-        return
+    // 折角预览已激活：静态布局已是翻开前置布局，pickPage 命中的是底页，
+    // 角区进出改按指针到折角锚点（外角）的世界距离判定（与折角条带
+    // 命中同心同半径）；折点跟随指针，与折角拖拽同一入口
+    const peel = ownership.peel
+    if (ownership.owner === 'peel' && peel?.isFold) {
+      const radius = FOLD_ZONE * pageWidth(safePageAspect)
+      const dist = renderer.foldAnchorDistanceFromClient(event.clientX, event.clientY)
+      if (dist !== null && dist <= radius) {
+        renderer.setFoldDragFromClient(event.clientX, event.clientY)
+      } else {
+        releasePeelNow()
       }
-      const pick: PagePick | null = renderer.pickPage(event.clientX, event.clientY)
-      const hit = pick
-        ? foldStripFromPick(
-            pick,
-            getLastPlacements(),
-            forwardDirection(),
-            pageWidth(safePageAspect),
-            pageCount.value,
-          )
-        : null
-      if (hit) {
-        ensureFoldPreview(hit.trigger, hit.cornerV, event)
-        return
-      }
-      releasePeelNow()
       return
     }
-    // fold 关闭：视口边缘条带整页轻微卷曲（旧版 peel 行为）
     const el = event.currentTarget as HTMLElement | null
     const rect = el?.getBoundingClientRect()
     if (!rect || rect.width <= 0) return
@@ -209,6 +197,28 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     // 消除进出条带时的阶跃跳变
     const fwdDepth = ltr ? 1 - ratio : ratio
     const backDepth = ltr ? ratio : 1 - ratio
+    const pick: PagePick | null = renderer.pickPage(event.clientX, event.clientY)
+    // 折页档按纸张归属取（内页 preset / 封面封底 coverPreset）：hard 档纸张
+    // 不走角区折角预览，回到视口边缘条带的整页轻卷（刚体微抬）
+    const foldOn = pick
+      ? foldOfPage(pick.index).enabled
+      : isFoldSheet(fwdDepth < zone ? forwardTrigger : backwardTrigger)
+    if (foldOn) {
+      // fold 档：仅四角区域悬停为折角预览（turn.js 风格），角区外不预览
+      const hit = pick
+        ? foldStripFromPick(
+            pick,
+            getLastPlacements(),
+            forwardDirection(),
+            pageWidth(safePageAspect),
+            pageCount.value,
+          )
+        : null
+      if (hit) ensureFoldPreview(hit.trigger, hit.cornerV, event)
+      else releasePeelNow()
+      return
+    }
+    // fold 关闭：视口边缘条带整页轻微卷曲（旧版 peel 行为）
     if (fwdDepth < zone && state.canGoForward.value) {
       ensurePeel(forwardTrigger, 1 - fwdDepth / zone)
     } else if (backDepth < zone && state.canGoBack.value) {
@@ -216,6 +226,12 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     } else {
       releasePeelNow()
     }
+  }
+
+  /** 该方向将要翻起的纸张是否为折页档（书页外悬停/按下时按半区取档） */
+  function isFoldSheet(trigger: FlipDirection): boolean {
+    const spec = computeFlipSpecFor(trigger)
+    return spec !== null && foldOfSpec(spec).enabled
   }
 
   // 折角悬停预览：与折角拖拽同一张纸张、同一条形变路径（beginFoldDrag +
@@ -237,7 +253,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
       textures.get(spec.backIndex) ?? null,
       w,
       (cornerV * PAGE_HEIGHT) / 2,
-      foldBendWorld,
+      foldOfSpec(spec).bendWorld,
       makeSheetDone(spec, trigger),
       sheetOptions(spec),
       true,

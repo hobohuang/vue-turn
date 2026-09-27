@@ -148,6 +148,7 @@ interface HostProps {
   peel?: boolean
   fold?: boolean
   preset?: 'soft' | 'hard' | 'custom'
+  coverPreset?: 'soft' | 'hard' | 'custom'
   modelValue?: number
   defaultPages?: number
   globalKeyboard?: boolean
@@ -185,6 +186,7 @@ function createHost(props: HostProps = {}) {
               peel: props.peel,
               fold: props.fold,
               preset: props.preset,
+              coverPreset: props.coverPreset,
               globalKeyboard: props.globalKeyboard,
               'onUpdate:modelValue': (v: number) => {
                 page.value = v
@@ -254,6 +256,7 @@ async function mountTurn(
     peel?: boolean
     fold?: boolean
     preset?: 'soft' | 'hard' | 'custom'
+    coverPreset?: 'soft' | 'hard' | 'custom'
     modelValue?: number
     globalKeyboard?: boolean
   } = {},
@@ -446,14 +449,15 @@ describe('VueTurn', () => {
   })
 
   it('uses the fold animation for active flips when fold is enabled (soft default)', async () => {
-    // fold 开启（soft 默认）：点击/next/prev 的主动翻页走折页动画而非卷曲
+    // fold 开启（soft 默认）：点击/next/prev 的主动翻页走折页动画而非卷曲。
+    // 封面按 coverPreset 取档（默认 hard 为刚体卷曲），故传 soft 封面测折页路径
     mocks.startFoldFlip.mockImplementation(
       (_spec, _front, _back, _duration, onDone) => {
         onDone(true)
         return true
       },
     )
-    const wrapper = await mountTurn()
+    const wrapper = await mountTurn(6, { coverPreset: 'soft' })
     await wrapper.find('#next').trigger('click')
     await flushPromises()
     expect(mocks.startFoldFlip).toHaveBeenCalledTimes(1)
@@ -1789,11 +1793,11 @@ describe('VueTurn', () => {
   })
 
   it('previews the cover corner on hover with the flip-start static layout', async () => {
-    // 封面（合书态居中）悬停角区：预览与折角拖拽共用同一份翻页前置布局
-    // ——底页呈现翻开布局（折角下方露出的是下一页而非封面）；preview=true
-    // 使书体平移/纸叠/相机钉在起始态，收起时 renderStatic 恢复空闲布局
+    // 软封面（coverPreset=soft，合书态居中）悬停角区：预览与折角拖拽共用同一份
+    // 翻页前置布局——底页呈现翻开布局（折角下方露出的是下一页而非封面）；
+    // preview=true 使书体平移/纸叠/相机钉在起始态，收起时 renderStatic 恢复空闲布局
     mocks.beginFoldDrag.mockReturnValue(true)
-    const wrapper = await mountTurn(6, { peel: true, modelValue: 1 })
+    const wrapper = await mountTurn(6, { peel: true, modelValue: 1, coverPreset: 'soft' })
     stubViewportRect(wrapper)
     mocks.setStaticPages.mockClear()
     // 封面居中、右下角圆内（LTR 封面外缘在右）：折角预览，方向前进
@@ -1819,6 +1823,25 @@ describe('VueTurn', () => {
     mocks.foldAnchorDistanceFromClient.mockReturnValue(1000)
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 400, clientY: 260, buttons: 0 })
     expect(mocks.endFoldDrag).toHaveBeenCalledWith(false, 900)
+  })
+
+  it('keeps the default hard cover rigid: no corner fold preview and no fold drag', async () => {
+    // 封面折页档按 coverPreset 判定：默认 hard 为纸板档，角区悬停/按下都不走折角
+    // 形变（折页形变不读 curl，纸板刚体观感会丢），回到条带轻卷与整页卷曲拖拽
+    mocks.beginFoldDrag.mockReturnValue(true)
+    const wrapper = await mountTurn(6, { peel: true, modelValue: 1 })
+    stubViewportRect(wrapper)
+    // 封面右下角区（index 0 属封面纸张）
+    mocks.pickPage.mockReturnValue({ index: 0, u: 0.95, v: 0.1, spread: false })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 850, clientY: 300, buttons: 0 })
+    expect(mocks.beginFoldDrag).not.toHaveBeenCalled()
+    expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
+    // 条带轻卷预览纸张按封面档取观感：curl 0 的刚体微抬，preview=true
+    expect(mocks.beginDragFlip.mock.calls[0]?.[4]).toEqual({ curl: 0, nPolygons: 32 })
+    expect(mocks.beginDragFlip.mock.calls[0]?.[5]).toBe(true)
+    // 按下同样不接管折角：走整页卷曲拖拽路径
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 850, clientY: 300 })
+    expect(mocks.beginFoldDrag).not.toHaveBeenCalled()
   })
 
   it('does not show fold hover preview when peel is off (fold still enabled)', async () => {
@@ -1891,8 +1914,9 @@ describe('VueTurn', () => {
   })
 
   it('starts a fold drag when pressing outside the pages with fold enabled', async () => {
+    // 软封面：合书态下书页外按下翻起的是封面纸张，仍走折页拖拽
     mocks.beginFoldDrag.mockReturnValue(true)
-    const wrapper = await mountTurn(6)
+    const wrapper = await mountTurn(6, { coverPreset: 'soft' })
     stubViewportRect(wrapper)
     // 书页外（视口空白处）按下：pickPage 未命中，仍走折页拖拽（非条带卷曲）
     mocks.pickPage.mockReturnValue(null)
@@ -2009,7 +2033,7 @@ describe('VueTurn', () => {
     expect(mocks.setZoom).toHaveBeenLastCalledWith(3, true)
   })
 
-  it('zooms with the mouse wheel when zoomEnabled', async () => {
+  it('zooms with the mouse wheel when zoomMode is wheel', async () => {
     const Host = defineComponent({
       setup() {
         const turnRef = ref<TurnInstance | null>(null)
@@ -2020,7 +2044,7 @@ describe('VueTurn', () => {
               VueTurn,
               {
                 ref: turnRef,
-                zoomEnabled: true,
+                zoomMode: 'wheel',
                 modelValue: page.value,
                 'onUpdate:modelValue': (v: number) => {
                   page.value = v
@@ -2042,6 +2066,48 @@ describe('VueTurn', () => {
     expect(turn.emitted('zoom-change')).toHaveLength(1)
   })
 
+  it('responds to both wheel and double click when zoomMode is both', async () => {
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const page = ref(1)
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                ref: turnRef,
+                zoomMode: 'both',
+                modelValue: page.value,
+                'onUpdate:modelValue': (v: number) => {
+                  page.value = v
+                },
+              },
+              { default: () => pages(6) },
+            ),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    const viewport = stubViewportRect(wrapper)
+    await viewport.trigger('wheel', { deltaY: -100 })
+    expect(mocks.setZoom).toHaveBeenCalledTimes(1)
+    expect(mocks.setZoom).toHaveBeenCalledTimes(1)
+    // 双击为切换：当前已放大（滚轮那一步）→ 复位到 1
+    await viewport.trigger('dblclick', { clientX: 700, clientY: 300 })
+    expect(mocks.setZoom).toHaveBeenCalledTimes(2)
+    expect(mocks.setZoom).toHaveBeenLastCalledWith(1, true)
+  })
+
+  it('ignores wheel and double click gestures by default (zoomMode off)', async () => {
+    const wrapper = await mountTurn(6)
+    const viewport = stubViewportRect(wrapper)
+    await viewport.trigger('wheel', { deltaY: -100 })
+    await viewport.trigger('dblclick', { clientX: 700, clientY: 300 })
+    expect(mocks.setZoom).not.toHaveBeenCalled()
+  })
+
   it('toggles zoom on double click without flipping pages', async () => {
     const Host = defineComponent({
       setup() {
@@ -2053,7 +2119,7 @@ describe('VueTurn', () => {
               VueTurn,
               {
                 ref: turnRef,
-                dblClickZoom: true,
+                zoomMode: 'dblclick',
                 modelValue: page.value,
                 'onUpdate:modelValue': (v: number) => {
                   page.value = v
@@ -2078,7 +2144,7 @@ describe('VueTurn', () => {
     expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
-  it('delays single-click flip when dblClickZoom is enabled', async () => {
+  it('delays single-click flip when zoomMode includes dblclick', async () => {
     vi.useFakeTimers()
     try {
       mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
@@ -2092,7 +2158,7 @@ describe('VueTurn', () => {
                 VueTurn,
                 {
                   ref: turnRef,
-                  dblClickZoom: true,
+                  zoomMode: 'dblclick',
                   modelValue: page.value,
                   'onUpdate:modelValue': (v: number) => {
                     page.value = v
@@ -2119,7 +2185,7 @@ describe('VueTurn', () => {
     }
   })
 
-  it('cancels the delayed click flip when a drag gesture follows the click (dblClickZoom)', async () => {
+  it('cancels the delayed click flip when a drag gesture follows the click (zoomMode dblclick)', async () => {
     vi.useFakeTimers()
     try {
       const Host = defineComponent({
@@ -2132,7 +2198,7 @@ describe('VueTurn', () => {
                 VueTurn,
                 {
                   ref: turnRef,
-                  dblClickZoom: true,
+                  zoomMode: 'dblclick',
                   modelValue: page.value,
                   'onUpdate:modelValue': (v: number) => {
                     page.value = v

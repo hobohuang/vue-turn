@@ -3,7 +3,6 @@ import * as THREE from 'three'
 import { PAGE_HEIGHT } from '@/lib/flipSpec'
 import { clamp, positive } from '@/lib/math'
 import { easeInOutCubic } from '@/lib/pageCurl'
-import type { EasingFn } from '@/types/turn'
 
 // 相机适配边距默认值：视口相对书宽的外扩比例，越大留白越多
 const DEFAULT_FIT_MARGIN = 1.12
@@ -30,8 +29,6 @@ export interface CameraRigOptions {
   fitMargin: number
   /** 最大缩放倍数（交互参数，可运行时更新） */
   maxZoom: number
-  /** 相机动画缓动函数 */
-  easing: EasingFn
   /** 初始适配宽度（页面布局 + 纸叠厚度） */
   initialFitWidth: number
 }
@@ -47,7 +44,6 @@ export class CameraRig {
   readonly camera: THREE.PerspectiveCamera
   private readonly perspective: number
   private readonly fitMargin: number
-  private readonly easing: EasingFn
   private maxZoom: number
   // 当前缩放级别（1 为未缩放），显式维护，resize/布局变化时按它重新适配相机距离
   private zoomLevel = 1
@@ -63,7 +59,6 @@ export class CameraRig {
     this.perspective = positive(options.perspective, 2400)
     this.fitMargin = positive(options.fitMargin, DEFAULT_FIT_MARGIN)
     this.maxZoom = positive(options.maxZoom, DEFAULT_MAX_ZOOM)
-    this.easing = options.easing ?? easeInOutCubic
     this.fitWidth = positive(options.initialFitWidth, 1)
 
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100)
@@ -163,7 +158,7 @@ export class CameraRig {
     const anim = this.camAnim
     if (anim) {
       const t = Math.min(1, (now - anim.start) / anim.duration)
-      const eased = this.easing(t)
+      const eased = easeInOutCubic(t)
       this.camera.position.set(
         anim.from.x + (anim.to.x - anim.from.x) * eased,
         anim.from.y + (anim.to.y - anim.from.y) * eased,

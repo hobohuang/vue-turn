@@ -3,7 +3,6 @@ import type * as THREE from 'three'
 
 import { TurnScene, type PagePick } from '@/lib/TurnScene'
 import type {
-  EasingFn,
   FlipSheetOptions,
   FlipSpec,
   StackHover,
@@ -23,9 +22,7 @@ export interface TurnRendererOptions {
   /** 封面/封底灯光组：方向光强度 */
   coverGloss?: number
   fitMargin?: number
-  maxPixelRatio?: number
   maxZoom?: number
-  easing?: EasingFn
   // WebGL 上下文恢复回调
   onContextRestored?: () => void
 }

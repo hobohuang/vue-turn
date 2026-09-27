@@ -2,8 +2,8 @@ export type ForwardDirection = 'left' | 'right'
 
 export type SheetGeometry = 'A' | 'B'
 
-// 翻页进度缓动函数：输入归一化时间 [0,1]，输出归一化进度
-export type EasingFn = (t: number) => number
+// 缩放手势模式：off 关闭、wheel 滚轮步进、dblclick 双击切换（单击翻页需延迟判定）、both 两者
+export type ZoomMode = 'off' | 'wheel' | 'dblclick' | 'both'
 
 // 显示模式：auto 按容器宽高自动判定，1/2 强制单/双页
 export type DisplayMode = 'auto' | 1 | 2
@@ -99,6 +99,18 @@ export interface FlipSheetOptions {
   curl?: number
   /** 网格纵向分段数覆盖；封面档与内页密度不同时使用 */
   nPolygons?: number
+}
+
+/**
+ * 折页形变参数（按纸张归属解析，世界单位）：封面/封底纸张取 coverPreset 档、
+ * 内页取 preset 档——与 FlipSheetOptions 的封面档覆盖同一套归属判定，
+ * 一张纸的正反两面同档。
+ */
+export interface SheetFoldOptions {
+  /** 是否走折页形变（false 时按下与主动翻页均回到整页卷曲/刚体翻转） */
+  enabled: boolean
+  /** 折缝圆角弧长（世界单位） */
+  bendWorld: number
 }
 
 export interface TurnInstance {

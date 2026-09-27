@@ -14,8 +14,10 @@ import type {
   FlipSheetOptions,
   FlipSpec,
   PageRegion,
+  SheetFoldOptions,
   StaticPlacement,
   ViewportPoint,
+  ZoomMode,
 } from '@/types/turn'
 
 import type { useBookState } from './useBookState'
@@ -46,8 +48,8 @@ export interface FlipInteractionProps {
   globalKeyboard?: boolean
   clickToFlip?: boolean
   clickDeadZone?: number
-  dblClickZoom?: boolean
-  zoomEnabled?: boolean
+  /** 缩放手势模式（'off' | 'wheel' | 'dblclick' | 'both'） */
+  zoomMode?: ZoomMode
   dragToFlip?: boolean
   peel?: boolean
   peelZone?: number
@@ -83,9 +85,10 @@ export interface FlipInteractionOptions {
   safeFlipDuration: ComputedRef<number>
   safePeelZone: ComputedRef<number>
   safeMaxZoom: ComputedRef<number>
-  /** fold 交互是否启用（preset 解析结果，挂载期冻结） */
-  foldEnabled: boolean
-  foldBendWorld: number
+  /** 翻页纸张所属档位（内页 preset / 封面封底 coverPreset）的折页参数 */
+  foldOfSpec: (spec: FlipSpec) => SheetFoldOptions
+  /** 拾取命中的静态页所属纸张的折页参数 */
+  foldOfPage: (index: number | undefined) => SheetFoldOptions
   pageSources: ComputedRef<PageSource[]>
   /** item 索引 → 热区配置（无热区返回空数组） */
   regionsOf: (itemIndex: number) => PageRegion[]
@@ -152,8 +155,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     safeFlipDuration,
     safePeelZone,
     safeMaxZoom,
-    foldEnabled,
-    foldBendWorld,
+    foldOfSpec,
+    foldOfPage,
     pageSources,
     regionsOf,
     getLastPlacements,
@@ -170,6 +173,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
 
   const disabledRef = ref(false)
   const isDisabled = () => disabledRef.value
+  // 缩放手势按 zoom 枚举展开为两条独立能力（滚轮步进 / 双击切换）
+  const wheelZoom = () => props.zoomMode === 'wheel' || props.zoomMode === 'both'
+  const dblTappedZoom = () => props.zoomMode === 'dblclick' || props.zoomMode === 'both'
 
   // 场景纸张归属（PaperOwnership，见 usePeelPreview）：'drag' 需要状态机收尾，
   // 'peel' 仅悬停预览。悬停预览的内部状态（PeelState）与归属标记同置同清
@@ -215,8 +221,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   })
 
   const { isZoomed, onWheel, onDblClick, zoomIn, zoomOut, toggleZoom, setZoomLevel } = useZoomPan({
-    zoomEnabled: () => props.zoomEnabled === true,
-    dblClickZoom: () => props.dblClickZoom === true,
+    zoomEnabled: wheelZoom,
+    dblClickZoom: dblTappedZoom,
     isDisabled,
     isFlipping: state.isFlipping,
     // 拖拽/悬停预览占用场景时缩放让路
@@ -258,8 +264,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     safePageAspect,
     safePeelZone,
     safeFlipDuration,
-    foldEnabled,
-    foldBendWorld,
+    foldOfSpec,
+    foldOfPage,
     getLastPlacements,
     computeFlipSpecFor,
     sheetOptions,
@@ -273,14 +279,15 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   // ---------------------------------------------------------------------------
 
   // 折页命中（按下用）：fold 开启时命中页面任意位置（跨页左右页）均走折角变形。
-  // 命中判定为纯函数（lib/foldHit.ts，外角圆形判定），此处只做拾取
+  // 命中判定为纯函数（lib/foldHit.ts，外角圆形判定），此处只做拾取；
+  // 折页开关按命中页所属纸张的档位判定（hard 封面不走折角，回到刚体翻转）
   function foldPageAt(
     clientX: number,
     clientY: number,
   ): { trigger: FlipDirection; cornerV: number; edge: boolean; v: number } | null {
-    if (!foldEnabled) return null
     const pick: PagePick | null = renderer.pickPage(clientX, clientY)
     if (!pick) return null
+    if (!foldOfPage(pick.index).enabled) return null
     return foldHitFromPick(
       pick,
       getLastPlacements(),
@@ -388,7 +395,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     if (!props.clickToFlip) return
     // 放大状态下点击不翻页（避免误触；先复位缩放再导航）
     if (isZoomed()) return
-    if (props.dblClickZoom) {
+    if (dblTappedZoom()) {
       // 双击缩放开启时延迟翻页，给第二次点击留出判定窗口
       if (clickTimer !== null) {
         clearClickTimer()
@@ -438,7 +445,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     // 清掉上一手势可能残留的 suppressClick：pointercancel 后浏览器不派发
     // click，该标记不会被消费，残留会吞掉下一次正常点击
     suppressClick = false
-    // 新手势开始即作废单击延迟翻页判定（dblClickZoom）：否则"单击后立即
+    // 新手势开始即作废单击延迟翻页判定（zoom 含 dblclick）：否则"单击后立即
     // 拖拽"时无 click 派发消费 suppressClick，迟到的 timer 会在拖拽结束后
     // 绕过 click 入口额外触发一次翻页
     clearClickTimer()
@@ -472,9 +479,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     clearStackHover()
     state.startFlip()
     emit('flip-start', trigger)
-    // fold 开启：书页外（视口空白处）按下也走折页拖拽——方向按视口半区
-    // 判定，锚点取外缘中部（竖直折线），拖点横向跟手、纵向钉在页中
-    if (foldEnabled) {
+    // 该纸张 fold 开启：书页外（视口空白处）按下也走折页拖拽——方向按视口
+    // 半区判定，锚点取外缘中部（竖直折线），拖点横向跟手、纵向钉在页中
+    if (foldOfSpec(spec).enabled) {
       const drag2 = startFoldDragGesture(event, spec, trigger, 0)
       if (drag2) {
         applyStacksFlip(spec)
@@ -589,7 +596,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       textures.get(spec.backIndex) ?? null,
       foldW,
       anchorV,
-      foldBendWorld,
+      foldOfSpec(spec).bendWorld,
       makeSheetDone(spec, trigger),
       sheetOptions(spec),
     )

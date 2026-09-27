@@ -11,9 +11,9 @@ export interface ZoomPanRenderer {
 }
 
 export interface ZoomPanOptions {
-  /** props.zoomEnabled（响应式读取） */
+  /** props.zoomMode 是否含滚轮手势（响应式读取） */
   zoomEnabled: () => boolean
-  /** props.dblClickZoom（响应式读取） */
+  /** props.zoomMode 是否含双击手势（响应式读取） */
   dblClickZoom: () => boolean
   /** 交互禁用状态（响应式读取） */
   isDisabled: () => boolean
@@ -45,7 +45,7 @@ export function useZoomPan(options: ZoomPanOptions) {
     applyZoom(renderer.getZoom() * Math.exp(-event.deltaY * 0.0016))
   }
 
-  // 双击切换缩放（dblClickZoom 开启时，单击翻页延迟判定避免误触）
+  // 双击切换缩放（zoomMode 含 dblclick 时，单击翻页延迟判定避免误触）
   function onDblClick() {
     if (!dblClickZoom() || isDisabled()) return
     if (isFlipping.value) return
