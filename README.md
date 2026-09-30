@@ -275,6 +275,33 @@ import { VueTurn, TurnItem, type PageRegion, type TurnInstance } from 'vue-turn'
 const turnRef = ref<TurnInstance | null>(null)
 const toc: PageRegion[] = [
   { x: 0.08, y: 0.66, w: 0.24, h: 0.14, data: 1 },
+  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 5 },
+]
+
+function onRegionTap(_page: number, region: PageRegion) {
+  turnRef.value?.goToPage(Number(region.data))
+}
+</script>
+
+<template>
+  <VueTurn ref="turnRef" @region-tap="onRegionTap">
+    <turn-item :regions="toc">
+      <div class="toc-page">
+        <!-- 内容布局与 regions 坐标一一对应，例如绝对定位 left:8%; top:66%; width:24%; height:14% -->
+      </div>
+    </turn-item>
+    <!-- ... -->
+  </VueTurn>
+</template>
+```
+
+规则与行为：
+
+- 坐标以 `TurnItem` 内容的左上角为原点，`x/y/w/h` 均为占整页的比例（0~1）；`data` 为自定义数据，随事件原样返回。
+- 跨页项的 regions 相对整个跨页内容定义（半页命中会自动换算到整页坐标）。
+- 命中热区的点击不触发翻页；未命中则正常按点击翻页处理。
+- 热区命中依赖射线拾取，在放大状态下同样有效。
+
 ## 观感预设（preset）
 
 `nPolygons` / `perspective` / `ambient` / `gloss` / `curl` 五个渲染参数较为专业，`preset`（纸张类型）为它们提供成组基线，`look`（内页）/ `coverLook`（封面/封底）对象参数可逐项覆盖。预设同时给出折角（`fold`）开关与折缝圆角（`bend`，折缝圆弧弧长占页宽比例，越大折缝越圆润柔软）的基线：
@@ -376,33 +403,6 @@ const toc: PageRegion[] = [
 - **离线/内嵌资源**：页面使用 `data:`/`blob:` URL 或 Service Worker 代理的本地资源，破缓存参数无意义甚至可能干扰匹配。
 
 注意：设为 `false` 后，若图片同名但内容已更新（如运营后台替换了同 URL 的图），手动重绘可能拿到浏览器缓存的旧图；这种情况需保持 `true`，或改用带版本号的 URL（如 `img.png?v=2`）后关闭 `cacheBust`。
-
-  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 5 },
-]
-
-function onRegionTap(_page: number, region: PageRegion) {
-  turnRef.value?.goToPage(Number(region.data))
-}
-</script>
-
-<template>
-  <VueTurn ref="turnRef" @region-tap="onRegionTap">
-    <turn-item :regions="toc">
-      <div class="toc-page">
-        <!-- 内容布局与 regions 坐标一一对应，例如绝对定位 left:8%; top:66%; width:24%; height:14% -->
-      </div>
-    </turn-item>
-    <!-- ... -->
-  </VueTurn>
-</template>
-```
-
-规则与行为：
-
-- 坐标以 `TurnItem` 内容的左上角为原点，`x/y/w/h` 均为占整页的比例（0~1）；`data` 为自定义数据，随事件原样返回。
-- 跨页项的 regions 相对整个跨页内容定义（半页命中会自动换算到整页坐标）。
-- 命中热区的点击不触发翻页；未命中则正常按点击翻页处理。
-- 热区命中依赖射线拾取，在放大状态下同样有效。
 
 ## 奇数总页数的自动补页
 
