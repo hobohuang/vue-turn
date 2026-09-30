@@ -63,10 +63,9 @@ const page = ref(1)
 | 19 | `resourceTimeout` | `number` | `5000` | 光栅化前资源等待超时（毫秒）：等待 `<img>`、CSS background-image、文档字体；超时后放弃等待直接光栅化 |
 | 20 | `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
 | 21 | `peel` | `boolean` | `false` | 悬停预览总开关：开启后显示悬停预览——`fold` 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷（详见下文「拖拽翻页与折角交互」） |
-| 22 | `fold` / `bend` | - | 见 `look` | 已并入 `look` / `coverLook` 对象参数（折页变形开关与折缝圆角，语义不变，任何档位均可覆盖） |
-| 23 | `maxZoom` | `number` | `3` | 最大缩放倍数（响应式：运行中修改即生效，当前级别超出新上限时立即收敛） |
-| 24 | `zoomMode` | `'off' \| 'wheel' \| 'dblclick' \| 'both'` | `'off'` | 允许哪些**手势**触发缩放：`wheel` 滚轮按指数步进调级别、`dblclick` 双击在 1 倍与 `maxZoom` 间切换（含 `dblclick` 时单击翻页会延迟约 260ms 以区分双击）、`both` 两种都要、`off` 关闭。实例方法 `zoomIn`/`setZoom` 等不受此开关限制 |
-| 25 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
+| 22 | `maxZoom` | `number` | `3` | 最大缩放倍数（响应式：运行中修改即生效，当前级别超出新上限时立即收敛） |
+| 23 | `zoomMode` | `'off' \| 'wheel' \| 'dblclick' \| 'both'` | `'off'` | 允许哪些**手势**触发缩放：`wheel` 滚轮按指数步进调级别、`dblclick` 双击在 1 倍与 `maxZoom` 间切换（含 `dblclick` 时单击翻页会延迟约 260ms 以区分双击）、`both` 两种都要、`off` 关闭。实例方法 `zoomIn`/`setZoom` 等不受此开关限制 |
+| 24 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
 
 ### 观感预设（preset）
 
