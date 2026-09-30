@@ -38,7 +38,7 @@ const page = ref(1)
 
 组件容器宽高为 100%，需要父级提供确定高度。
 
-## Props
+## Attributes（vue-turn 属性）
 
 | # | Prop | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -168,7 +168,94 @@ const page = ref(1)
 
 注意：设为 `false` 后，若图片同名但内容已更新（如运营后台替换了同 URL 的图），手动重绘可能拿到浏览器缓存的旧图；这种情况需保持 `true`，或改用带版本号的 URL（如 `img.png?v=2`）后关闭 `cacheBust`。
 
-## Events
+## TurnItem Attributes（turn-item 属性）
+
+`<TurnItem>` 支持 4 个属性，均为静态声明；各自的行为细节见对应章节。
+
+| # | 属性 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| 1 | `spread` | `boolean` | `false` | 跨页项：内容横跨左右两页，按双倍宽度光栅化；未对齐到左页起始时自动补空白页（见「跨页大图（spread）」） |
+| 2 | `regions` | `PageRegion[]` | `[]` | 页面热区：坐标与尺寸为占整页比例（0~1，左上角原点），点击命中触发 `region-tap` 事件（见「页面热区（regions）」） |
+| 3 | `cover` | `boolean` | `false` | 声明为封面：仅首个 item 生效，独占一张专用纸张（正面 = item 内容），按 `coverPreset` + `coverLook` 观感渲染（见「封面与封底（cover / back-cover）」） |
+| 4 | `back-cover` | `boolean` | `false` | 声明为封底：仅末个 item 生效，同样独占专用纸张；纸张背面内容用 `#back` 插槽声明（封面/封底项可用，其余项忽略） |
+
+## Slots（插槽）
+
+**`<vue-turn>` 插槽**
+
+| # | 插槽 | 说明 |
+| --- | --- | --- |
+| 1 | `default` | 页面内容，仅接受 `<TurnItem>`，其他节点会被忽略并告警。封面/封底各自独占一张专用纸张（见「封面与封底」） |
+| 2 | `#fallback` | WebGL 不可用时的降级内容 |
+
+**`<turn-item>` 插槽**
+
+| # | 插槽 | 说明 |
+| --- | --- | --- |
+| 1 | `default` | 该页内容（按页面类型展开为封面正/封底正/内页） |
+| 2 | `#back` | 纸张背面：仅 `cover` / `back-cover` 项生效（封面底/封底里），未定义则为空白衬页（计入页数、不占内容 item） |
+
+> 工具栏已外置：组件不再提供 `#toolbar` 插槽，请通过实例方法与事件在组件外部自定义工具栏（见下方示例）。
+
+## Exposes（实例 API）
+
+通过模板引用调用：
+
+| # | 方法/属性 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `flipLeft` | `() => void` | 向左翻页 |
+| 2 | `flipRight` | `() => void` | 向右翻页 |
+| 3 | `next` | `() => void` | 前进一页 |
+| 4 | `prev` | `() => void` | 后退一页 |
+| 5 | `goToPage` | `(page: number) => boolean` | 跳转到指定页（从 1 开始）；翻页中或页码越界时拒绝并返回 `false`（受 `before-flip` 拦截时同样返回 `false`） |
+| 6 | `stop` | `() => void` | 中断当前翻页并立即收尾：翻页动画按终点提交，拖拽按最近端点完成或取消 |
+| 7 | `disable` | `(disabled?: boolean) => void` | 禁用（不传参默认 `true`）/启用翻页与所有交互 |
+| 8 | `refresh` | `() => Promise<void>` | 重绘全部页面纹理 |
+| 9 | `refreshPage` | `(page: number) => Promise<void>` | 重绘指定页纹理（页码从 1 开始） |
+| 10 | `zoomIn` | `() => void` | 放大到最大倍数 |
+| 11 | `zoomOut` | `() => void` | 复位到 1 倍 |
+| 12 | `toggleZoom` | `() => void` | 在 1 倍与最大倍数间切换 |
+| 13 | `setZoom` | `(level: number) => void` | 设置缩放级别（钳制到 `[1, maxZoom]`） |
+| 14 | `state` | `TurnState`（只读响应式） | 响应式状态快照：`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`。在模板或 computed 中读取自动跟踪更新（推荐用此而非下方逐个只读属性） |
+| 15 | `page` | `number`（只读） | 当前页码 |
+| 16 | `numPages` | `number`（只读） | 总页数 |
+| 17 | `isFlipping` | `boolean`（只读） | 是否翻页中 |
+| 18 | `canNext` | `boolean`（只读） | 是否可前进 |
+| 19 | `canPrev` | `boolean`（只读） | 是否可后退 |
+| 20 | `disabled` | `boolean`（只读） | 是否处于禁用状态 |
+| 21 | `zoom` | `number`（只读） | 当前缩放级别（1 为未缩放） |
+
+### 外置工具栏示例
+
+```vue
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn'
+
+const turnRef = ref<TurnInstance | null>(null)
+const page = ref(1)
+
+// 响应式状态：指示器/按钮状态全部自动跟踪，无需事件回调强刷
+const state = computed(() => turnRef.value?.state)
+</script>
+
+<template>
+  <VueTurn ref="turnRef" v-model="page">
+    <TurnItem>封面</TurnItem>
+    <TurnItem>第 1 页</TurnItem>
+    <!-- ... -->
+    <TurnItem>封底</TurnItem>
+  </VueTurn>
+
+  <div class="toolbar">
+    <button :disabled="!state?.canPrev" @click="turnRef?.prev()">上一页</button>
+    <span>{{ state?.page ?? page }} / {{ state?.numPages ?? '…' }}</span>
+    <button :disabled="!state?.canNext" @click="turnRef?.next()">下一页</button>
+  </div>
+</template>
+```
+
+## Events（事件）
 
 | # | 事件 | 参数 | 说明 |
 | --- | --- | --- | --- |
@@ -187,24 +274,6 @@ const page = ref(1)
 | 13 | `rasterize-error` | `page: number, error: unknown` | 单页光栅化失败（页码从 1 开始）；失败页不影响其他页 |
 | 14 | `stack-hover` | `page: number \| null, point?: { x, y }` | 悬停纸叠层（`page` 从 1 开始，`null` 表示离开）；仅在命中页变化时触发，`point` 为视口内坐标 |
 | 15 | `stack-tap` | `page: number` | 点击纸叠层跳转（跳转自动对齐到所属跨页，`page` 从 1 开始） |
-
-## 插槽
-
-- 默认插槽：仅接受 `<TurnItem>`，每个 item 为一个内容页；其他节点会被忽略并告警。封面/封底各自独占一张专用纸张（见「封面与封底」），背面内容用 `#back` 插槽声明，未定义则为空白衬页（计入页数、不占内容 item）。
-- `#fallback`：WebGL 不可用时的降级内容。
-
-> 工具栏已外置：组件不再提供 `#toolbar` 插槽，请通过实例方法与事件在组件外部自定义工具栏（见下方示例）。
-
-## TurnItem 属性
-
-`<TurnItem>` 支持 4 个属性，均为静态声明；各自的行为细节见对应章节。
-
-| # | 属性 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| 1 | `spread` | `boolean` | `false` | 跨页项：内容横跨左右两页，按双倍宽度光栅化；未对齐到左页起始时自动补空白页（见「跨页大图（spread）」） |
-| 2 | `regions` | `PageRegion[]` | `[]` | 页面热区：坐标与尺寸为占整页比例（0~1，左上角原点），点击命中触发 `region-tap` 事件（见「页面热区（regions）」） |
-| 3 | `cover` | `boolean` | `false` | 声明为封面：仅首个 item 生效，独占一张专用纸张（正面 = item 内容），按 `coverPreset` + `coverLook` 观感渲染（见「封面与封底（cover / back-cover）」） |
-| 4 | `back-cover` | `boolean` | `false` | 声明为封底：仅末个 item 生效，同样独占专用纸张；纸张背面内容用 `#back` 插槽声明（封面/封底项可用，其余项忽略） |
 
 ## 跨页大图（spread）
 
@@ -340,64 +409,6 @@ function onRegionTap(_page: number, region: PageRegion) {
 封底合上动画依赖末页索引为奇数（即总页数为偶数）。封面纸张与封底纸张各占 2 页（恒为偶数），因此补页只取决于内页区段：当内页区段计数为奇数时，组件在封底里之前自动补一张空白页（补在内页区段末尾不会破坏跨页的奇数起始对齐，封底固定落在最后一个索引）。
 
 `numPages` 计入自动补的空白页与封面/封底纸张的空白衬页（`#back` 未定义时）。
-
-## 实例方法
-
-通过模板引用调用：
-
-| # | 方法/属性 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| 1 | `flipLeft` | `() => void` | 向左翻页 |
-| 2 | `flipRight` | `() => void` | 向右翻页 |
-| 3 | `next` | `() => void` | 前进一页 |
-| 4 | `prev` | `() => void` | 后退一页 |
-| 5 | `goToPage` | `(page: number) => boolean` | 跳转到指定页（从 1 开始）；翻页中或页码越界时拒绝并返回 `false`（受 `before-flip` 拦截时同样返回 `false`） |
-| 6 | `stop` | `() => void` | 中断当前翻页并立即收尾：翻页动画按终点提交，拖拽按最近端点完成或取消 |
-| 7 | `disable` | `(disabled?: boolean) => void` | 禁用（不传参默认 `true`）/启用翻页与所有交互 |
-| 8 | `refresh` | `() => Promise<void>` | 重绘全部页面纹理 |
-| 9 | `refreshPage` | `(page: number) => Promise<void>` | 重绘指定页纹理（页码从 1 开始） |
-| 10 | `zoomIn` | `() => void` | 放大到最大倍数 |
-| 11 | `zoomOut` | `() => void` | 复位到 1 倍 |
-| 12 | `toggleZoom` | `() => void` | 在 1 倍与最大倍数间切换 |
-| 13 | `setZoom` | `(level: number) => void` | 设置缩放级别（钳制到 `[1, maxZoom]`） |
-| 14 | `state` | `TurnState`（只读响应式） | 响应式状态快照：`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`。在模板或 computed 中读取自动跟踪更新（推荐用此而非下方逐个只读属性） |
-| 15 | `page` | `number`（只读） | 当前页码 |
-| 16 | `numPages` | `number`（只读） | 总页数 |
-| 17 | `isFlipping` | `boolean`（只读） | 是否翻页中 |
-| 18 | `canNext` | `boolean`（只读） | 是否可前进 |
-| 19 | `canPrev` | `boolean`（只读） | 是否可后退 |
-| 20 | `disabled` | `boolean`（只读） | 是否处于禁用状态 |
-| 21 | `zoom` | `number`（只读） | 当前缩放级别（1 为未缩放） |
-
-### 外置工具栏示例
-
-```vue
-<script setup lang="ts">
-import { computed, ref } from 'vue'
-import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn'
-
-const turnRef = ref<TurnInstance | null>(null)
-const page = ref(1)
-
-// 响应式状态：指示器/按钮状态全部自动跟踪，无需事件回调强刷
-const state = computed(() => turnRef.value?.state)
-</script>
-
-<template>
-  <VueTurn ref="turnRef" v-model="page">
-    <TurnItem>封面</TurnItem>
-    <TurnItem>第 1 页</TurnItem>
-    <!-- ... -->
-    <TurnItem>封底</TurnItem>
-  </VueTurn>
-
-  <div class="toolbar">
-    <button :disabled="!state?.canPrev" @click="turnRef?.prev()">上一页</button>
-    <span>{{ state?.page ?? page }} / {{ state?.numPages ?? '…' }}</span>
-    <button :disabled="!state?.canNext" @click="turnRef?.next()">下一页</button>
-  </div>
-</template>
-```
 
 ## 已知限制
 
