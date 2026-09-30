@@ -1,9 +1,9 @@
 import { Comment, computed, Fragment, h } from 'vue'
 import type { Slots, VNode } from 'vue'
 
-import TurnItem from '@/components/TurnItem.vue'
-import type { PageFaceKind } from '@/lib/pageMapping'
-import type { PageRegion } from '@/types/turn'
+import TurnItem from '../components/TurnItem.vue'
+import type { PageFaceKind } from '../lib/pageMapping'
+import type { PageRegion } from '../types/turn'
 
 // 警告只提示一次（应用级单例，避免多实例/响应式重算刷屏）
 let warnedInvalidChild = false

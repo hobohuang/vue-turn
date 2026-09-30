@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 
-import { PAGE_HEIGHT } from '@/lib/flipSpec'
-import { clamp, positive } from '@/lib/math'
-import { easeInOutCubic } from '@/lib/pageCurl'
+import { PAGE_HEIGHT } from './flipSpec'
+import { clamp, positive } from './math'
+import { easeInOutCubic } from './pageCurl'
 
 // 相机适配边距默认值：视口相对书宽的外扩比例，越大留白越多
 const DEFAULT_FIT_MARGIN = 1.12

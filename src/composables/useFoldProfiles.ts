@@ -1,7 +1,7 @@
-import { sheetWorldWidth } from '@/lib/flipSpec'
-import type { FoldParams } from '@/lib/presets'
-import type { PageSource } from '@/lib/pageMapping'
-import type { FlipSpec, SheetFoldOptions } from '@/types/turn'
+import { sheetWorldWidth } from '../lib/flipSpec'
+import type { FoldParams } from '../lib/presets'
+import type { PageSource } from '../lib/pageMapping'
+import type { FlipSpec, SheetFoldOptions } from '../types/turn'
 
 function toSheetFold(params: FoldParams, pageAspect: number): SheetFoldOptions {
   return { enabled: params.enabled, bendWorld: params.bend * sheetWorldWidth(pageAspect) }

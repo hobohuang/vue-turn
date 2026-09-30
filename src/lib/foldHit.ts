@@ -1,6 +1,6 @@
-import type { PagePick } from '@/lib/TurnScene'
-import { PAGE_HEIGHT } from '@/lib/flipSpec'
-import type { FlipDirection, StaticPlacement } from '@/types/turn'
+import type { PagePick } from './TurnScene'
+import { PAGE_HEIGHT } from './flipSpec'
+import type { FlipDirection, StaticPlacement } from '../types/turn'
 
 // 角区捕获半径：距页面外角的距离占页宽的比例（世界坐标圆形判定）。
 // 圆形判定相比矩形条带消除了角区内缘的抖动切换——同一位置按下

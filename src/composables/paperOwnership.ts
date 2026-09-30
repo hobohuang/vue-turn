@@ -1,4 +1,4 @@
-import type { FlipDirection } from '@/types/turn'
+import type { FlipDirection } from '../types/turn'
 
 /** 悬停预览当前状态（拖点/折角元信息，供按下接管判定） */
 export interface PeelState {

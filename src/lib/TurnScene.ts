@@ -1,18 +1,18 @@
 import * as THREE from 'three'
 
-import { CameraRig } from '@/lib/CameraRig'
-import { StackRenderer } from '@/lib/StackRenderer'
-import { PAGE_HEIGHT, sheetWorldWidth } from '@/lib/flipSpec'
-import { clamp, positive } from '@/lib/math'
-import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from '@/lib/pageFold'
-import { curledColumns, easeInOutCubic } from '@/lib/pageCurl'
+import { CameraRig } from './CameraRig'
+import { StackRenderer } from './StackRenderer'
+import { PAGE_HEIGHT, sheetWorldWidth } from './flipSpec'
+import { clamp, positive } from './math'
+import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from './pageFold'
+import { curledColumns, easeInOutCubic } from './pageCurl'
 import type {
   FlipSheetOptions,
   FlipSpec,
   StackHover,
   StackVisual,
   StaticPlacement,
-} from '@/types/turn'
+} from '../types/turn'
 
 const STATIC_Z = -0.01
 // 渲染像素比默认上限：平衡清晰度与性能

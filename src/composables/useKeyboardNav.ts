@@ -1,7 +1,7 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import type { Ref } from 'vue'
 
-import type { FlipDirection } from '@/types/turn'
+import type { FlipDirection } from '../types/turn'
 
 // document 级键盘监听的多实例互斥：页面上有多个 vue-turn 时，
 // 仅最近交互过的实例响应 document 级按键，避免一次方向键所有书同时翻页

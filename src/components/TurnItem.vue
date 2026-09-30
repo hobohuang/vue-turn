@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { PageRegion } from '@/types/turn'
+import type { PageRegion } from '../types/turn'
 
 // 透明组件：自身不产生 DOM，仅作为“一页内容”的载体，
 // 由 vue-turn 收集其 vnode 并克隆到离屏容器光栅化为纹理

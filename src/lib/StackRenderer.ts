@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 
-import { PAGE_HEIGHT } from '@/lib/flipSpec'
-import { clamp } from '@/lib/math'
-import type { StackHover, StackVisual } from '@/types/turn'
+import { PAGE_HEIGHT } from './flipSpec'
+import { clamp } from './math'
+import type { StackHover, StackVisual } from '../types/turn'
 
 // 纸叠条带 z 向厚度（世界单位）：页高 2 时约 1.6%，模拟翻开书页堆的鼓起
 const STACK_DEPTH = 0.032

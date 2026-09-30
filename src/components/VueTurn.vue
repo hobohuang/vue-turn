@@ -28,18 +28,18 @@ import {
   watch,
 } from 'vue'
 
-import { useBookState } from '@/composables/useBookState'
-import { useFlipInteraction } from '@/composables/useFlipInteraction'
-import { useFoldProfiles } from '@/composables/useFoldProfiles'
-import { usePageSources } from '@/composables/usePageSources'
-import { usePageStack } from '@/composables/usePageStack'
-import { usePageTextures } from '@/composables/usePageTextures'
-import { useTurnRenderer } from '@/composables/useTurnRenderer'
-import { ZOOM_TOLERANCE } from '@/composables/useZoomPan'
-import { spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '@/lib/flipSpec'
-import { positive } from '@/lib/math'
-import { buildPageSources, coverPageIndices } from '@/lib/pageMapping'
-import { mergeLook, resolveFold, resolveLook } from '@/lib/presets'
+import { useBookState } from '../composables/useBookState'
+import { useFlipInteraction } from '../composables/useFlipInteraction'
+import { useFoldProfiles } from '../composables/useFoldProfiles'
+import { usePageSources } from '../composables/usePageSources'
+import { usePageStack } from '../composables/usePageStack'
+import { usePageTextures } from '../composables/usePageTextures'
+import { useTurnRenderer } from '../composables/useTurnRenderer'
+import { ZOOM_TOLERANCE } from '../composables/useZoomPan'
+import { spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '../lib/flipSpec'
+import { positive } from '../lib/math'
+import { buildPageSources, coverPageIndices } from '../lib/pageMapping'
+import { mergeLook, resolveFold, resolveLook } from '../lib/presets'
 import type {
   BeforeFlipContext,
   DisplayMode,
@@ -53,7 +53,7 @@ import type {
   TurnInstance,
   TurnPreset,
   ZoomMode,
-} from '@/types/turn'
+} from '../types/turn'
 
 const props = withDefaults(
   defineProps<{

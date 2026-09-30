@@ -1,4 +1,4 @@
-import type { ForwardDirection } from '@/types/turn'
+import type { ForwardDirection } from '../types/turn'
 
 // 纸叠：书本左右两侧的页层厚度条带，贴在可见页面外缘。
 // 厚度随翻页在两侧间转移；hover 按比例映射页码（与厚度解耦）。

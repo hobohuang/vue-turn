@@ -1,7 +1,7 @@
 import { computed, watch } from 'vue'
 import type { Ref } from 'vue'
 
-import { sheetWorldWidth } from '@/lib/flipSpec'
+import { sheetWorldWidth } from '../lib/flipSpec'
 import {
   computeStackSides,
   isCenteredLayout,
@@ -9,8 +9,8 @@ import {
   stackThickness,
   type StackSide,
   type StackSides,
-} from '@/lib/pageStack'
-import type { FlipDirection, FlipSpec, StackVisual } from '@/types/turn'
+} from '../lib/pageStack'
+import type { FlipDirection, FlipSpec, StackVisual } from '../types/turn'
 
 import type { useBookState } from './useBookState'
 

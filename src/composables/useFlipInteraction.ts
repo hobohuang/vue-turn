@@ -2,13 +2,13 @@ import { onBeforeUnmount, ref } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
-import type { PagePick } from '@/lib/TurnScene'
-import { foldHitFromPick } from '@/lib/foldHit'
-import { sheetWorldWidth } from '@/lib/flipSpec'
-import { PAGE_HEIGHT } from '@/lib/flipSpec'
-import { pageAtFraction } from '@/lib/pageStack'
-import type { PageSource } from '@/lib/pageMapping'
-import type { StackSides } from '@/lib/pageStack'
+import type { PagePick } from '../lib/TurnScene'
+import { foldHitFromPick } from '../lib/foldHit'
+import { sheetWorldWidth } from '../lib/flipSpec'
+import { PAGE_HEIGHT } from '../lib/flipSpec'
+import { pageAtFraction } from '../lib/pageStack'
+import type { PageSource } from '../lib/pageMapping'
+import type { StackSides } from '../lib/pageStack'
 import type {
   FlipDirection,
   FlipSheetOptions,
@@ -19,7 +19,7 @@ import type {
   StaticPlacement,
   ViewportPoint,
   ZoomMode,
-} from '@/types/turn'
+} from '../types/turn'
 
 import type { useBookState } from './useBookState'
 import { useKeyboardNav } from './useKeyboardNav'

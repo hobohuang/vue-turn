@@ -1,8 +1,8 @@
 import { computed, ref } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 
-import type { StackSides } from '@/lib/pageStack'
-import type { ViewportPoint } from '@/types/turn'
+import type { StackSides } from '../lib/pageStack'
+import type { ViewportPoint } from '../types/turn'
 
 /** 纸叠渲染器关注的能力子集（由 useTurnRenderer 提供） */
 export interface StackHoverRenderer {

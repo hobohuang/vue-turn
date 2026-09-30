@@ -1,11 +1,11 @@
-import type { PageSource } from '@/lib/pageMapping'
+import type { PageSource } from './pageMapping'
 import type {
   FlipSpec,
   ForwardDirection,
   SheetGeometry,
   Slot,
   StaticPlacement,
-} from '@/types/turn'
+} from '../types/turn'
 
 export const PAGE_HEIGHT = 2
 

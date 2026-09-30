@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 
-import type { ForwardDirection } from '@/types/turn'
+import type { ForwardDirection } from '../types/turn'
 
 // 组件内部状态机：不依赖任何全局状态库，每个 vue-turn 实例天然隔离
 export function useBookState() {

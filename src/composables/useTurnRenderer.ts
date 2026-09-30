@@ -1,14 +1,14 @@
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type * as THREE from 'three'
 
-import { TurnScene, type PagePick } from '@/lib/TurnScene'
+import { TurnScene, type PagePick } from '../lib/TurnScene'
 import type {
   FlipSheetOptions,
   FlipSpec,
   StackHover,
   StackVisual,
   StaticPlacement,
-} from '@/types/turn'
+} from '../types/turn'
 
 export interface TurnRendererOptions {
   pageAspect: number

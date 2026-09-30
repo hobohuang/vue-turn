@@ -1,16 +1,16 @@
 import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
-import type { PagePick } from '@/lib/TurnScene'
-import { PAGE_HEIGHT, sheetWorldWidth } from '@/lib/flipSpec'
-import { FOLD_ZONE, foldStripFromPick } from '@/lib/foldHit'
+import type { PagePick } from '../lib/TurnScene'
+import { PAGE_HEIGHT, sheetWorldWidth } from '../lib/flipSpec'
+import { FOLD_ZONE, foldStripFromPick } from '../lib/foldHit'
 import type {
   FlipDirection,
   FlipSheetOptions,
   FlipSpec,
   SheetFoldOptions,
   StaticPlacement,
-} from '@/types/turn'
+} from '../types/turn'
 
 import type { useBookState } from './useBookState'
 import type { PaperOwnership } from './paperOwnership'

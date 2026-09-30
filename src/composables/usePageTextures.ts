@@ -2,9 +2,9 @@ import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
-import type { PageSource } from '@/lib/pageMapping'
-import { elementToTexture, solidColorTexture, waitForResources } from '@/lib/textureFactory'
-import type { FlipSpec, StaticPlacement } from '@/types/turn'
+import type { PageSource } from '../lib/pageMapping'
+import { elementToTexture, solidColorTexture, waitForResources } from '../lib/textureFactory'
+import type { FlipSpec, StaticPlacement } from '../types/turn'
 
 export type { PageSource }
 

@@ -1,4 +1,4 @@
-import type { LookOptions, TurnPreset } from '@/types/turn'
+import type { LookOptions, TurnPreset } from '../types/turn'
 
 /** 观感参数：五个专业渲染参数的集合，预设为其提供成组默认值 */
 export interface LookParams {
