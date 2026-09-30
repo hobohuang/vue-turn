@@ -1,6 +1,29 @@
 {
-  "name": "vue-turn",
-  "version": "0.2.0",
+  "name": "vue-turn-3d",
+  "version": "0.2.1",
+  "description": "基于 Three.js 的 Vue 3 书本翻页组件：真实纸张卷曲、双页跨页、封面封底开合、折角拖拽、纸叠与页面热区",
+  "keywords": [
+    "vue3",
+    "three.js",
+    "threejs",
+    "page-turn",
+    "page-flip",
+    "flipbook",
+    "turn.js",
+    "book",
+    "3d",
+    "翻页"
+  ],
+  "license": "MIT",
+  "author": "hobohuang <1536888730@qq.com>",
+  "homepage": "https://github.com/hobohuang/vue-turn#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hobohuang/vue-turn.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hobohuang/vue-turn/issues"
+  },
   "type": "module",
   "files": [
     "dist"
@@ -17,15 +40,15 @@
       "import": "./dist/vue-turn.mjs",
       "require": "./dist/vue-turn.cjs"
     },
-    "./dist/*": "./dist/*"
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
   },
   "scripts": {
     "dev": "vite",
     "build": "run-p type-check \"build-only {@}\" --",
-    "build:lib": "vite build && vue-tsc --build tsconfig.build.json --force",
+    "build:lib": "vite build --mode lib && vue-tsc --build tsconfig.build.json --force",
     "preview": "vite preview",
     "test:unit": "vitest",
-    "prepare": "cypress install",
     "test:e2e": "start-server-and-test preview http://localhost:4173 'cypress run --e2e'",
     "test:e2e:dev": "start-server-and-test 'vite dev --port 4173' http://localhost:4173 'cypress open --e2e'",
     "build-only": "vite build",
@@ -33,7 +56,8 @@
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",
-    "format": "prettier --write --experimental-cli src/"
+    "format": "prettier --write --experimental-cli src/",
+    "prepublishOnly": "npm run build:lib"
   },
   "peerDependencies": {
     "three": ">=0.160.0",

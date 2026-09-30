@@ -1,21 +1,26 @@
-# vue-turn
+# vue-turn-3d
 
 基于 Three.js 的 Vue 3 书本翻页组件：真实纸张卷曲形变、双页跨页布局、封面/封底开合动画、拖拽翻页、角点折角拖拽（turn.js 4 风格）、折角提示、缩放视口与页面热区。页面内容以普通 HTML 编写，运行时离屏光栅化为纹理贴到可形变网格上。
 
 ## 安装
 
 ```sh
-cnpm install vue-turn three
+npm install vue-turn-3d three
+# 或 pnpm add vue-turn-3d three
 ```
 
-`vue` 与 `three` 为 peerDependencies。
+`vue` 与 `three` 为 peerDependencies。组件结构样式独立打包，需在入口引入一次：
+
+```ts
+import 'vue-turn-3d/dist/vue-turn.css'
+```
 
 ## 快速开始
 
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue'
-import { VueTurn, TurnItem } from 'vue-turn'
+import { VueTurn, TurnItem } from 'vue-turn-3d'
 
 const page = ref(1)
 </script>
@@ -128,7 +133,7 @@ const page = ref(1)
 ```vue
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn'
+import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn-3d'
 
 const turnRef = ref<TurnInstance | null>(null)
 const page = ref(1)
@@ -270,7 +275,7 @@ const state = computed(() => turnRef.value?.state)
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue'
-import { VueTurn, TurnItem, type PageRegion, type TurnInstance } from 'vue-turn'
+import { VueTurn, TurnItem, type PageRegion, type TurnInstance } from 'vue-turn-3d'
 
 const turnRef = ref<TurnInstance | null>(null)
 const toc: PageRegion[] = [
@@ -418,7 +423,7 @@ function onRegionTap(_page: number, region: PageRegion) {
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn'
+import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn-3d'
 
 const route = useRoute()
 const router = useRouter()
