@@ -195,6 +195,17 @@ const page = ref(1)
 
 > 工具栏已外置：组件不再提供 `#toolbar` 插槽，请通过实例方法与事件在组件外部自定义工具栏（见下方示例）。
 
+## TurnItem 属性
+
+`<TurnItem>` 支持 4 个属性，均为静态声明；各自的行为细节见对应章节。
+
+| # | 属性 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| 1 | `spread` | `boolean` | `false` | 跨页项：内容横跨左右两页，按双倍宽度光栅化；未对齐到左页起始时自动补空白页（见「跨页大图（spread）」） |
+| 2 | `regions` | `PageRegion[]` | `[]` | 页面热区：坐标与尺寸为占整页比例（0~1，左上角原点），点击命中触发 `region-tap` 事件（见「页面热区（regions）」） |
+| 3 | `cover` | `boolean` | `false` | 声明为封面：仅首个 item 生效，独占一张专用纸张（正面 = item 内容），按 `coverPreset` + `coverLook` 观感渲染（见「封面与封底（cover / back-cover）」） |
+| 4 | `back-cover` | `boolean` | `false` | 声明为封底：仅末个 item 生效，同样独占专用纸张；纸张背面内容用 `#back` 插槽声明（封面/封底项可用，其余项忽略） |
+
 ## 跨页大图（spread）
 
 `<TurnItem>` 支持 `spread` 属性，标记该页内容横跨整个跨页（如折页地图、跨页大图）：
