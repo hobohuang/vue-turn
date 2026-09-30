@@ -400,7 +400,9 @@ export class TurnScene {
         spread ? this.sheetWidth * 2 : this.sheetWidth,
         PAGE_HEIGHT,
       )
-      const material = new THREE.MeshLambertMaterial({ color: 0xffffff })
+      // 页面纹理可为透明（背景由内容自绘，未绘制区域 alpha=0），
+      // 材质须开 transparent 否则透明区域渲染为黑色
+      const material = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true })
       const texture = textureOf(p.index)
       if (texture) {
         material.map = texture
@@ -586,6 +588,7 @@ export class TurnScene {
     const frontMaterial = new THREE.MeshLambertMaterial({
       color: 0xffffff,
       side: THREE.FrontSide,
+      transparent: true,
     })
     if (frontTexture) {
       frontMaterial.map = frontTexture
@@ -594,6 +597,7 @@ export class TurnScene {
     const backMaterial = new THREE.MeshLambertMaterial({
       color: 0xffffff,
       side: THREE.BackSide,
+      transparent: true,
     })
     if (backTexture) {
       backMaterial.map = backTexture

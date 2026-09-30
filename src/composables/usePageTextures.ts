@@ -19,8 +19,6 @@ export interface PageTexturesOptions {
   pixelRatio: ComputedRef<number>
   resourceTimeout: ComputedRef<number>
   prefetchWindow: ComputedRef<number>
-  /** 读取当前 props（调用时求值，保持与组件状态一致） */
-  pageBackground: () => string
   cacheBust: () => boolean
   maxAnisotropy: Ref<number>
   applyStaticTexture: (index: number, texture: THREE.Texture) => void
@@ -130,7 +128,6 @@ export function usePageTextures(options: PageTexturesOptions) {
         const texture = await elementToTexture(
           el,
           options.pixelRatio.value,
-          options.pageBackground(),
           bust && options.cacheBust(),
           options.maxAnisotropy.value,
         )
@@ -151,7 +148,6 @@ export function usePageTextures(options: PageTexturesOptions) {
         basePromise = elementToTexture(
           el,
           options.pixelRatio.value,
-          options.pageBackground(),
           bust && options.cacheBust(),
           options.maxAnisotropy.value,
         )

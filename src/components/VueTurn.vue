@@ -80,8 +80,6 @@ const props = withDefaults(
     pageWidth?: number
     /** 光栅化像素比 */
     pixelRatio?: number
-    /** 页面底色（纹理背景） */
-    pageBackground?: string
     /** 相机适配边距（视口外扩比例），越大留白越多 */
     fitMargin?: number
     /** 是否允许点击视口翻页（跟随阅读方向：LTR 右半前进，RTL 左半前进） */
@@ -121,7 +119,6 @@ const props = withDefaults(
     displayedPages: 'auto',
     pageWidth: 768,
     pixelRatio: 1,
-    pageBackground: '#ffffff',
     clickToFlip: true,
     clickDeadZone: 0,
     keyboard: 'focus',
@@ -312,7 +309,6 @@ const {
   pixelRatio: safePixelRatio,
   resourceTimeout: safeResourceTimeout,
   prefetchWindow: safePrefetchWindow,
-  pageBackground: () => props.pageBackground,
   cacheBust: () => props.cacheBust,
   maxAnisotropy,
   applyStaticTexture,
@@ -772,7 +768,6 @@ defineExpose({
         :style="{
           width: `${face.spread ? safePageWidth * 2 : safePageWidth}px`,
           height: `${safePageWidth / safePageAspect}px`,
-          background: props.pageBackground,
         }"
       >
         <VnodeHolder :vnode="face.vnode" />

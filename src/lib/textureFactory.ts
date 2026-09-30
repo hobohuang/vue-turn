@@ -62,18 +62,18 @@ export async function waitForResources(element: HTMLElement, timeout = DEFAULT_R
   await withTimeout(Promise.all([...images, ...backgrounds, fonts]), timeout)
 }
 
+// 光栅化画布恒为透明（backgroundColor: null）：页面背景由内容自绘，
+// 未绘制区域在纹理中保留 alpha=0（页面材质已开 transparent，透出宿主页面）。
 // pixelRatio 默认 1，与组件 props 的 pixelRatio 默认值保持一致，避免两处默认不一致
 export async function elementToTexture(
   element: HTMLElement,
   pixelRatio = 1,
-  backgroundColor = '#ffffff',
   cacheBust = true,
   // 各向异性过滤等级：应由调用方按 renderer.capabilities.getMaxAnisotropy() 钳制后传入
   maxAnisotropy = 8,
 ) {
   const canvas = await toCanvas(element, {
     pixelRatio,
-    backgroundColor,
     cacheBust,
   })
   const texture = new THREE.CanvasTexture(canvas)
