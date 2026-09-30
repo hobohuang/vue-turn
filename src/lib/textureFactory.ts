@@ -62,6 +62,22 @@ export async function waitForResources(element: HTMLElement, timeout = DEFAULT_R
   await withTimeout(Promise.all([...images, ...backgrounds, fonts]), timeout)
 }
 
+// 空白页统一纸色：暖白纸基调。空白页（跨页对齐补位/内页补偶/缺省衬页等
+// 自动插入的页）没有 DOM 内容，用户无法通过内容自绘控制其颜色，故收为
+// 内部常量，取值贴近常见书页纸色，避免与内容页形成突兀色差
+const BLANK_PAGE_COLOR = '#f5f2e9'
+
+// 空白页的纯色纸纹。颜色空间与内容纹理一致（sRGB），保证同一灯光组下
+// 与内页纸色观感相同
+export function solidColorTexture(): THREE.Texture {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 1
+  const context = canvas.getContext('2d')!
+  context.fillStyle = BLANK_PAGE_COLOR
+  context.fillRect(0, 0, 1, 1)
+  return new THREE.CanvasTexture(canvas)
+}
+
 // 光栅化画布恒为透明（backgroundColor: null）：页面背景由内容自绘，
 // 未绘制区域在纹理中保留 alpha=0（页面材质已开 transparent，透出宿主页面）。
 // pixelRatio 默认 1，与组件 props 的 pixelRatio 默认值保持一致，避免两处默认不一致

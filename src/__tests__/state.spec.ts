@@ -79,6 +79,10 @@ vi.mock('@/lib/textureFactory', () => ({
   elementToTexture: vi
     .fn<() => Promise<FakeTexture>>()
     .mockResolvedValue({ dispose: vi.fn<() => void>() }),
+  // 空白补位页/空白衬页的纯色纸纹（无 DOM 可光栅化）
+  solidColorTexture: vi
+    .fn<() => FakeTexture>()
+    .mockReturnValue({ dispose: vi.fn<() => void>() }),
   waitForResources: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }))
 

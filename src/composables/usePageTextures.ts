@@ -3,7 +3,7 @@ import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
 import type { PageSource } from '@/lib/pageMapping'
-import { elementToTexture, waitForResources } from '@/lib/textureFactory'
+import { elementToTexture, solidColorTexture, waitForResources } from '@/lib/textureFactory'
 import type { StaticPlacement } from '@/types/turn'
 
 export type { PageSource }
@@ -117,10 +117,19 @@ export function usePageTextures(options: PageTexturesOptions) {
   // 跨页项：整页光栅化一次得到基准纹理，左右两页各持有半图克隆（共享 GPU 数据）。
   async function rasterizePage(index: number, seq: number, bust = false) {
     const source = options.pageSources.value[index]
-    if (!source || source.blank) return
-    const el = options.pageEls.value[source.itemIndex]
-    if (!el) return
+    if (!source) return
     try {
+      // 空白页无 DOM 可光栅化：贴统一纸色的纯色纸纹（否则材质落为无纹理
+      // 的白色，与内容页纸色不一致）。纯同步路径，无 seq 过期问题
+      if (source.blank) {
+        const texture = solidColorTexture()
+        textures.get(index)?.dispose()
+        textures.set(index, texture)
+        options.applyStaticTexture(index, texture)
+        return
+      }
+      const el = options.pageEls.value[source.itemIndex]
+      if (!el) return
       // 等待页内图片/背景图与字体就绪，避免光栅化出缺图/缺字的纹理
       await waitForResources(el, options.resourceTimeout.value)
       if (disposed || seq !== rasterSeq) return

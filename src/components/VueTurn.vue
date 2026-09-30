@@ -49,7 +49,6 @@ import type {
   KeyboardMode,
   LookOptions,
   PageRegion,
-  SheetFoldOptions,
   StaticPlacement,
   TurnInstance,
   TurnPreset,

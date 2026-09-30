@@ -106,6 +106,10 @@ vi.mock('@/composables/useTurnRenderer', () => ({
 
 vi.mock('@/lib/textureFactory', () => ({
   elementToTexture: mocks.elementToTexture,
+  // 空白补位页/空白衬页的纯色纸纹（无 DOM 可光栅化）
+  solidColorTexture: vi.fn<() => FakeTexture>().mockImplementation(() => ({
+    dispose: vi.fn<() => void>(),
+  })),
   waitForResources: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }))
 

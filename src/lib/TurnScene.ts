@@ -27,6 +27,27 @@ const FOLD_SEGMENTS = 96
 // 封面图层：封面/封底网格与封面灯光组单独一层，灯光按图层隔离，
 // 实现封面（coverPreset）与内页（preset）互不干扰的光影
 const COVER_LAYER = 1
+// 软纸卷曲翻页的向上翘起：真实纸页翻起时自由边会脱离书面拱起、页面上缘
+// 翘得比下缘略高（空气从页下穿过）；基础卷曲是纵向均匀的柱面弯，姿态偏"平"。
+// 翘起分两个分量，包络均随翻页进度 sin(θ) 起落、起翻/落页归零：
+// - CURL_LIFT（朝相机方向，z，世界单位，约为页高 2 的 10%）：页面向外
+//   鼓起的"帆面"感，页面斜对相机时呈现为弧面透视；页面立起侧对相机时
+//   此分量不可见
+// - CURL_LIFT_Y（屏幕向上，y）：自由边抬离书面、上缘抬得更高——正面视角
+//   下全程可读的"翘起"，补足 z 分量在页面立起时的视觉空档
+// soft 档点击翻页走 fold 路径、拖拽/边缘翻页走 curl 路径，两条路径共用
+// 本组常量保证观感一致；hard 刚体翻转不受影响
+const CURL_LIFT = 0.2
+// 上缘相对下缘的翘起差（占各分量的比例）：翘起量沿页高线性倾斜，
+// 顶缘 +30%、底缘 −30%，形成锥形扭翘而非整页平移
+const CURL_LIFT_TILT = 0.6
+// 屏幕向上分量幅度（世界单位，约为页高 2 的 10%）
+const CURL_LIFT_Y = 0.2
+// y 分量的纵向分布：底缘保留 35% 避免自由边下缘完全贴死书面，上缘全额抬起
+const CURL_LIFT_Y_TOP_BIAS = 0.65
+// fold 路径翘起权重的爬坡参考高度（占页宽比例）：顶点翘起权重取 fold 自身
+// 抬升高度除以该值并钳制到 1——折缝圆弧段 z 平滑上升，权重随之从 0 爬到 1
+const FOLD_LIFT_RAMP = 0.25
 
 function createRenderer(): THREE.WebGLRenderer | null {
   // 探测与渲染共用同一 canvas：探测用的 context 无法显式释放，弃置会
@@ -1082,6 +1103,10 @@ export class TurnScene {
   private deformSheet(sheet: CurlSheet, pe: number) {
     const theta = Math.PI * pe
     const amp = sheet.curl * Math.sin(theta)
+    // 翘起包络：与卷曲幅度同相位（翻页中段最大、首尾归零）
+    const sinTheta = Math.sin(theta)
+    const liftEnv = CURL_LIFT * sinTheta
+    const liftYEnv = CURL_LIFT_Y * sinTheta
     const n = sheet.nPolygons
     const columns = curledColumns(theta, amp, this.sheetWidth, n)
     const positions = sheet.geometry.attributes.position
@@ -1094,8 +1119,16 @@ export class TurnScene {
       const frac = f - c0
       const x = (columns.xs[c0] ?? 0) * (1 - frac) + (columns.xs[c0 + 1] ?? 0) * frac
       const z = (columns.zs[c0] ?? 0) * (1 - frac) + (columns.zs[c0 + 1] ?? 0) * frac
+      // 翘起量：沿页宽 q(2-q) 铰链处为零、中后段最大（与卷曲同族的平滑
+      // 分布）；沿页高线性倾斜形成锥形扭翘。z 分量朝相机鼓起，y 分量把
+      // 自由边抬离书面（上缘全额、下缘 35%）
+      const q = s / this.sheetWidth
+      const qProfile = q * (2 - q)
+      const v = ((sheet.baseY[i] ?? 0) + PAGE_HEIGHT / 2) / PAGE_HEIGHT
+      const tilt = 1 + CURL_LIFT_TILT * (v - 0.5)
       positions.setX(i, sheet.sign * x)
-      positions.setZ(i, z)
+      positions.setZ(i, z + liftEnv * qProfile * tilt)
+      positions.setY(i, (sheet.baseY[i] ?? 0) + liftYEnv * qProfile * (1 + CURL_LIFT_Y_TOP_BIAS * (v - 1)))
     }
     positions.needsUpdate = true
     sheet.geometry.computeVertexNormals()
@@ -1105,10 +1138,17 @@ export class TurnScene {
   // P≈Q（未折）时顶点还原为初始平面。
   // 折缝圆弧与微开角随翻页进度压平（进度→1 时 bend/tilt→0）：
   // 折角小时折缝圆润、翻起平面微翘；整页翻过落页时纸摊平贴合底面，
-  // 与 renderStatic 接管的静态布局无缝衔接（无落页跳变）
+  // 与 renderStatic 接管的静态布局无缝衔接（无落页跳变）。
+  // soft 档点击翻页走本路径（fold 默认开启），因此与卷曲路径共用同一组
+  // 翘起分量（CURL_LIFT/CURL_LIFT_Y），保证两种翻页交互观感一致。
+  // 翘起权重取 fold 自身的抬升高度归一化：贴书面的部分（z=0）不抬、
+  // 只有真正翻过折缝的部分被抬起——整页不致呈刚性斜板（"硬"感根源）
   private deformSheetFold(sheet: FoldSheet) {
     const fold = sheet.fold
     const settle = 1 - Math.min(1, Math.max(0, sheet.progress))
+    const sinProgress = Math.sin(Math.PI * Math.min(1, Math.max(0, sheet.progress)))
+    const liftEnv = CURL_LIFT * sinProgress
+    const liftYEnv = CURL_LIFT_Y * sinProgress
     const crease = computeCrease(
       fold.pu,
       fold.pv,
@@ -1124,6 +1164,12 @@ export class TurnScene {
       const y = sheet.baseY[i] ?? 0
       if (crease) {
         const p = foldPoint(s, y, crease)
+        // 权重由 fold 圆弧段的 z 平滑爬坡（0→1），折缝处无硬边过渡；
+        // 沿页高线性倾斜保留锥形扭翘（z 顶 +30%/底 −30%，y 顶全额/底 35%）
+        const weight = Math.min(1, p.z / (FOLD_LIFT_RAMP * this.sheetWidth))
+        const v = (y + PAGE_HEIGHT / 2) / PAGE_HEIGHT
+        p.z += liftEnv * weight * (1 + CURL_LIFT_TILT * (v - 0.5))
+        p.y += liftYEnv * weight * (1 + CURL_LIFT_Y_TOP_BIAS * (v - 1))
         positions.setX(i, sheet.sign * p.x)
         positions.setY(i, p.y)
         positions.setZ(i, p.z)

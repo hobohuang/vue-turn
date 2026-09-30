@@ -80,6 +80,7 @@ function onRegionTap(_page: number, region: PageRegion) {
       :page-aspect="0.75"
       :peel="true"
       @region-tap="onRegionTap"
+      preset="hard"
     >
       <turn-item cover>
         <div class="demo-page cover">
@@ -97,7 +98,7 @@ function onRegionTap(_page: number, region: PageRegion) {
       </turn-item>
 
       <turn-item>
-        <div class="demo-page">
+        <div class="demo-page right">
           <h2 class="page-heading">前言</h2>
           <p class="page-paragraph">
             这本书演示了如何把传统的 DOM 翻页组件重构为基于 WebGL 的三维翻页体验。每一页都是真实的
@@ -149,7 +150,7 @@ function onRegionTap(_page: number, region: PageRegion) {
       </turn-item>
 
       <turn-item>
-        <div class="demo-page code-page">
+        <div class="demo-page code-page right">
           <h2 class="page-heading">代码一瞥</h2>
           <pre class="code-block">
 export function curlPoint(s, θ, κ) {
@@ -183,7 +184,7 @@ export function curlPoint(s, θ, κ) {
       </turn-item>
 
       <turn-item>
-        <div class="demo-page quote-page">
+        <div class="demo-page quote-page right">
           <p class="quote-mark">“</p>
           <p class="quote-text">纸张会旧，交互不会。</p>
           <p class="quote-author">— 某位翻书页翻到腱鞘炎的工程师</p>
@@ -299,6 +300,12 @@ export function curlPoint(s, θ, κ) {
   background: linear-gradient(150deg, #fdfcf9 0%, #f3efe6 100%);
   color: #2b2a26;
   font-family: 'Georgia', 'Noto Serif SC', serif;
+}
+
+/* 书脊右页（偶数页索引）：渐变镜像为 210deg——左右两页都在书脊侧偏深、
+   外缘偏浅，摊开时避免左页渐变最深端紧贴右页最浅端的接缝色差 */
+.demo-page.right {
+  background: linear-gradient(210deg, #fdfcf9 0%, #f3efe6 100%);
 }
 
 .cover {

@@ -93,6 +93,7 @@ const mocks = vi.hoisted(() => {
     setCoverPages: vi.fn<(indices: number[]) => void>(),
     setStacks: vi.fn<() => void>(),
     elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
+    solidColorTexture: vi.fn<() => FakeTexture>(),
   }
 })
 
@@ -129,6 +130,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
 
 vi.mock('@/lib/textureFactory', () => ({
   elementToTexture: mocks.elementToTexture,
+  solidColorTexture: mocks.solidColorTexture,
   waitForResources: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }))
 
@@ -280,6 +282,8 @@ describe('VueTurn', () => {
     })
     mocks.getZoom.mockImplementation(() => mocks.readZoomState())
     mocks.elementToTexture.mockResolvedValue({ dispose: vi.fn<() => void>() })
+    // 空白补位页的纯色纸纹（与内容页光栅化路径分离）
+    mocks.solidColorTexture.mockImplementation(() => ({ dispose: vi.fn<() => void>() }))
     // 默认：记录翻页回调但不调用（模拟翻页进行中）
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => {
       mocks.done.flip = onDone
@@ -318,9 +322,10 @@ describe('VueTurn', () => {
   it('rasterizes every turn-item before first paint', async () => {
     await mountTurn()
     // 6 item → 8 页（封面/封底专用纸张各带一张空白衬页）；
-    // 挂载窗口 [0,6) 命中页 0,2,3,4,5（页 1 空白跳过）→ 5 次光栅化
+    // 挂载窗口 [0,6) 命中页 0,2,3,4,5 的 DOM 光栅化（页 1 空白无 DOM）→ 5 次，
+    // 另有空白衬页 1 的纯色纸纹一次，合计 6 次贴图
     expect(mocks.elementToTexture).toHaveBeenCalledTimes(5)
-    expect(mocks.applyStaticTexture).toHaveBeenCalledTimes(5)
+    expect(mocks.applyStaticTexture).toHaveBeenCalledTimes(6)
   })
 
   it('shows the first spread and disables the back flip', async () => {
@@ -1146,6 +1151,21 @@ describe('VueTurn', () => {
     expect(wrapper.find('#indicator').text()).toBe('1/8')
   })
 
+  it('gives inserted blank pages a solid paper texture instead of bare white', async () => {
+    // 回归：空白补位页无 DOM 可光栅化，此前无纹理落为材质白色，与内容页
+    // 纸色（内容自绘背景）不一致；应改贴统一纸色的纯色纸纹
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    mocks.solidColorTexture.mockClear()
+    // 封面(0) + 空白衬页(1) + 普通(2) + 跨页[3,4]：空白页 1 在挂载窗口内
+    await mountItems(['full', 'full', 'spread', 'full', 'full'])
+    expect(mocks.solidColorTexture).toHaveBeenCalled()
+    // 空白页不走进 DOM 光栅化路径
+    const blankCalls = mocks.applyStaticTexture.mock.calls.filter(([index]) => index === 1)
+    expect(blankCalls.length).toBeGreaterThan(0)
+    expect(blankCalls[0]?.[1]).toBe(mocks.solidColorTexture.mock.results[0]?.value)
+  })
+
   it('renders a visible spread as one double-width centered placement', async () => {
     mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
     mocks.elementToTexture.mockReset()
@@ -1686,11 +1706,11 @@ describe('VueTurn', () => {
     expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
     // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览卷曲形变，
     // 避免封面开合等场景悬停时整本书随指针抖动。
-    // 封面纸张背面 = 空白封面底（页 1），无纹理 → back 传 null
+    // 封面纸张背面 = 空白封面底（页 1）→ back 传统一纸色纯色纸纹
     expect(mocks.beginDragFlip).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
-      null,
+      mocks.solidColorTexture.mock.results[0]?.value,
       expect.anything(),
       expect.anything(),
       true,
@@ -1722,11 +1742,11 @@ describe('VueTurn', () => {
     await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 870, clientY: 480, buttons: 0 })
     expect(mocks.beginFoldDrag).toHaveBeenCalledTimes(1)
     // 悬停预览（preview=true）：书体/静态页/纸叠钉在起始态，只预览折角形变；
-    // 封面纸张背面 = 空白封面底（页 1），无纹理 → back 传 null
+    // 封面纸张背面 = 空白封面底（页 1）→ back 传统一纸色纯色纸纹
     expect(mocks.beginFoldDrag).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
-      null,
+      mocks.solidColorTexture.mock.results[0]?.value,
       expect.anything(),
       expect.anything(),
       expect.anything(),
