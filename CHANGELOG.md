@@ -55,6 +55,7 @@
 
 ### 新增
 
+- **自 0.1.0 以来的功能全集随本版首次发布**：折角/折页拖拽与悬停预览（turn.js 4 风格）、纸叠页层条带（悬停/点击跳页）、缩放视口（滚轮/双击/实例方法）、封面/封底专用纸张与 `coverPreset` 独立灯光、观感预设（`preset`/`look`/`coverLook`）、跨页合并渲染、页面热区（`regions` + `region-tap`）、懒光栅化窗口（`prefetchWindow`）、深度链接友好的 `goToPage` 与 `before-flip` 拦截、`stop`/`disable` 实例控制。
 - **实例响应式 `state`**：`TurnInstance` 新增 `state` 只读快照（`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`），`readonly(reactive)` 暴露，模板/computed 中读取自动跟踪更新——外置工具栏不再需要事件回调手动强刷。`zoom` 经 `onZoomChange` 回调镜像，并补齐 `maxZoom` 收敛不发 `zoom-change` 的缺口。
 
 ### 修复
@@ -72,3 +73,15 @@
 - 新增 `src/__tests__/presetDoc.spec.ts`：逐条对账 README「观感预设」与「封面与封底」两节（档位基线、look/coverLook 逐项覆盖、非法值回退、封面独占纸张与独立灯光、封面折页档按 `coverPreset`）。
 - 新增 `src/__tests__/state.spec.ts`：覆盖实例响应式 `state` 的自动跟踪与 zoom 镜像全路径（实例方法 / 翻页复位 / maxZoom 收敛）。
 - `VueTurn.spec.ts`：新增 hard 封面保持刚体（不折角预览、不折角拖拽）用例，以及 `zoomMode='both'` / 默认 `'off'` 的手势覆盖用例。
+
+## 0.1.0 - 2026-08-24
+
+首个发布版本：基于 Three.js 的真实纸张卷曲翻页组件完成基础形态。
+
+- **核心渲染**：页面内容以普通 HTML 编写，运行时离屏光栅化为纹理，贴到可形变网格做真实卷曲形变；WebGL 不可用时插槽兜底。
+- **组件式 API**：Element Plus 风格的 `<vue-turn>` + `<turn-item>` 调用方式；多实例隔离；v-model 双向绑定页码。
+- **基础交互与事件**：内置点击/键盘翻页、`change` / `flip-start` / `flip-end` / `ready` 事件；`next` / `prev` / `refresh` 等实例 API。
+- **布局与参数化**：显示模式 `displayedPages`（'auto' / 1 / 2）、阅读方向、翻页时长与曲率、渲染像素比、相机适配边距等核心参数；跨页布局与书体平移。
+- **内容同步**：动态内容自动重光栅化（MutationObserver 监听离屏 DOM）；光栅化前异步等待图片/字体就绪。
+- **路由解耦**：页码状态完全由外部（v-model）驱动，可接 Vue Router 深度链接。
+- 拖拽翻页、折角、纸叠、缩放等进阶能力未包含（随 0.2.0 发布，见上）。
