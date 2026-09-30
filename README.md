@@ -410,6 +410,56 @@ function onRegionTap(_page: number, region: PageRegion) {
 
 `numPages` 计入自动补的空白页与封面/封底纸张的空白衬页（`#back` 未定义时）。
 
+## 路由深度链接（宿主集成）
+
+组件与路由零耦合：对外的唯一状态是 `v-model` 页码（从 1 开始）。`/book/:page` 这类深度链接不是组件功能，由宿主自行实现——路由形态不限（路径参数、query、哈希均可），只需在宿主里做"路由 ↔ 页码"的双向同步。路由参数是业务 id（而非页码）时，维护一张"业务 id ↔ 组件页码"的映射表即可：
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { VueTurn, TurnItem, type TurnInstance } from 'vue-turn'
+
+const route = useRoute()
+const router = useRouter()
+const turnRef = ref<TurnInstance | null>(null)
+
+// 业务 id ↔ 页码映射：页码为组件映射后的页索引（见下方要点）
+const entries = [
+  { id: 'intro', page: 1 },
+  { id: 'chapter1', page: 3 },
+  { id: 'gallery', page: 6 },
+]
+const idToPage = Object.fromEntries(entries.map((e) => [e.id, e.page]))
+function pageToId(page: number) {
+  return entries.reduce((best, e) => (Math.abs(e.page - page) < Math.abs(best.page - page) ? e : best)).id
+}
+
+// 路由 → 页码：非法 id 回退第 1 页
+const page = ref(idToPage[route.params.id as string] ?? 1)
+
+// 页码 → 路由：翻页提交后回写（replace 不产生历史记录，按需改 push）
+function onChange(p: number) {
+  if (route.params.id === pageToId(p)) return
+  router.replace({ params: { id: pageToId(p) } })
+}
+</script>
+
+<template>
+  <VueTurn ref="turnRef" v-model="page" @change="onChange">
+    <TurnItem>封面</TurnItem>
+    <!-- ... -->
+    <TurnItem back-cover>封底</TurnItem>
+  </VueTurn>
+</template>
+```
+
+要点：
+
+- **页码是映射后的页索引空间**：封面/封底专用纸张各占 2 页（正面 + `#back` 内容或空白衬页）、跨页项占 2 页、对齐/补偶的自动补位页同样计入 `numPages`（见「跨页大图（spread）」「奇数总页数的自动补页」）。业务"第 N 个内容"对应的组件页码请按此空间换算——例如内容项前有 1 张封面纸（2 页）时，第 1 个内容页从页码 3 开始。
+- **深度链接定位**：以 `v-model` 初始值传入即可在挂载时定位；运行中收到外部跳转调 `turnRef.value?.goToPage(page)`（翻页中或越界时会被拒绝并返回 `false`，可在路由同步处据此回退）。
+- **双向同步防环**：路由 → 页码方向用 `v-model` / `goToPage`；页码 → 路由方向监听 `change`（或响应式 `state.page`），回写前先比对当前路由参数、相同则跳过，避免冗余导航与多余历史记录。含非法值纠正的完整参考实现见演示页 `BookView.vue` 的 `applyRoutePage` / `watch(currentPage)`。
+
 ## 已知限制
 
 - 页面内容被光栅化为纹理，页内按钮/链接不可交互；页内交互请使用页面热区（`regions` + `region-tap`），或放在组件外部（工具栏等）。
