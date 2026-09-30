@@ -1231,6 +1231,97 @@ describe('VueTurn', () => {
     ])
   })
 
+  it('resolves split spread halves by screen side in RTL flips', async () => {
+    // 回归：RTL（右翻书）下跨页的页码配对是镜像的（左槽=起始页+1），
+    // 翻页中按页码取半图会让拆分态与静止合并整页（方向无关、图像左半恒在
+    // 屏幕左）左右互换——翻起瞬间跨页内容交叉错乱，翻完合并才恢复。
+    // 拆分态（翻页纸张正背面与前置静态半页）必须按「屏幕侧」取半图。
+    // 可记录 uv 变换的纹理替身：半图克隆 repeat.x=0.5，offset.x 区分左右半
+    function recordingTexture(tag: string): {
+      tag: string
+      dispose: ReturnType<typeof vi.fn<() => void>>
+      repeat: { x: number; y: number; set: (x: number, y: number) => void }
+      offset: { x: number; y: number; set: (x: number, y: number) => void }
+      clone: () => ReturnType<typeof recordingTexture>
+    } {
+      const texture = {
+        tag,
+        dispose: vi.fn<() => void>(),
+        repeat: {
+          x: 0,
+          y: 0,
+          set(x: number, y: number) {
+            texture.repeat.x = x
+            texture.repeat.y = y
+          },
+        },
+        offset: {
+          x: 0,
+          y: 0,
+          set(x: number, y: number) {
+            texture.offset.x = x
+            texture.offset.y = y
+          },
+        },
+        clone: () => recordingTexture(tag),
+      }
+      return texture
+    }
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation((el) =>
+      Promise.resolve(recordingTexture(el.textContent ?? '')),
+    )
+    // 页映射：封面(0)+衬页(1)+补位(2)+跨页[3,4]+普通(5)+封底纸(6,7)
+    const wrapper = await mountItems(['full', 'spread', 'full', 'full'], {
+      forwardDirection: 'right',
+    })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('2/8')
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
+    mocks.startFlip.mockClear()
+    mocks.setStaticPages.mockClear()
+    // RTL 前进（向右）：翻离跨页。翻页纸张 front=4（跨页右半页，翻起前静止
+    // 于屏幕左侧）、back=5；stay=3（跨页左半页）静态钉在右槽
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('6/8')
+    const spec = mocks.startFlip.mock.calls[mocks.startFlip.mock.calls.length - 1]?.[0]
+    expect(spec?.frontIndex).toBe(4)
+    expect(spec?.backIndex).toBe(5)
+    expect(spec?.staticPages).toEqual([
+      { index: 6, slot: 'left' },
+      { index: 3, slot: 'right' },
+    ])
+    // 正面翻起前在屏幕左侧 → 取图像左半（offset.x=0），
+    // 与翻起前合并整页左侧显示的左半衔接
+    const front = mocks.startFlip.mock.calls[mocks.startFlip.mock.calls.length - 1]?.[1] as
+      | undefined
+      | {
+          tag?: string
+          repeat: { x: number }
+          offset: { x: number }
+        }
+    expect(front?.tag).toBe('item 2')
+    expect(front?.repeat.x).toBe(0.5)
+    expect(front?.offset.x).toBe(0)
+    // 静态右槽的跨页左半页（index 3）→ 取图像右半（offset.x=0.5），
+    // 与合并整页右侧显示的右半衔接
+    const spreadStatic = mocks.setStaticPages.mock.calls.filter(([placements]) =>
+      (placements as Array<{ index?: number }>).some((p) => p.index === 3),
+    )
+    expect(spreadStatic.length).toBeGreaterThan(0)
+    const textureOf = spreadStatic[spreadStatic.length - 1]![1] as unknown as (index: number) => {
+      tag?: string
+      offset: { x: number }
+    }
+    expect(textureOf(3)?.tag).toBe('item 2')
+    expect(textureOf(3)?.offset.x).toBe(0.5)
+  })
+
   it('restores the initial page from modelValue on mount', async () => {
     // 回归：挂载时初始页码不能被 0 页状态钳制到封面（刷新恢复 /book/:page 场景）
     const wrapper = await mountTurn(6, { modelValue: 6 })

@@ -72,6 +72,10 @@ export interface FlipInteractionEmits {
 /** 场景查询（只读）：交互层做命中判定与翻页构造所需的数据与纯函数 */
 export interface FlipInteractionQuery {
   textures: Map<number, THREE.Texture>
+  /** 翻页纸张正/背面纹理：跨页半图按屏幕侧解析（RTL 镜像配对纠正，见 usePageTextures） */
+  sheetTextures: (spec: FlipSpec) => { front: THREE.Texture | null; back: THREE.Texture | null }
+  /** 翻页前置静态布局的纹理回调：静态跨页半页按槽位（屏幕侧）解析 */
+  staticTextures: (spec: FlipSpec) => (index: number) => THREE.Texture | null
   pageCount: Ref<number>
   containerSize: { width: number }
   webglSupported: Ref<boolean>
@@ -159,6 +163,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   const { props, state, emit, renderer, query, actions, onZoomChange } = options
   const {
     textures,
+    sheetTextures,
+    staticTextures,
     pageCount,
     containerSize,
     webglSupported,
@@ -278,6 +284,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     pageCount,
     renderer,
     textures,
+    sheetTextures,
+    staticTextures,
     safePageAspect,
     safeFlipDuration,
     foldOfSpec,
@@ -513,12 +521,13 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     const takeOver = ownership.isPeelMatch(trigger)
     // 翻页前置布局：相机由拖拽结束动画接管。接管悬停预览的纸张时同样
     // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）
-    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    renderer.setStaticPages(spec.staticPages, staticTextures(spec), false)
     if (!takeOver) {
+      const { front, back } = sheetTextures(spec)
       const ok = renderer.beginDragFlip(
         spec,
-        textures.get(spec.frontIndex) ?? null,
-        textures.get(spec.backIndex) ?? null,
+        front,
+        back,
         makeSheetDone(spec, trigger),
         sheetOptions(spec),
       )
@@ -599,11 +608,12 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     if (!takeOver && ownership.owner === 'peel') releasePeelNow()
     // 翻页前置布局：相机不动，折角在页内完成。接管悬停预览的纸张时同样
     // 要设置（预览不动静态布局，此时仍是空闲布局，真实交互才切翻开布局）
-    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    renderer.setStaticPages(spec.staticPages, staticTextures(spec), false)
+    const { front, back } = sheetTextures(spec)
     const ok = renderer.beginFoldDrag(
       spec,
-      textures.get(spec.frontIndex) ?? null,
-      textures.get(spec.backIndex) ?? null,
+      front,
+      back,
       foldW,
       anchorV,
       foldOfSpec(spec).bendWorld,

@@ -45,6 +45,10 @@ export interface PeelPreviewOptions {
     | 'pickPage'
   >
   textures: Map<number, THREE.Texture>
+  /** 翻页纸张正/背面纹理：跨页半图按屏幕侧解析（RTL 镜像配对纠正，见 usePageTextures） */
+  sheetTextures: (spec: FlipSpec) => { front: THREE.Texture | null; back: THREE.Texture | null }
+  /** 翻页前置静态布局的纹理回调：静态跨页半页按槽位（屏幕侧）解析 */
+  staticTextures: (spec: FlipSpec) => (index: number) => THREE.Texture | null
   safePageAspect: number
   safeFlipDuration: ComputedRef<number>
   /** fold 交互是否启用（preset 解析结果，挂载期冻结） */
@@ -82,6 +86,8 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     pageCount,
     renderer,
     textures,
+    sheetTextures,
+    staticTextures,
     safePageAspect,
     safeFlipDuration,
     foldOfSpec,
@@ -134,10 +140,11 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     renderer.stopFlip()
     // preview=true：悬停预览不动书体/静态页/纸叠，只预览整页卷曲
     // （静态布局保持空闲态，命中判定所依赖的网格不随预览变化）
+    const { front, back } = sheetTextures(spec)
     const ok = renderer.beginDragFlip(
       spec,
-      textures.get(spec.frontIndex) ?? null,
-      textures.get(spec.backIndex) ?? null,
+      front,
+      back,
       makeSheetDone(spec, trigger),
       sheetOptions(spec),
       true,
@@ -229,11 +236,12 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     // 与真实拖拽一致：先重设翻开前置布局再建纸张，折角下方露出的才是
     // 下一页而非当前页；世界偏移由 beginFoldDrag 统一叠加。收起时经
     // makeSheetDone 的 renderStatic 恢复空闲布局
-    renderer.setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+    renderer.setStaticPages(spec.staticPages, staticTextures(spec), false)
+    const { front, back } = sheetTextures(spec)
     const ok = renderer.beginFoldDrag(
       spec,
-      textures.get(spec.frontIndex) ?? null,
-      textures.get(spec.backIndex) ?? null,
+      front,
+      back,
       w,
       (cornerV * PAGE_HEIGHT) / 2,
       foldOfSpec(spec).bendWorld,

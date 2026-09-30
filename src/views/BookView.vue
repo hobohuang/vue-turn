@@ -4,14 +4,24 @@ import { useRoute, useRouter } from 'vue-router'
 
 import TurnItem from '@/components/TurnItem.vue'
 import VueTurn from '@/components/VueTurn.vue'
-import type { PageRegion, TurnInstance } from '@/types/turn'
+import type {
+  BeforeFlipContext,
+  DisplayMode,
+  FlipDirection,
+  ForwardDirection,
+  KeyboardMode,
+  PageRegion,
+  TurnInstance,
+  ViewportPoint,
+  ZoomMode,
+} from '@/types/turn'
 
 const route = useRoute()
 const router = useRouter()
 
 const turnRef = ref<TurnInstance | null>(null)
 const currentPage = ref(1)
-const MAX_ZOOM = 3
+const MAX_ZOOM = 4
 
 // 响应式状态快照：指示器/按钮状态全部由 state 自动跟踪，无需事件回调强刷
 const state = computed(() => turnRef.value?.state)
@@ -55,9 +65,116 @@ watch(currentPage, (value) => {
 
 applyRoutePage()
 
+// ---------- 运行时可变参数（右上参数面板） ----------
+// preset / coverPreset / look / coverLook / pageAspect / fitMargin 等挂载时冻结，
+// 不提供运行时切换（组件在挂载时读取一次）
+
+const displayMode = ref<'auto' | '1' | '2'>('auto')
+const displayModeValue = computed<DisplayMode>(() =>
+  displayMode.value === 'auto' ? 'auto' : (Number(displayMode.value) as 1 | 2),
+)
+
+const direction = ref<ForwardDirection>('left')
+const keyboardMode = ref<KeyboardMode>('focus')
+const zoomMode = ref<ZoomMode>('both')
+const flipDuration = ref(900)
+const maxZoomLevel = ref(MAX_ZOOM)
+
+const peelOn = ref(true)
+const clickFlip = ref(true)
+const dragFlip = ref(true)
+const stackOn = ref(true)
+// before-flip 拦截演示：开启后禁止翻到封底纸张（末尾两页）
+const blockBackCover = ref(false)
+
+const isDisabled = computed(() => state.value?.disabled ?? false)
+
+// ---------- 浮层面板开关 ----------
+const settingsOpen = ref(true)
+const logOpen = ref(true)
+
+// ---------- 事件日志 ----------
+interface LogEntry {
+  id: number
+  time: string
+  name: string
+  detail: string
+}
+
+const logs = ref<LogEntry[]>([])
+let logId = 0
+
+function log(name: string, detail = '') {
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  logs.value.unshift({ id: ++logId, time, name, detail })
+  if (logs.value.length > 60) logs.value.pop()
+}
+
+// ---------- 事件处理：演示全部 15 个事件 ----------
+function onBeforeFlip(context: BeforeFlipContext) {
+  if (blockBackCover.value && context.to >= (turnRef.value?.numPages ?? 0) - 1) {
+    context.preventDefault()
+    log('before-flip', `已拦截 ${context.from} → ${context.to}（封底保护区）`)
+    return
+  }
+  log('before-flip', `${context.from} → ${context.to}${context.direction ? `（${dirLabel(context.direction)}）` : '（跳转）'}`)
+}
+
+function dirLabel(d: FlipDirection) {
+  return d === 'left' ? '向左' : '向右'
+}
+
+function onFlipStart(d: FlipDirection) {
+  log('flip-start', dirLabel(d))
+}
+
+function onFlipEnd(d: FlipDirection) {
+  log('flip-end', dirLabel(d))
+}
+
+function onChange(page: number) {
+  log('change', `第 ${page} 页`)
+}
+
+function onFirst() {
+  log('first', '已到第一页')
+}
+
+function onLast() {
+  log('last', '已到最后一页')
+}
+
+function onPressed(point: ViewportPoint) {
+  log('pressed', `(${Math.round(point.x)}, ${Math.round(point.y)})`)
+}
+
+function onReleased(point: ViewportPoint) {
+  log('released', `(${Math.round(point.x)}, ${Math.round(point.y)})`)
+}
+
+function onZoomChange(level: number) {
+  log('zoom-change', `${level}×`)
+}
+
+function onReady() {
+  log('ready', '首次纹理就绪')
+}
+
+function onRasterizeError(page: number, error: unknown) {
+  log('rasterize-error', `第 ${page} 页：${error instanceof Error ? error.message : String(error)}`)
+}
+
+function onStackHover(page: number | null) {
+  log('stack-hover', page === null ? '离开纸叠' : `第 ${page} 页`)
+}
+
+function onStackTap(page: number) {
+  log('stack-tap', `跳向第 ${page} 页`)
+}
+
 // 目录热区：与页面内 .toc-box 的绝对定位百分比一一对应，
 // 点击命中后跳转对应页（region.data 为目标页码）。
-// 页码对应新映射：封面纸(0,1)+内容自页 3 起，跨页大图起始页 6、目录页 10
+// 页码对应新映射：封面纸(0,1)+内容自页 3 起，空白补位页 5、跨页大图 6-7、目录页 10
 const tocRegions: PageRegion[] = [
   { x: 0.08, y: 0.66, w: 0.24, h: 0.14, data: 1 },
   { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 6 },
@@ -67,8 +184,34 @@ const tocRegions: PageRegion[] = [
 function onRegionTap(_page: number, region: PageRegion) {
   const target = Number(region.data)
   if (Number.isInteger(target) && target >= 1) {
+    log('region-tap', `热区跳转 → 第 ${target} 页`)
     turnRef.value?.goToPage(target)
   }
+}
+
+// ---------- 工具栏：实例方法演示 ----------
+function goFirst() {
+  turnRef.value?.goToPage(1)
+}
+
+function goLast() {
+  const n = turnRef.value?.numPages ?? 0
+  if (n >= 1) turnRef.value?.goToPage(n)
+}
+
+async function onRefresh() {
+  log('refresh', '开始重绘全部页面纹理')
+  await turnRef.value?.refresh()
+  log('refresh', '重绘完成')
+}
+
+function toggleDisabled() {
+  turnRef.value?.disable(!isDisabled.value)
+  log('disable', isDisabled.value ? '已启用' : '已禁用')
+}
+
+function onZoomInput(event: Event) {
+  turnRef.value?.setZoom(Number((event.target as HTMLInputElement).value))
 }
 </script>
 
@@ -78,9 +221,32 @@ function onRegionTap(_page: number, region: PageRegion) {
       ref="turnRef"
       v-model="currentPage"
       :page-aspect="0.75"
-      :peel="true"
+      preset="soft"
+      cover-preset="hard"
+      :flip-duration="flipDuration"
+      :displayed-pages="displayModeValue"
+      :forward-direction="direction"
+      :keyboard="keyboardMode"
+      :zoom-mode="zoomMode"
+      :max-zoom="maxZoomLevel"
+      :click-to-flip="clickFlip"
+      :drag-to-flip="dragFlip"
+      :peel="peelOn"
+      :stack="stackOn"
+      @before-flip="onBeforeFlip"
+      @flip-start="onFlipStart"
+      @flip-end="onFlipEnd"
+      @change="onChange"
+      @first="onFirst"
+      @last="onLast"
+      @pressed="onPressed"
+      @released="onReleased"
+      @zoom-change="onZoomChange"
+      @ready="onReady"
+      @rasterize-error="onRasterizeError"
+      @stack-hover="onStackHover"
+      @stack-tap="onStackTap"
       @region-tap="onRegionTap"
-      preset="hard"
     >
       <turn-item cover>
         <div class="demo-page cover">
@@ -105,7 +271,8 @@ function onRegionTap(_page: number, region: PageRegion) {
             HTML 内容，在运行时被光栅化为纹理，贴到可形变的网格上。
           </p>
           <p class="page-paragraph">
-            点击右下角的“下一页”，或使用页面底部的深度链接跳转，观察纸张卷曲、缠绕并落下的完整过程。
+            点击底部工具栏的「下一页」，或点击书页后使用 ←/→ 方向键翻页；也可以直接按住页角拖拽。
+            悬停页角可预览折角，滚轮与双击可缩放视口（手势可在右上角参数面板切换）。
           </p>
           <p class="page-note">— vue-turn 团队</p>
         </div>
@@ -119,6 +286,7 @@ function onRegionTap(_page: number, region: PageRegion) {
             <li>html-to-image 将其转换为 Canvas</li>
             <li>CanvasTexture 承载 sRGB 颜色空间与各向异性过滤</li>
             <li>细分平面网格逐帧做卷曲形变</li>
+            <li>懒光栅化：prefetchWindow 预取窗口按需生成纹理</li>
           </ul>
           <p class="page-paragraph">
             渲染循环由 requestAnimationFrame 驱动，翻页结束后网格与材质会被立即释放。
@@ -175,7 +343,8 @@ export function curlPoint(s, θ, κ) {
           </p>
           <p class="page-paragraph">
             页面内容光栅化为纹理后 DOM 不再可交互：下方目录使用“页面热区”实现——
-            点击命中区域触发 region-tap 事件完成跳转。试试拖拽页面边缘翻页、悬停页角查看折角提示。
+            点击命中区域触发 region-tap 事件完成跳转。试试悬停左右两侧的纸叠跳页、
+            悬停页角查看折角预览（右上角可切换显示模式与阅读方向）。
           </p>
           <div class="toc-box">第 1 页 · 封面</div>
           <div class="toc-box toc-box-mid">第 6 页 · 跨页大图</div>
@@ -198,6 +367,7 @@ export function curlPoint(s, θ, κ) {
             <li>两种镜像几何（A / B）统一处理左右与前进后退</li>
             <li>FlipSpec 纯函数描述每一次翻页的全部索引</li>
             <li>单页模式下铰链移到页缘，页面飞出画面</li>
+            <li>跨页未对齐左页时自动补空白页（第 5 页即补位页）</li>
             <li>所有数学均有单元测试覆盖</li>
           </ul>
         </div>
@@ -215,28 +385,166 @@ export function curlPoint(s, θ, κ) {
           </div>
         </template>
       </turn-item>
+
+      <template #fallback>
+        <div class="webgl-fallback">
+          <p>当前环境不支持 WebGL，无法展示 3D 翻页效果。</p>
+          <p class="webgl-fallback-note">这是 #fallback 插槽的降级内容。</p>
+        </div>
+      </template>
     </VueTurn>
 
+    <!-- 参数面板：运行时可变的 props -->
+    <div class="panel settings-panel">
+      <div class="panel-header">
+        <span class="panel-title">参数面板</span>
+        <button class="mini-btn" @click="settingsOpen = !settingsOpen">
+          {{ settingsOpen ? '收起' : '展开' }}
+        </button>
+      </div>
+      <div v-show="settingsOpen" class="panel-body">
+        <label class="panel-row">
+          <span class="panel-label">显示模式</span>
+          <select v-model="displayMode" class="panel-control">
+            <option value="auto">auto（按容器宽高）</option>
+            <option value="1">1（强制单页）</option>
+            <option value="2">2（强制双页）</option>
+          </select>
+        </label>
+        <label class="panel-row">
+          <span class="panel-label">阅读方向</span>
+          <select v-model="direction" class="panel-control">
+            <option value="left">left（左翻书）</option>
+            <option value="right">right（右翻书）</option>
+          </select>
+        </label>
+        <label class="panel-row">
+          <span class="panel-label">键盘翻页</span>
+          <select v-model="keyboardMode" class="panel-control">
+            <option value="focus">focus（聚焦后响应）</option>
+            <option value="global">global（全局兜底）</option>
+            <option value="off">off（关闭）</option>
+          </select>
+        </label>
+        <label class="panel-row">
+          <span class="panel-label">缩放手势</span>
+          <select v-model="zoomMode" class="panel-control">
+            <option value="both">both（滚轮 + 双击）</option>
+            <option value="wheel">wheel（滚轮）</option>
+            <option value="dblclick">dblclick（双击）</option>
+            <option value="off">off（仅实例方法）</option>
+          </select>
+        </label>
+        <label class="panel-row">
+          <span class="panel-label">翻页时长</span>
+          <input v-model.number="flipDuration" type="range" min="300" max="2000" step="100" class="panel-control" />
+          <span class="panel-value">{{ flipDuration }}ms</span>
+        </label>
+        <label class="panel-row">
+          <span class="panel-label">最大缩放</span>
+          <input v-model.number="maxZoomLevel" type="range" min="2" max="6" step="1" class="panel-control" />
+          <span class="panel-value">{{ maxZoomLevel }}×</span>
+        </label>
+        <label class="panel-row panel-check">
+          <input v-model="peelOn" type="checkbox" />
+          <span>悬停预览（peel）</span>
+        </label>
+        <label class="panel-row panel-check">
+          <input v-model="clickFlip" type="checkbox" />
+          <span>点击翻页（clickToFlip）</span>
+        </label>
+        <label class="panel-row panel-check">
+          <input v-model="dragFlip" type="checkbox" />
+          <span>拖拽翻页（dragToFlip）</span>
+        </label>
+        <label class="panel-row panel-check">
+          <input v-model="stackOn" type="checkbox" />
+          <span>纸叠（stack）</span>
+        </label>
+        <label class="panel-row panel-check">
+          <input v-model="blockBackCover" type="checkbox" />
+          <span>before-flip 拦截封底演示</span>
+        </label>
+        <p class="panel-hint">
+          preset / look / pageAspect 等观感参数挂载时冻结，不提供运行时切换；
+          pageWidth / pixelRatio / fitMargin 等管线参数见 README。
+        </p>
+      </div>
+    </div>
+
+    <!-- 事件日志：演示全部 15 个事件 -->
+    <div class="panel log-panel">
+      <div class="panel-header">
+        <span class="panel-title">事件日志</span>
+        <div class="panel-actions">
+          <button class="mini-btn" @click="logs.length = 0">清空</button>
+          <button class="mini-btn" @click="logOpen = !logOpen">
+            {{ logOpen ? '收起' : '展开' }}
+          </button>
+        </div>
+      </div>
+      <ul v-show="logOpen" class="log-list">
+        <li v-if="!logs.length" class="log-empty">等待事件触发…</li>
+        <li v-for="entry in logs" :key="entry.id" class="log-item">
+          <span class="log-time">{{ entry.time }}</span>
+          <span class="log-name">{{ entry.name }}</span>
+          <span class="log-detail">{{ entry.detail }}</span>
+        </li>
+      </ul>
+    </div>
+
     <div class="toolbar">
-      <button class="nav-btn" :disabled="!state?.canPrev" @click="turnRef?.prev()">上一页</button>
-      <span class="indicator">
-        第 {{ state?.page ?? currentPage }} / {{ state?.numPages ?? '…' }} 页
-      </span>
-      <button class="nav-btn" :disabled="!state?.canNext" @click="turnRef?.next()">下一页</button>
-      <button
-        class="nav-btn"
-        :disabled="state?.isFlipping || (state?.zoom ?? 1) >= MAX_ZOOM"
-        @click="turnRef?.zoomIn()"
-      >
-        放大
-      </button>
-      <button
-        class="nav-btn"
-        :disabled="state?.isFlipping || (state?.zoom ?? 1) <= 1"
-        @click="turnRef?.zoomOut()"
-      >
-        缩小
-      </button>
+      <div class="tool-group">
+        <button class="nav-btn" :disabled="isDisabled || (state?.page ?? 1) <= 1" @click="goFirst">首页</button>
+        <button class="nav-btn" :disabled="!state?.canPrev" @click="turnRef?.prev()">上一页</button>
+        <span class="indicator">
+          第 {{ state?.page ?? currentPage }} / {{ state?.numPages ?? '…' }} 页
+        </span>
+        <button class="nav-btn" :disabled="!state?.canNext" @click="turnRef?.next()">下一页</button>
+        <button
+          class="nav-btn"
+          :disabled="isDisabled || !state?.numPages || (state?.page ?? 1) >= state.numPages"
+          @click="goLast"
+        >
+          末页
+        </button>
+      </div>
+
+      <span class="tool-divider"></span>
+
+      <div class="tool-group">
+        <button class="nav-btn" :disabled="isDisabled || !state?.canPrev" @click="turnRef?.flipLeft()">左翻</button>
+        <button class="nav-btn" :disabled="isDisabled || !state?.canNext" @click="turnRef?.flipRight()">右翻</button>
+      </div>
+
+      <span class="tool-divider"></span>
+
+      <div class="tool-group">
+        <button class="nav-btn" :disabled="isDisabled || (state?.zoom ?? 1) <= 1" @click="turnRef?.zoomOut()">缩小</button>
+        <input
+          class="zoom-slider"
+          type="range"
+          min="1"
+          :max="maxZoomLevel"
+          step="0.5"
+          :value="state?.zoom ?? 1"
+          :disabled="isDisabled"
+          @input="onZoomInput"
+        />
+        <span class="indicator zoom-indicator">{{ (state?.zoom ?? 1).toFixed(1) }}×</span>
+        <button class="nav-btn" :disabled="isDisabled || (state?.zoom ?? 1) >= (maxZoomLevel)" @click="turnRef?.zoomIn()">
+          放大
+        </button>
+        <button class="nav-btn" :disabled="isDisabled" @click="turnRef?.toggleZoom()">切换</button>
+      </div>
+
+      <span class="tool-divider"></span>
+
+      <div class="tool-group">
+        <button class="nav-btn" :disabled="!state?.isFlipping" @click="turnRef?.stop()">停止</button>
+        <button class="nav-btn" @click="onRefresh">重绘</button>
+        <button class="nav-btn" @click="toggleDisabled">{{ isDisabled ? '启用' : '禁用' }}</button>
+      </div>
     </div>
   </div>
 </template>
@@ -248,6 +556,7 @@ export function curlPoint(s, θ, κ) {
   height: 100%;
 }
 
+/* ---------- 底部工具栏 ---------- */
 .toolbar {
   position: absolute;
   left: 50%;
@@ -255,7 +564,10 @@ export function curlPoint(s, θ, κ) {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  max-width: calc(100% - 32px);
   padding: 10px 18px;
   border-radius: 999px;
   background: rgba(20, 24, 33, 0.72);
@@ -264,13 +576,26 @@ export function curlPoint(s, θ, κ) {
   z-index: 10;
 }
 
+.tool-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(232, 236, 244, 0.22);
+}
+
 .nav-btn {
-  padding: 6px 16px;
+  padding: 6px 14px;
   border: 1px solid rgba(232, 236, 244, 0.28);
   border-radius: 999px;
   background: transparent;
   color: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.2s;
 }
@@ -290,6 +615,168 @@ export function curlPoint(s, θ, κ) {
   text-align: center;
 }
 
+.zoom-indicator {
+  min-width: 44px;
+}
+
+.zoom-slider {
+  width: 110px;
+  accent-color: #7cc4ff;
+}
+
+/* ---------- 浮层面板（参数 / 事件日志） ---------- */
+.panel {
+  position: absolute;
+  width: 264px;
+  border-radius: 14px;
+  background: rgba(20, 24, 33, 0.78);
+  backdrop-filter: blur(8px);
+  color: #e8ecf4;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.settings-panel {
+  top: 16px;
+  right: 16px;
+}
+
+.log-panel {
+  top: 16px;
+  left: 16px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mini-btn {
+  padding: 3px 10px;
+  border: 1px solid rgba(232, 236, 244, 0.28);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.mini-btn:hover {
+  background: rgba(232, 236, 244, 0.14);
+}
+
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 14px 12px;
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.panel-label {
+  flex: 0 0 60px;
+  opacity: 0.75;
+}
+
+.panel-control {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid rgba(232, 236, 244, 0.24);
+  border-radius: 6px;
+  background: rgba(232, 236, 244, 0.08);
+  color: inherit;
+  font-size: 12px;
+}
+
+.panel-control option {
+  color: #1d2738;
+}
+
+.panel-value {
+  flex: 0 0 52px;
+  text-align: right;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-check {
+  gap: 6px;
+  cursor: pointer;
+}
+
+.panel-check input {
+  accent-color: #7cc4ff;
+}
+
+.panel-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  opacity: 0.5;
+}
+
+.log-list {
+  max-height: 34vh;
+  margin: 0;
+  padding: 2px 14px 12px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.log-item {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  border-bottom: 1px solid rgba(232, 236, 244, 0.06);
+}
+
+.log-time {
+  flex: 0 0 auto;
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.log-name {
+  flex: 0 0 auto;
+  color: #7cc4ff;
+}
+
+.log-detail {
+  opacity: 0.8;
+  word-break: break-all;
+}
+
+.log-empty {
+  padding: 6px 0;
+  font-size: 12px;
+  opacity: 0.45;
+}
+
+/* ---------- 书页内容 ---------- */
 .demo-page {
   width: 100%;
   height: 100%;
@@ -297,15 +784,20 @@ export function curlPoint(s, θ, κ) {
   padding: 72px 64px;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(150deg, #fdfcf9 0%, #f3efe6 100%);
+  /* 书脊方向的水平渐变：外缘浅、书脊侧深，且书脊边颜色沿整条边恒定。
+     深端取组件空白补位页的纯色（textureFactory BLANK_PAGE_COLOR #f5f2e9）——
+     补位空白页没有 DOM 内容、以恒定纯色渲染，只有书脊边颜色恒定的渐变
+     才能与它严丝合缝（此前的 150deg 对角渐变沿书脊边由浅变深，底部色差
+     最明显）。左页外缘在左，故 90deg 浅 → 深 */
+  background: linear-gradient(90deg, #fdfcf9 0%, #f5f2e9 100%);
   color: #2b2a26;
   font-family: 'Georgia', 'Noto Serif SC', serif;
 }
 
-/* 书脊右页（偶数页索引）：渐变镜像为 210deg——左右两页都在书脊侧偏深、
-   外缘偏浅，摊开时避免左页渐变最深端紧贴右页最浅端的接缝色差 */
+/* 书脊右页：渐变镜像为 270deg——左右两页都在书脊侧偏深（#f5f2e9）、
+   外缘偏浅，摊开时书脊两侧颜色衔接一致 */
 .demo-page.right {
-  background: linear-gradient(210deg, #fdfcf9 0%, #f3efe6 100%);
+  background: linear-gradient(270deg, #fdfcf9 0%, #f5f2e9 100%);
 }
 
 .cover {
@@ -523,5 +1015,25 @@ export function curlPoint(s, θ, κ) {
 
 .toc-box-end {
   left: 68%;
+}
+
+/* #fallback 插槽：WebGL 不可用时的降级内容 */
+.webgl-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #f3efe6;
+  color: #2b2a26;
+  font-size: 24px;
+}
+
+.webgl-fallback-note {
+  font-size: 16px;
+  opacity: 0.55;
+  margin: 0;
 }
 </style>

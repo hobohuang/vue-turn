@@ -292,6 +292,8 @@ const { isCoverSheet, foldOfSpec, foldOfPage } = useFoldProfiles({
 const {
   textures,
   getSpreadFullTexture,
+  sheetTextures,
+  staticTextures,
   syncPageCount,
   rasterizeWindow,
   releaseOutsideWindow,
@@ -525,6 +527,8 @@ const {
   renderer,
   query: {
     textures,
+    sheetTextures,
+    staticTextures,
     pageCount,
     containerSize,
     webglSupported,
@@ -570,8 +574,8 @@ function flip(trigger: FlipDirection) {
   const prevZoom = getZoom()
   state.startFlip()
   emit('flip-start', trigger)
-  // 翻页前置布局：相机由翻页动画接管
-  setStaticPages(spec.staticPages, (index) => textures.get(index) ?? null, false)
+  // 翻页前置布局：相机由翻页动画接管（静态跨页半页按槽位解析半图）
+  setStaticPages(spec.staticPages, staticTextures(spec), false)
   applyStacksFlip(spec)
   const onDone = () => {
     state.commitFlip(spec.delta)
@@ -588,12 +592,13 @@ function flip(trigger: FlipDirection) {
   // fold 开启时走折页动画（锚点外缘中部、竖直折线扫过整页），场景不可用
   // 或该纸张所属档位 fold 关闭（如 hard 封面）回退卷曲动画
   const fold = foldOfSpec(spec)
+  const { front: frontTexture, back: backTexture } = sheetTextures(spec)
   if (
     !fold.enabled ||
     !startFoldFlip(
       spec,
-      textures.get(spec.frontIndex) ?? null,
-      textures.get(spec.backIndex) ?? null,
+      frontTexture,
+      backTexture,
       safeFlipDuration.value,
       onDone,
       sheetOptions(spec),
@@ -602,8 +607,8 @@ function flip(trigger: FlipDirection) {
   ) {
     startFlip(
       spec,
-      textures.get(spec.frontIndex) ?? null,
-      textures.get(spec.backIndex) ?? null,
+      frontTexture,
+      backTexture,
       safeFlipDuration.value,
       onDone,
       sheetOptions(spec),

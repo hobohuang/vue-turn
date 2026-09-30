@@ -4,7 +4,7 @@ import type * as THREE from 'three'
 
 import type { PageSource } from '@/lib/pageMapping'
 import { elementToTexture, solidColorTexture, waitForResources } from '@/lib/textureFactory'
-import type { StaticPlacement } from '@/types/turn'
+import type { FlipSpec, StaticPlacement } from '@/types/turn'
 
 export type { PageSource }
 
@@ -38,6 +38,10 @@ export function usePageTextures(options: PageTexturesOptions) {
   const textures = new Map<number, THREE.Texture>()
   // 跨页项整页纹理：key 为 item 索引（翻页中左右两页各用半图克隆）
   const spreadFullTextures = new Map<number, THREE.Texture>()
+  // 跨页项左右半图克隆：key 为 item 索引。两侧常备（共享基准纹理的图像数据），
+  // 供拆分态按「屏幕侧」解析半图用——RTL 的镜像页码配对会让某页在屏幕上
+  // 呈现另一侧半图（见 textureAtSide）
+  const spreadHalves = new Map<number, { left: THREE.Texture; right: THREE.Texture }>()
   // 跨页项整页纹理生成去重：仅同一光栅化批次（seq 相同）内并发请求共享
   // 同一 Promise（左右两页同时光栅化）；跨批次不复用——DOM 内容可能已
   // 变化，必须重新光栅化，否则 refresh/DOM 变化刷新会命中旧的 resolved
@@ -87,6 +91,9 @@ export function usePageTextures(options: PageTexturesOptions) {
       if (!inWindow) {
         spreadFullTextures.get(itemIndex)?.dispose()
         spreadFullTextures.delete(itemIndex)
+        spreadHalves.get(itemIndex)?.left.dispose()
+        spreadHalves.get(itemIndex)?.right.dispose()
+        spreadHalves.delete(itemIndex)
         spreadBasePromises.delete(itemIndex)
       }
     }
@@ -106,6 +113,9 @@ export function usePageTextures(options: PageTexturesOptions) {
         if (!options.pageSources.value.some((source) => source.itemIndex === itemIndex)) {
           spreadFullTextures.get(itemIndex)?.dispose()
           spreadFullTextures.delete(itemIndex)
+          spreadHalves.get(itemIndex)?.left.dispose()
+          spreadHalves.get(itemIndex)?.right.dispose()
+          spreadHalves.delete(itemIndex)
           spreadBasePromises.delete(itemIndex)
         }
       }
@@ -179,11 +189,21 @@ export function usePageTextures(options: PageTexturesOptions) {
         }
         return
       }
-      const half = base.clone()
-      half.repeat.set(0.5, 1)
-      half.offset.set(source.region === 'right' ? 0.5 : 0, 0)
+      // 两侧半图克隆重建（共享基准纹理图像数据，克隆开销可忽略）；
+      // 旧克隆先释放，避免 refresh 重光栅化后残留旧内容的引用
+      const oldHalves = spreadHalves.get(itemIndex)
+      if (oldHalves) {
+        oldHalves.left.dispose()
+        oldHalves.right.dispose()
+      }
+      const leftHalf = base.clone()
+      leftHalf.repeat.set(0.5, 1)
+      const rightHalf = base.clone()
+      rightHalf.repeat.set(0.5, 1)
+      rightHalf.offset.set(0.5, 0)
+      spreadHalves.set(itemIndex, { left: leftHalf, right: rightHalf })
       textures.get(index)?.dispose()
-      textures.set(index, half)
+      textures.set(index, source.region === 'right' ? rightHalf : leftHalf)
       if (spreadFullTextures.get(itemIndex) !== base) {
         spreadFullTextures.get(itemIndex)?.dispose()
         spreadFullTextures.set(itemIndex, base)
@@ -197,7 +217,7 @@ export function usePageTextures(options: PageTexturesOptions) {
       if (merged) {
         options.applyStaticTexture(merged.index, base)
       } else {
-        options.applyStaticTexture(index, half)
+        options.applyStaticTexture(index, source.region === 'right' ? rightHalf : leftHalf)
       }
     } catch (error) {
       if (disposed || seq !== rasterSeq) return
@@ -375,6 +395,57 @@ export function usePageTextures(options: PageTexturesOptions) {
     })
   })
 
+  // 按屏幕侧解析页面纹理：跨页半页取「屏幕侧」对应的半图克隆（图像左半
+  // 恒在屏幕左、右半恒在右，与阅读方向无关）。RTL 的镜像页码配对
+  // （flipSpec：左槽 = 起始页 +1）会让按页码取半图的拆分态左右互换——
+  // 静止合并整页是方向无关的（左半恒在左），拆分态统一按屏幕侧解析即可
+  // 在翻起/落下的瞬间与合并态无缝衔接。side='center'（合并整页、单页
+  // 模式）或非跨页页取页面自身纹理
+  function textureAtSide(
+    index: number,
+    side: 'left' | 'right' | 'center',
+  ): THREE.Texture | null {
+    if (side !== 'center') {
+      const source = options.pageSources.value[index]
+      if (source && !source.blank && source.region !== 'full') {
+        return spreadHalves.get(source.itemIndex)?.[side] ?? textures.get(index) ?? null
+      }
+    }
+    return textures.get(index) ?? null
+  }
+
+  // 翻页纸张正/背面纹理：双页模式下正面静止于翻起前的屏幕侧、背面落向
+  // 对侧（几何 A 的正面起于右侧、B 起于左侧，方向与进退已编码在 geometry
+  // 中），半图按屏幕侧解析；单页模式无左右配对，两面均取页面自身纹理
+  function sheetTextures(spec: FlipSpec): {
+    front: THREE.Texture | null
+    back: THREE.Texture | null
+  } {
+    if (options.displayedPages.value === 1) {
+      return {
+        front: textures.get(spec.frontIndex) ?? null,
+        back: textures.get(spec.backIndex) ?? null,
+      }
+    }
+    const frontSide = spec.geometry === 'A' ? 'right' : 'left'
+    return {
+      front: textureAtSide(spec.frontIndex, frontSide),
+      back: textureAtSide(spec.backIndex, frontSide === 'right' ? 'left' : 'right'),
+    }
+  }
+
+  // 翻页前置静态布局的纹理回调：静态跨页半页按所在槽位（屏幕侧）解析，
+  // 其余页取自身纹理；单页模式布局无左右半页，直接取自身纹理
+  function staticTextures(spec: FlipSpec): (index: number) => THREE.Texture | null {
+    if (options.displayedPages.value === 1) {
+      return (index) => textures.get(index) ?? null
+    }
+    return (index) => {
+      const slot = spec.staticPages.find((p) => p.index === index)?.slot ?? 'center'
+      return textureAtSide(index, slot)
+    }
+  }
+
   onBeforeUnmount(() => {
     disposed = true
     rasterSeq++
@@ -388,6 +459,11 @@ export function usePageTextures(options: PageTexturesOptions) {
       texture.dispose()
     }
     spreadFullTextures.clear()
+    for (const halves of spreadHalves.values()) {
+      halves.left.dispose()
+      halves.right.dispose()
+    }
+    spreadHalves.clear()
     spreadBasePromises.clear()
   })
 
@@ -396,6 +472,12 @@ export function usePageTextures(options: PageTexturesOptions) {
     textures,
     /** 跨页整图基准纹理（key 为 itemIndex）：合并跨页静态网格取用 */
     getSpreadFullTexture: (itemIndex: number) => spreadFullTextures.get(itemIndex) ?? null,
+    /** 按屏幕侧解析页面纹理（跨页半图用，见函数注释） */
+    textureAtSide,
+    /** 翻页纸张正/背面纹理（跨页半图按屏幕侧解析） */
+    sheetTextures,
+    /** 翻页前置静态布局的纹理回调（静态跨页半页按槽位解析） */
+    staticTextures,
     syncPageCount,
     rasterizeWindow,
     rasterizePages,
