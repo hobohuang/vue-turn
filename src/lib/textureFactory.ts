@@ -75,7 +75,11 @@ export function solidColorTexture(): THREE.Texture {
   const context = canvas.getContext('2d')!
   context.fillStyle = BLANK_PAGE_COLOR
   context.fillRect(0, 0, 1, 1)
-  return new THREE.CanvasTexture(canvas)
+  const texture = new THREE.CanvasTexture(canvas)
+  // 漏标 sRGB 会被 GPU 当线性色渲染（跳过解码），同一色值观感偏亮——
+  // 与相邻内容页的书脊边形成色差断开
+  texture.colorSpace = THREE.SRGBColorSpace
+  return texture
 }
 
 // 光栅化画布恒为透明（backgroundColor: null）：页面背景由内容自绘，
