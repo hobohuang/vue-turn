@@ -48,7 +48,7 @@ const page = ref(1)
 | 4 | `look` | `LookOptions` | - | 内页观感与折页参数，逐项覆盖 `preset` 基线：`nPolygons`（网格分段，回退 64）、`perspective`（透视参考距离，回退 2400，**全局相机参数**）、`ambient`（环境光，回退 1）、`gloss`（方向光，回退 0.15）、`curl`（卷曲幅度，0 为刚体，回退 0.8）、`fold`（折页变形开关，soft 开 / hard 关）、`bend`（折缝圆角占页宽比例，回退 0.04）。挂载时冻结 |
 | 5 | `coverLook` | `LookOptions` | - | 封面/封底观感与折页参数，逐项覆盖 `coverPreset` 基线，未传项回退 `look`（`perspective` 为全局参数在此无效）。挂载时冻结 |
 | 6 | `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），非法值（NaN/零/负数）回退 0.75；常见图书尺寸参考下文「常见图书宽高比」 |
-| 7 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒） |
+| 7 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒），下限 500：更小的取值按 500 生效（回弹/收尾等派生动画同步受此下限约束） |
 | 8 | `forwardDirection` | `'left' \| 'right'` | `'left'` | 阅读方向（决定往哪边翻算下一页）：`'left'` 左翻书（页码自左向右递增），`'right'` 右翻书（整体镜像）；运行时可改，详见下文「阅读方向」 |
 | 9 | `displayedPages` | `'auto' \| 1 \| 2` | `'auto'` | 一次摊开显示几页：`auto` 按容器宽高判定（宽 > 高取 2），`1`/`2` 为强制值；双页以跨页为单位翻页（页码 ±2），单页逐页翻（±1），详见下文「显示模式」 |
 | 10 | `pageWidth` | `number` | `768` | 离屏光栅化宽度（像素） |

@@ -437,7 +437,7 @@ export function curlPoint(s, θ, κ) {
         </label>
         <label class="panel-row">
           <span class="panel-label">翻页时长</span>
-          <input v-model.number="flipDuration" type="range" min="300" max="2000" step="100" class="panel-control" />
+          <input v-model.number="flipDuration" type="range" min="500" max="2000" step="100" class="panel-control" />
           <span class="panel-value">{{ flipDuration }}ms</span>
         </label>
         <label class="panel-row">

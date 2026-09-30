@@ -1231,6 +1231,28 @@ describe('VueTurn', () => {
     ])
   })
 
+  it('clamps flipDuration below the 500ms floor', async () => {
+    // 回归：过短的翻页动画在低帧率环境下只剩寥寥数帧，落页换帧易被感知
+    // 为闪烁——时长统一钳制到 500ms 下限（回弹/收尾等派生动画同源生效）
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    const wrapper = await mountItems(['full', 'full', 'full', 'full'], { flipDuration: 200 })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(mocks.startFlip.mock.calls[mocks.startFlip.mock.calls.length - 1]?.[3]).toBe(500)
+  })
+
+  it('keeps flipDuration values above the floor unchanged', async () => {
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    const wrapper = await mountItems(['full', 'full', 'full', 'full'], { flipDuration: 1200 })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(mocks.startFlip.mock.calls[mocks.startFlip.mock.calls.length - 1]?.[3]).toBe(1200)
+  })
+
   it('resolves split spread halves by screen side in RTL flips', async () => {
     // 回归：RTL（右翻书）下跨页的页码配对是镜像的（左槽=起始页+1），
     // 翻页中按页码取半图会让拆分态与静止合并整页（方向无关、图像左半恒在
