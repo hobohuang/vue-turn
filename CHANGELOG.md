@@ -57,6 +57,13 @@
 
 ### 新增
 
+| 新增项 | 类型 / 位置 | 说明 |
+| --- | --- | --- |
+| `look` | prop，`LookOptions` | 内页观感与折页参数，逐项覆盖 `preset` 基线（挂载冻结） |
+| `coverLook` | prop，`LookOptions` | 封面/封底观感与折页参数，未传项逐项回退 `look`（挂载冻结） |
+| `state` | 实例属性，`TurnState`（只读响应式） | 状态快照：`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`，模板/computed 读取自动跟踪 |
+| `LookOptions` / `TurnState` / `KeyboardMode` | 导出类型（`types/turn.ts`，经包入口 `export *`） | 供使用方标注 prop 与实例类型 |
+
 - **自 0.1.0 以来的功能全集随本版首次发布**：折角/折页拖拽与悬停预览（turn.js 4 风格）、纸叠页层条带（悬停/点击跳页）、缩放视口（滚轮/双击/实例方法）、封面/封底专用纸张与 `coverPreset` 独立灯光、观感预设（`preset`/`look`/`coverLook`）、跨页合并渲染、页面热区（`regions` + `region-tap`）、懒光栅化窗口（`prefetchWindow`）、深度链接友好的 `goToPage` 与 `before-flip` 拦截、`stop`/`disable` 实例控制。
 - **实例响应式 `state`**：`TurnInstance` 新增 `state` 只读快照（`page` / `numPages` / `isFlipping` / `canNext` / `canPrev` / `disabled` / `zoom`），`readonly(reactive)` 暴露，模板/computed 中读取自动跟踪更新——外置工具栏不再需要事件回调手动强刷。`zoom` 经 `onZoomChange` 回调镜像，并补齐 `maxZoom` 收敛不发 `zoom-change` 的缺口。
 
