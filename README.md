@@ -2,6 +2,8 @@
 
 基于 Three.js 的 Vue 3 书本翻页组件：真实纸张卷曲形变、双页跨页布局、封面/封底开合动画、拖拽翻页、角点折角拖拽（turn.js 4 风格）、折角提示、缩放视口与页面热区。页面内容以普通 HTML 编写，运行时离屏光栅化为纹理贴到可形变网格上。
 
+**在线演示**：<https://hobohuang.github.io/vue-turn/>（部署方式见下方「部署演示页（GitHub Pages）」）
+
 ## 安装
 
 ```sh
@@ -484,3 +486,17 @@ cnpm run type-check   # 类型检查
 cnpm run lint         # Lint
 cnpm run build:lib    # 构建可分发组件包（dist/）
 ```
+
+## 部署演示页（GitHub Pages）
+
+仓库自带的演示页（`src/views/BookView.vue`）通过 GitHub Actions 自动托管在 GitHub Pages 上，地址为 `https://<用户名>.github.io/<仓库名>/`（本仓库即 [https://hobohuang.github.io/vue-turn/](https://hobohuang.github.io/vue-turn/)）。
+
+部署由 [.github/workflows/deploy-demo.yml](.github/workflows/deploy-demo.yml) 完成：push 到 `main`（或在 Actions 页手动触发 `workflow_dispatch`）时自动执行 `npm ci` → `npm run build` → 发布 `dist/`，首次运行会自动开启仓库的 Pages 功能，无需手动到 Settings 配置。若首访 404，到 Settings → Pages 确认 Source 为 "GitHub Actions"。
+
+两个与 Pages 部署相关的实现细节（改动配置前先了解）：
+
+- **base 子路径**：Pages 项目页部署在 `/<仓库名>/` 子路径下，工作流构建时通过环境变量 `DEMO_BASE`（值为仓库名）注入 base；本地构建不设置该变量，base 保持 `/`。若仓库改名，同步更新工作流里的 `DEMO_BASE` 值即可。
+- **SPA 路由回退**：演示页用 `createWebHistory` 路由（`/book/:page` 深度链接），而 GitHub Pages 不支持服务端 rewrite，因此工作流在构建后把 `index.html` 复制为 `404.html`——未匹配路径由 Pages 返回 404 页面（即 index.html），再由 vue-router 接管渲染。
+
+注意 `npm run build` 构建的是演示站点（含 `index.html`），`npm run build:lib` 构建的是可分发组件包，两者互不相干（见 `vite.config.ts` 中按 `--mode lib` 区分）。
+
