@@ -15,8 +15,9 @@ coverage
 *.local
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
+.zcode/
+.zcodeignore
 .idea
 *.suo
 *.ntvs*
