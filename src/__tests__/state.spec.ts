@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => {
   return {
     /** 最近一次翻页的收尾回调（stopFlip 的同步收尾模拟用） */
     lastDone: null as ((committed?: boolean) => void) | null,
-    stopFlip: vi.fn(() => {
+    stopFlip: vi.fn<() => void>(() => {
       // 场景语义：stopFlip 同步触发在途纸张的 onDone
       mocks.lastDone?.(false)
       mocks.lastDone = null

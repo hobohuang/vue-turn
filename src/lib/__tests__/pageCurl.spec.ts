@@ -64,5 +64,17 @@ describe('easing and animation curves', () => {
   })
 
   it('sweeps the flip angle from zero to pi', () => {
+    // 切向角自 θ 起随进度增长（θ + amp·q(2-q)），自由端极角随之向前扫，
+    // 且不超过 π——翻页中纸张始终扫向书页上方而非反向
+    const theta = Math.PI / 6
+    const amp = 0.8
+    const w = 1.5
+    const cols = curledColumns(theta, amp, w, 64)
+    const tangentEnd = theta + amp
+    expect(tangentEnd).toBeGreaterThan(theta)
+    expect(tangentEnd).toBeLessThan(Math.PI)
+    const endAngle = Math.atan2(cols.zs[64] ?? 0, cols.xs[64] ?? 0)
+    expect(endAngle).toBeGreaterThan(theta - 1e-9)
+    expect(endAngle).toBeLessThan(tangentEnd + 1e-9)
   })
 })

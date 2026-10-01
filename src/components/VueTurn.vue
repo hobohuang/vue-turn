@@ -528,7 +528,6 @@ const {
   },
   renderer,
   query: {
-    textures,
     sheetTextures,
     staticTextures,
     pageCount,

@@ -44,7 +44,6 @@ export interface PeelPreviewOptions {
     | 'stopFlip'
     | 'pickPage'
   >
-  textures: Map<number, THREE.Texture>
   /** 翻页纸张正/背面纹理：跨页半图按屏幕侧解析（RTL 镜像配对纠正，见 usePageTextures） */
   sheetTextures: (spec: FlipSpec) => { front: THREE.Texture | null; back: THREE.Texture | null }
   /** 翻页前置静态布局的纹理回调：静态跨页半页按槽位（屏幕侧）解析 */
@@ -85,7 +84,6 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     state,
     pageCount,
     renderer,
-    textures,
     sheetTextures,
     staticTextures,
     safePageAspect,
