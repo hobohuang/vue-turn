@@ -235,9 +235,23 @@ const slots = useSlots()
 // 纯领域逻辑见 composables/usePageSources.ts
 const { pageFaces } = usePageSources(slots)
 
-// 页源映射：封面/封底各占专用纸张（背面=#back 内容或空白衬页）、跨页
-// 奇数对齐补位、内页区段奇数补偶（纯函数实现见 lib/pageMapping.ts，含单测）
-const pageSources = computed(() => buildPageSources(pageFaces.value))
+// 页源映射：封面/封底各占专用纸张（背面=#back 内容）、跨页奇数对齐补位、
+// 内页区段奇数补偶；单页模式（一页只有一面）不自动补空白页/衬页，跨页项
+// 自动忽略并警告（纯函数实现见 lib/pageMapping.ts，含单测）。
+// 依赖 displayedPages：模式切换会改变页数与页码语义，切换时须同步页数并
+// 重映射当前页（见 applyDisplayedPages）
+const pageSources = computed(() =>
+  buildPageSources(pageFaces.value, { singlePage: state.displayedPages.value === 1 }),
+)
+
+// 页源数量随显示模式/内容变化（onUpdated 不保证触发——displayedPages 不在
+// 模板中渲染），这里统一同步页数：页数变化后由 useBookState 重钳当前页
+watch(
+  () => pageSources.value.length,
+  () => {
+    syncPageCount()
+  },
+)
 
 const offscreenEl = ref<HTMLElement | null>(null)
 // 组件根元素：document 键盘监听据此排除组件内部目标（已由 viewport 处理）
@@ -279,13 +293,19 @@ if (import.meta.env.DEV) {
 }
 
 // 折页档位（内页按 preset/look、封面/封底纸张按 coverPreset/coverLook 各取一档，
-// 挂载时读取一次）：解析与归属判定见 composables/useFoldProfiles.ts
-const { isCoverSheet, foldOfSpec, foldOfPage } = useFoldProfiles({
+// 挂载时读取一次）：解析与归属判定见 composables/useFoldProfiles.ts。
+// 单页模式不启用折页/折角：页缝固定在阅读方向一侧、后退为反向翻页，
+// 折页锚点与提交语义按双页书脊建模——单页统一走整页卷曲
+const { isCoverSheet, foldOfSpec: foldOfSpecProfile, foldOfPage: foldOfPageProfile } = useFoldProfiles({
   innerFold: resolveFold(props.preset, props.look),
   coverFold: resolveFold(props.coverPreset, coverLookOptions),
   pageSources: () => pageSources.value,
   pageAspect: safePageAspect,
 })
+const foldOfSpec: typeof foldOfSpecProfile = (spec) =>
+  state.displayedPages.value === 1 ? { enabled: false, bendWorld: 0 } : foldOfSpecProfile(spec)
+const foldOfPage: typeof foldOfPageProfile = (index) =>
+  state.displayedPages.value === 1 ? { enabled: false, bendWorld: 0 } : foldOfPageProfile(index)
 
 // ---------------------------------------------------------------------------
 // 纹理生命周期与光栅化调度（usePageTextures）
@@ -297,6 +317,7 @@ const {
   sheetTextures,
   staticTextures,
   syncPageCount,
+  remapModeTextures,
   rasterizeWindow,
   releaseOutsideWindow,
   refresh,
@@ -334,6 +355,10 @@ watch(
 function resolveDisplayedPages(): 1 | 2 {
   if (props.displayedPages === 1) return 1
   if (props.displayedPages === 2) return 2
+  // 容器尚未量取尺寸（挂载前为 0×0）时无从判定形状，先按默认双页处理，
+  // 量取后 watch 会重新解析——避免瞬时的单页误判（会提前消耗单页跨页
+  // 忽略的一次性警告，并对跨页书多做一次单页映射切换）
+  if (containerSize.width <= 0 && containerSize.height <= 0) return 2
   return containerSize.width > containerSize.height ? 2 : 1
 }
 
@@ -343,6 +368,22 @@ function resolveDisplayedPages(): 1 | 2 {
 // 应用时按最新容器尺寸重新解析，避免用到动画期间的过期快照
 let pendingDisplayedPagesResolve = false
 
+// 显示模式应用统一出口：单双页的页码语义不同（页源映射、翻页停靠均不一致，
+// 原地按内容映射存在对齐漂移等边界），切换后统一回到封面（页码经 v-model
+// 回写给宿主）。已光栅化纹理按内容源迁移到新页索引（不重做栅格化），
+// 缺失页补生成；静态布局由 currentPage/displayedPages 的 watch 统一重建
+function applyDisplayedPages(next: 1 | 2) {
+  if (state.displayedPages.value === next) return
+  const oldSources = pageSources.value
+  state.setDisplayedPages(next)
+  state.goToPage(0)
+  if (pageCount.value > 0) {
+    // 挂载时 pageCount 尚未同步（纹理为空、静态布局由挂载流程建立），跳过
+    remapModeTextures(oldSources, pageSources.value)
+    void rasterizeWindow(false).then(() => releaseOutsideWindow())
+  }
+}
+
 watch(
   () => [containerSize.width, containerSize.height, props.displayedPages] as const,
   () => {
@@ -350,7 +391,7 @@ watch(
       pendingDisplayedPagesResolve = true
       return
     }
-    state.setDisplayedPages(resolveDisplayedPages())
+    applyDisplayedPages(resolveDisplayedPages())
   },
   { immediate: true },
 )
@@ -382,7 +423,7 @@ watch(
     // 动画期间积压的显示模式变化先应用（重排当前页），再执行积压的跳转
     if (pendingDisplayedPagesResolve) {
       pendingDisplayedPagesResolve = false
-      state.setDisplayedPages(resolveDisplayedPages())
+      applyDisplayedPages(resolveDisplayedPages())
     }
     if (pendingTarget !== null) {
       const target = pendingTarget
@@ -653,7 +694,7 @@ function goToPage(page: number): boolean {
 // ---------------------------------------------------------------------------
 
 onMounted(async () => {
-  state.setDisplayedPages(resolveDisplayedPages())
+  applyDisplayedPages(resolveDisplayedPages())
   // 先同步页数到状态机，再设置初始页：否则初始页码会被 0 页钳制到封面
   // （刷新页面带 /book/:page 深度链接时表现为回到第 1 页）
   syncPageCount()
@@ -693,6 +734,9 @@ const instanceState = readonly(
     },
     get disabled() {
       return disabledRef.value
+    },
+    get displayedPages() {
+      return state.displayedPages.value
     },
     get zoom() {
       return zoomLevel.value

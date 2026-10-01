@@ -140,15 +140,21 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
     }
   }
 
-  const frontIndex = currentPage
-  const backIndex = advancing ? currentPage + 1 : currentPage - 1
+  // 单页模式：页缝固定在阅读方向一侧（LTR 左缘 / RTL 右缘），前进时当前页
+  // 绕缝翻出；后退为反向翻页（reverse）——目标页纸张从缝侧翻回放平、盖住
+  // 仍显示的当前页，两个方向的铰链与翻入/翻出方向一致，符合"一页一面、
+  // 页缝在一侧"的单页书观感
+  const ltrSeam = forwardDirection === 'left'
+  const frontIndex = advancing ? currentPage : currentPage - 1
+  const backIndex = advancing ? currentPage + 1 : currentPage
   return {
-    geometry,
-    hingeX: geometry === 'A' ? -width / 2 : width / 2,
+    geometry: ltrSeam ? 'A' : 'B',
+    hingeX: ltrSeam ? -width / 2 : width / 2,
     frontIndex,
     backIndex,
-    staticPages: placement(backIndex, 'center', numPages),
+    staticPages: placement(advancing ? backIndex : currentPage, 'center', numPages),
     delta: advancing ? 1 : -1,
+    reverse: !advancing,
   }
 }
 

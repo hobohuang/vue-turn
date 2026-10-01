@@ -1,7 +1,7 @@
 /**
  * 页源映射：把"面"序列（turn-item 展开后的正/背面）映射到页索引空间。
  *
- * 规则（与真实书籍一致）：
+ * 双页模式规则（与真实书籍一致）：
  * - 封面是一张专用纸张：正面（索引 0）= 标注为 coverFront 的面（未标注时
  *   兜底提升首个内容面），背面（索引 1）= 标注为 coverBack 的封面底
  *   （未定义则空白衬页）
@@ -14,6 +14,12 @@
  *   补在内页区段末尾不会破坏跨页的奇数起始对齐，且封底固定占据末索引，
  *   其合上动画（要求末索引为奇数）不受影响
  * - 空白衬页与封面/封底同纸，标记 cover（挂封面图层独立光照）
+ *
+ * 单页模式规则（singlePage，一页只有一面，无左右配对，奇偶约定全部取消）：
+ * - 不自动插入任何空白页/衬页：封面底、封底里不占页——无论是否声明 #back，
+ *   衬页面都依附于"一张纸的背面"，单页翻页背面恒为空白纸页，衬页面没有
+ *   任何显示机会（声明的内容在单页模式下不展示）
+ * - 跨页项不支持跨页显示：自动忽略（不占页），并打印控制台警告
  */
 
 /** 面的标注：由组件层按用户的 cover / backCover 声明与 #back 插槽生成 */
@@ -46,13 +52,27 @@ function blankSource(cover: boolean): PageSource {
   return { itemIndex: -1, region: 'full', blank: true, cover }
 }
 
+// 单页模式忽略跨页的警告只提示一次（与 usePageSources 的警告策略一致，
+// 避免响应式重算/多实例刷屏）
+let warnedSpreadSinglePage = false
+
+/** buildPageSources 的选项 */
+export interface BuildPageSourcesOptions {
+  /** 单页模式：不自动补空白页/衬页，跨页项自动忽略 */
+  singlePage?: boolean
+}
+
 /**
  * 把面序列映射为页源序列。纯函数：相同输入恒产生相同输出，
  * 空序列返回空数组（此时组件无书页可渲染）。
  * face 标注重复时首个生效、其余按内容处理；标注面缺失时按位置约定
  * 兜底（首面为封面、末面为封底）；仅有一个面时该面同时作封面与封底。
  */
-export function buildPageSources(items: ReadonlyArray<PageItemLike>): PageSource[] {
+export function buildPageSources(
+  items: ReadonlyArray<PageItemLike>,
+  options: BuildPageSourcesOptions = {},
+): PageSource[] {
+  const singlePage = options.singlePage ?? false
   const sources: PageSource[] = []
   if (items.length === 0) return sources
 
@@ -90,15 +110,28 @@ export function buildPageSources(items: ReadonlyArray<PageItemLike>): PageSource
   // 退化：仅剩封面面（单 item 或只有封面标注）→ 该面同时作封底
   if (backCoverFront < 0) backCoverFront = coverFront
 
-  // 封面纸张：正面=封面（spread 标记不生效，固定居中单页）
+  // 封面纸张：正面=封面（spread 标记不生效，固定居中单页）。
+  // 单页模式一页只有一面，翻页背面恒为空白纸页，封面底无显示机会，不占页
   sources.push({ itemIndex: coverFront, region: 'full', blank: false, cover: true })
-  sources.push(coverBack >= 0 ? { itemIndex: coverBack, region: 'full', blank: false, cover: true } : blankSource(true))
+  if (!singlePage) {
+    sources.push(coverBack >= 0 ? { itemIndex: coverBack, region: 'full', blank: false, cover: true } : blankSource(true))
+  }
 
-  // 内页内容：从索引 2（右页）开始；跨页需从奇数索引（左页）开始，
-  // 落在偶数索引时插入空白页补位
+  // 内页内容：双页模式从索引 2（右页）开始，跨页需从奇数索引（左页）开始，
+  // 落在偶数索引时插入空白页补位；单页模式无奇偶约定，跨页项自动忽略
   for (const itemIndex of content) {
     const item = items[itemIndex]!
     if (item.spread) {
+      if (singlePage) {
+        if (!warnedSpreadSinglePage) {
+          warnedSpreadSinglePage = true
+          console.warn(
+            '[vue-turn] 单页模式不支持跨页显示（spread），已自动忽略跨页内容；' +
+              '需要展示跨页请使用双页模式（displayedPages: 2）',
+          )
+        }
+        continue
+      }
       if (sources.length % 2 === 0) {
         sources.push(blankSource(false))
       }
@@ -108,13 +141,17 @@ export function buildPageSources(items: ReadonlyArray<PageItemLike>): PageSource
       sources.push({ itemIndex, region: 'full', blank: false, cover: false })
     }
   }
-  // 内页区段计数为奇数（末页索引为偶数）时补空白页保证偶数
-  if (sources.length % 2 === 1) {
+  // 内页区段计数为奇数（末页索引为偶数）时补空白页保证偶数；
+  // 单页模式一页只有一面，无奇偶约定，不补
+  if (!singlePage && sources.length % 2 === 1) {
     sources.push(blankSource(false))
   }
 
-  // 封底纸张：正面=封底里（未定义则空白衬页），背面=封底
-  sources.push(backCoverBack >= 0 ? { itemIndex: backCoverBack, region: 'full', blank: false, cover: true } : blankSource(true))
+  // 封底纸张：背面=封底；双页模式另有正面=封底里（#back 内容或空白衬页）。
+  // 单页模式封底里同封面底一样不占页
+  if (!singlePage) {
+    sources.push(backCoverBack >= 0 ? { itemIndex: backCoverBack, region: 'full', blank: false, cover: true } : blankSource(true))
+  }
   sources.push({ itemIndex: backCoverFront, region: 'full', blank: false, cover: true })
 
   return sources

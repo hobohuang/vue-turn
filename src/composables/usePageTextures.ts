@@ -416,15 +416,18 @@ export function usePageTextures(options: PageTexturesOptions) {
 
   // 翻页纸张正/背面纹理：双页模式下正面静止于翻起前的屏幕侧、背面落向
   // 对侧（几何 A 的正面起于右侧、B 起于左侧，方向与进退已编码在 geometry
-  // 中），半图按屏幕侧解析；单页模式无左右配对，两面均取页面自身纹理
+  // 中），半图按屏幕侧解析；单页模式一页只有一面内容，背面统一为空白
+  // 纸页（贴统一纸色纸纹，与自动补位的空白页观感一致）
+  let blankSheetBack: THREE.Texture | null = null
   function sheetTextures(spec: FlipSpec): {
     front: THREE.Texture | null
     back: THREE.Texture | null
   } {
     if (options.displayedPages.value === 1) {
+      if (!blankSheetBack) blankSheetBack = solidColorTexture()
       return {
         front: textures.get(spec.frontIndex) ?? null,
-        back: textures.get(spec.backIndex) ?? null,
+        back: blankSheetBack,
       }
     }
     const frontSide = spec.geometry === 'A' ? 'right' : 'left'
@@ -446,6 +449,43 @@ export function usePageTextures(options: PageTexturesOptions) {
     }
   }
 
+  // 显示模式切换后的纹理迁移：页索引语义随页源映射变化（单页无补位页/
+  // 衬页、跨页被忽略），按内容源（itemIndex）把整页面纹理迁移到新键位——
+  // 已光栅化的内容页不重做栅格化；迁移不掉的（空白页纸纹、旧键位残留）
+  // 直接释放，在途光栅化结果全部作废，缺失页由调用方 rasterizeWindow 补生成
+  function remapModeTextures(oldSources: PageSource[], newSources: PageSource[]) {
+    rasterSeq++
+    const oldFullByItem = new Map<number, number>()
+    for (const [index, source] of oldSources.entries()) {
+      if (!source.blank && source.itemIndex >= 0 && source.region === 'full') {
+        oldFullByItem.set(source.itemIndex, index)
+      }
+    }
+    const migrated = new Map<number, THREE.Texture>()
+    for (const [index, source] of newSources.entries()) {
+      if (source.blank || source.itemIndex < 0 || source.region !== 'full') continue
+      const oldIndex = oldFullByItem.get(source.itemIndex)
+      const texture = oldIndex === undefined ? undefined : textures.get(oldIndex)
+      if (texture) migrated.set(index, texture)
+    }
+    const kept = new Set(migrated.values())
+    for (const texture of textures.values()) {
+      if (!kept.has(texture)) texture.dispose()
+    }
+    textures.clear()
+    for (const [index, texture] of migrated) {
+      textures.set(index, texture)
+    }
+    // 跨页半图克隆按旧页索引入表，键位语义已变：作废克隆与在途去重条目，
+    // 整图基准纹理（itemIndex 为 key，与页索引无关）保留供合并跨页复用
+    for (const halves of spreadHalves.values()) {
+      halves.left.dispose()
+      halves.right.dispose()
+    }
+    spreadHalves.clear()
+    spreadBasePromises.clear()
+  }
+
   onBeforeUnmount(() => {
     disposed = true
     rasterSeq++
@@ -459,6 +499,8 @@ export function usePageTextures(options: PageTexturesOptions) {
       texture.dispose()
     }
     spreadFullTextures.clear()
+    blankSheetBack?.dispose()
+    blankSheetBack = null
     for (const halves of spreadHalves.values()) {
       halves.left.dispose()
       halves.right.dispose()
@@ -479,6 +521,8 @@ export function usePageTextures(options: PageTexturesOptions) {
     /** 翻页前置静态布局的纹理回调（静态跨页半页按槽位解析） */
     staticTextures,
     syncPageCount,
+    /** 显示模式切换后的纹理迁移（按内容源迁移键位，不重做栅格化） */
+    remapModeTextures,
     rasterizeWindow,
     rasterizePages,
     releaseOutsideWindow,

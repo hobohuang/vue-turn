@@ -84,8 +84,19 @@ const peelOn = ref(true)
 const clickFlip = ref(true)
 const dragFlip = ref(true)
 const stackOn = ref(true)
-// before-flip 拦截演示：开启后禁止翻到封底纸张（末尾两页）
+// before-flip 拦截演示：开启后禁止翻到封底纸张（末尾两页）。
+// 单页模式下自动开启并锁定（封底纸张在单页中逐页显示，自动保护不演示翻到封底）
 const blockBackCover = ref(false)
+
+// 单页模式（含 auto 解析结果）：自动开启封底拦截并锁定开关
+const singlePageMode = computed(() => state.value?.displayedPages === 1)
+watch(singlePageMode, (single) => {
+  if (!single) return
+  if (!blockBackCover.value) {
+    blockBackCover.value = true
+    log('before-flip', '单页模式：自动开启封底拦截')
+  }
+}, { immediate: true })
 
 const isDisabled = computed(() => state.value?.disabled ?? false)
 
@@ -462,8 +473,8 @@ export function curlPoint(s, θ, κ) {
           <span>纸叠（stack）</span>
         </label>
         <label class="panel-row panel-check">
-          <input v-model="blockBackCover" type="checkbox" />
-          <span>before-flip 拦截封底演示</span>
+          <input v-model="blockBackCover" type="checkbox" :disabled="singlePageMode" />
+          <span>before-flip 拦截封底演示{{ singlePageMode ? '（单页模式自动开启）' : '' }}</span>
         </label>
         <p class="panel-hint">
           preset / look / pageAspect 等观感参数挂载时冻结，不提供运行时切换；

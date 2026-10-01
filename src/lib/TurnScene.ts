@@ -131,6 +131,9 @@ interface SheetBase {
   nPolygons: number
   fromFitWidth: number
   toFitWidth: number
+  /** 反向翻页（spec.reverse）：进度语义不变（1=翻出缝侧），但时间驱动
+   *  反放（1→0）、拖拽进度按 1-p 换算，落定提交判定随之反转 */
+  reverse: boolean
   /** 悬停预览纸张：书体平移/静态页滑动/纸叠插值钉在起始态（slideP=0），只预览纸角形变；真实按下接管时清除 */
   preview?: boolean
 }
@@ -663,6 +666,7 @@ export class TurnScene {
       nPolygons,
       fromFitWidth,
       toFitWidth,
+      reverse: spec.reverse ?? false,
     }
   }
 
@@ -768,7 +772,14 @@ export class TurnScene {
     if (!preview) this.applyWorldOffsets(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
     if (!base) return false
-    this.sheet = { ...base, kind: 'curl', mode: 'drag', progress: 0, preview }
+    // 反向翻页（spec.reverse）：纸张初始即翻出缝外侧（进度 1），拖入时回收
+    this.sheet = {
+      ...base,
+      kind: 'curl',
+      mode: 'drag',
+      progress: base.reverse ? 1 : 0,
+      preview,
+    }
     // 新建纸张须立即可见：标脏唤醒一帧渲染（drag 模式不逐帧自驱）
     this.markDirty()
     return true
@@ -788,19 +799,21 @@ export class TurnScene {
     if (spec) this.applyWorldOffsets(spec)
   }
 
-  // 拖拽进度 [0,1]：0 为未翻，1 为完全翻过
+  // 拖拽进度 [0,1]：调用方传入的是"拖向提交"的进度（0 按下 / 1 满程），
+  // 反向翻页纸张换算为形变进度 1-p（初始翻出缝外，拖入回收）
   setDragProgress(progress: number) {
     const sheet = this.sheet
     if (!sheet || sheet.mode !== 'drag') return
+    const clamped = clamp(progress, 0, 1)
     // 书脊拖拽接管折角悬停的纸张：降级为卷曲拖拽（清除折角形变）；
     // 接管即真实交互，一并清除预览标记
     if (sheet.kind === 'fold') {
       const { fold: _fold, kind: _kind, preview: _preview, ...rest } = sheet
-      this.sheet = { ...rest, kind: 'curl', progress: clamp(progress, 0, 1) }
+      this.sheet = { ...rest, kind: 'curl', progress: clamped }
       this.markDirty()
       return
     }
-    sheet.progress = clamp(progress, 0, 1)
+    sheet.progress = sheet.reverse ? 1 - clamped : clamped
     // drag 模式纸张不逐帧自驱，进度变化须标脏唤醒一帧渲染
     this.markDirty()
   }
@@ -988,7 +1001,8 @@ export class TurnScene {
       this.endFoldDrag(commit, baseDuration)
       return
     }
-    const target = commit ? 1 : 0
+    // 反向翻页纸张的提交态是放平（进度 0）：目标与提交判定随之反转
+    const target = sheet.reverse ? (commit ? 0 : 1) : commit ? 1 : 0
     if (sheet.progress === target) {
       this.finishSheet(sheet, commit)
       return
@@ -1019,14 +1033,16 @@ export class TurnScene {
     this.wake()
   }
 
-  // 中断当前翻页并立即收尾：time/settle 按各自终点，drag 按最近端点
+  // 中断当前翻页并立即收尾：time/settle 按各自终点，drag 按最近端点。
+  // 反向翻页纸张的提交态是放平（进度 0），最近端点判定随之反转
   stopFlip() {
     const sheet = this.sheet
     if (!sheet) return
     if (sheet.mode === 'drag') {
-      this.finishSheet(sheet, sheet.progress >= 0.5)
+      const committed = sheet.kind === 'curl' ? (sheet.reverse ? sheet.progress < 0.5 : sheet.progress >= 0.5) : sheet.progress >= 0.5
+      this.finishSheet(sheet, committed)
     } else if (sheet.mode === 'settle') {
-      this.finishSheet(sheet, sheet.target === 1)
+      this.finishSheet(sheet, sheet.reverse ? sheet.target === 0 : sheet.target === 1)
     } else {
       this.finishSheet(sheet, true)
     }
@@ -1228,8 +1244,11 @@ export class TurnScene {
     let slideP: number
     if (sheet.mode === 'time') {
       const t = Math.min(1, (now - sheet.startTime) / sheet.duration)
-      pe = easeInOutCubic(t)
-      slideP = pe
+      const eased = easeInOutCubic(t)
+      // 反向翻页：纸张形变反放（1→0，从翻出缝外收回放平），
+      // 书体/静态页/纸叠过渡仍按 0→1 从当前态到目标态
+      pe = sheet.reverse ? 1 - eased : eased
+      slideP = eased
       if (t >= 1) {
         this.finishSheet(sheet, true)
         return
@@ -1245,7 +1264,8 @@ export class TurnScene {
       // 预览回弹同样不动书体
       slideP = sheet.preview ? 0 : pe
       if (t >= 1) {
-        this.finishSheet(sheet, sheet.target === 1)
+        // 反向翻页纸张的提交态是放平（进度 0）
+        this.finishSheet(sheet, sheet.reverse ? sheet.target === 0 : sheet.target === 1)
         return
       }
     }

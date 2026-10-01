@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { buildPageSources, coverPageIndices } from '@/lib/pageMapping'
 import type { PageItemLike } from '@/lib/pageMapping'
@@ -157,6 +157,57 @@ describe('buildPageSources', () => {
     const onlyCover = buildPageSources([item(false, 'coverFront'), item(), item()])
     expect(onlyCover[0]).toMatchObject({ itemIndex: 0 })
     expect(onlyCover[5]).toMatchObject({ itemIndex: 2, cover: true })
+  })
+})
+
+describe('buildPageSources in single-page mode', () => {
+  it('adds no blank endpapers or parity blanks', () => {
+    // 封面(0) + 内容(1,2,3) + 封底(4)：无衬页/补位页，总页数不再保证偶数
+    const sources = buildPageSources([item(), item(), item(), item(), item()], { singlePage: true })
+    expect(sources).toHaveLength(5)
+    expect(sources.every((s) => !s.blank)).toBe(true)
+    expect(sources.map((s) => s.itemIndex)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('drops declared #back faces along with auto endpapers', () => {
+    // 一页只有一面：封面底/封底里依附于纸张背面，单页翻页背面恒为空白，
+    // 衬页面没有任何显示机会——显式声明的 #back 内容同样不占页
+    const sources = buildPageSources(
+      [
+        item(false, 'coverFront'),
+        item(false, 'coverBack'),
+        item(),
+        item(false, 'backCoverBack'),
+        item(false, 'backCoverFront'),
+      ],
+      { singlePage: true },
+    )
+    expect(sources).toHaveLength(3)
+    expect(sources.every((s) => !s.blank)).toBe(true)
+    expect(sources.map((s) => s.itemIndex)).toEqual([0, 2, 4])
+    expect(sources[0]).toMatchObject({ cover: true })
+    expect(sources[1]).toMatchObject({ cover: false })
+    expect(sources[2]).toMatchObject({ cover: true })
+  })
+
+  it('ignores spread items and warns', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 跨页项不支持跨页显示：不占页（封面0 + 内容2 + 封底4）
+    const sources = buildPageSources([item(), item(true), item(), item(true), item()], {
+      singlePage: true,
+    })
+    expect(sources).toHaveLength(3)
+    expect(sources.map((s) => s.itemIndex)).toEqual([0, 2, 4])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('跨页'))
+    warn.mockRestore()
+  })
+
+  it('still maps spreads as two aligned pages when not in single-page mode', () => {
+    // 回归：singlePage 选项不影响默认（双页）映射
+    const sources = buildPageSources([item(), item(true), item()])
+    expect(sources).toHaveLength(8)
+    expect(sources[3]).toMatchObject({ itemIndex: 1, region: 'left' })
+    expect(sources[4]).toMatchObject({ itemIndex: 1, region: 'right' })
   })
 })
 

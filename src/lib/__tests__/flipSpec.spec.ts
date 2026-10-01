@@ -175,7 +175,7 @@ describe('computeFlipSpec in spread mode', () => {
 describe('computeFlipSpec in single-page mode', () => {
   const hinge = sheetWorldWidth(ASPECT) / 2
 
-  it('flips forward ltr around the left edge', () => {
+  it('flips forward ltr around the fixed left seam', () => {
     expect(spec({ displayedPages: 1 })).toEqual({
       geometry: 'A',
       hingeX: -hinge,
@@ -183,21 +183,24 @@ describe('computeFlipSpec in single-page mode', () => {
       backIndex: 3,
       staticPages: [{ index: 3, slot: 'center' }],
       delta: 1,
+      reverse: false,
     })
   })
 
-  it('flips backward ltr around the right edge', () => {
+  it('flips backward ltr in from the same left seam (reverse)', () => {
+    // 页缝固定在左缘：后退为目标页纸张从左缘翻回放平、盖住仍显示的当前页
     expect(spec({ displayedPages: 1, currentPage: 3, backward: true })).toEqual({
-      geometry: 'B',
-      hingeX: hinge,
-      frontIndex: 3,
-      backIndex: 2,
-      staticPages: [{ index: 2, slot: 'center' }],
+      geometry: 'A',
+      hingeX: -hinge,
+      frontIndex: 2,
+      backIndex: 3,
+      staticPages: [{ index: 3, slot: 'center' }],
       delta: -1,
+      reverse: true,
     })
   })
 
-  it('flips forward rtl around the right edge', () => {
+  it('flips forward rtl around the fixed right seam', () => {
     expect(spec({ displayedPages: 1, forwardDirection: 'right' })).toEqual({
       geometry: 'B',
       hingeX: hinge,
@@ -205,19 +208,21 @@ describe('computeFlipSpec in single-page mode', () => {
       backIndex: 3,
       staticPages: [{ index: 3, slot: 'center' }],
       delta: 1,
+      reverse: false,
     })
   })
 
-  it('flips backward rtl around the left edge', () => {
+  it('flips backward rtl in from the same right seam (reverse)', () => {
     expect(
       spec({ displayedPages: 1, currentPage: 3, forwardDirection: 'right', backward: true }),
     ).toEqual({
-      geometry: 'A',
-      hingeX: -hinge,
-      frontIndex: 3,
-      backIndex: 2,
-      staticPages: [{ index: 2, slot: 'center' }],
+      geometry: 'B',
+      hingeX: hinge,
+      frontIndex: 2,
+      backIndex: 3,
+      staticPages: [{ index: 3, slot: 'center' }],
       delta: -1,
+      reverse: true,
     })
   })
 })

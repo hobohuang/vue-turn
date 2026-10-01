@@ -943,10 +943,146 @@ describe('VueTurn', () => {
     const wrapper = await mountTurn(6, { displayedPages: 1 })
     await wrapper.find('#next').trigger('click')
     await flushPromises()
-    // 单页模式每次只前进一页
-    expect(wrapper.find('#indicator').text()).toBe('2/8')
+    // 单页模式每次只前进一页；且不补空白页/衬页：6 item = 6 页
+    // （封面 + 4 内容页 + 封底）
+    expect(wrapper.find('#indicator').text()).toBe('2/6')
     const spec = mocks.startFlip.mock.calls[0]?.[0]
     expect(spec?.delta).toBe(1)
+  })
+
+  it('gives the flipping sheet a blank paper back in single-page mode', async () => {
+    // 单页一页只有一面内容：翻页纸张背面统一贴空白纸纹，
+    // 不再显示下一页内容（避免与静态底页重复的"影子页"）
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    mocks.solidColorTexture.mockClear()
+    const wrapper = await mountTurn(6, { displayedPages: 1 })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    const call = mocks.startFlip.mock.calls[0]
+    const spec = call?.[0]
+    expect(spec?.frontIndex).toBe(0)
+    expect(spec?.backIndex).toBe(1)
+    // 正面=封面页纹理、背面=统一纸色空白纸纹（solidColorTexture 产物）
+    const coverTexture = await mocks.elementToTexture.mock.results[0]?.value
+    expect(call?.[1]).toBe(coverTexture)
+    expect(call?.[2]).toBe(mocks.solidColorTexture.mock.results[0]?.value)
+  })
+
+  it('returns to the cover when switching display modes', async () => {
+    // 单双页页码语义不同（页源映射/翻页停靠均不一致），切换后统一回到封面；
+    // 页数按新模式重算（单页无补位页/衬页）
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const mode = ref<'auto' | 1 | 2>(2)
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                ref: turnRef,
+                modelValue: 1,
+                displayedPages: mode.value,
+              },
+              { default: () => pages(6) },
+            ),
+            h('button', { id: 'jump', onClick: () => turnRef.value?.goToPage(4) }, 'jump'),
+            h(
+              'button',
+              { id: 'toggle', onClick: () => (mode.value = mode.value === 2 ? 1 : 2) },
+              'toggle',
+            ),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    const vm = () => wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
+    // 双页：6 item → 8 页；跳到第 4 页
+    await wrapper.find('#jump').trigger('click')
+    await flushPromises()
+    expect(vm().numPages).toBe(8)
+    expect(vm().page).toBe(4)
+    // 切单页：6 item → 6 页，回到封面
+    await wrapper.find('#toggle').trigger('click')
+    await flushPromises()
+    expect(vm().numPages).toBe(6)
+    expect(vm().page).toBe(1)
+    // 切回双页：仍回到封面
+    await wrapper.find('#toggle').trigger('click')
+    await flushPromises()
+    expect(vm().numPages).toBe(8)
+    expect(vm().page).toBe(1)
+  })
+
+  it('flips backward in single-page mode with a reversed sheet from the seam side', async () => {
+    // 单页页缝固定在阅读方向一侧：后退为反向翻页（reverse）——目标页纸张
+    // 从缝侧翻回放平盖住当前页，spec 标记 reverse 且 staticPages 为当前页
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    const wrapper = await mountTurn(6, { displayedPages: 1 })
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    await wrapper.find('#prev').trigger('click')
+    await flushPromises()
+    const spec = mocks.startFlip.mock.calls[mocks.startFlip.mock.calls.length - 1]?.[0]
+    expect(spec?.delta).toBe(-1)
+    expect(spec?.reverse).toBe(true)
+    // 正面 = 目标页（封面），staticPages = 被盖住的当前页（第 2 页）
+    expect(spec?.frontIndex).toBe(0)
+    expect(spec?.staticPages).toEqual([{ index: 1, slot: 'center' }])
+    expect(spec?.hingeX).toBeLessThan(0)
+  })
+
+  it('migrates rasterized textures by content when switching modes', async () => {
+    // 回归：模式切换后页索引语义变化，纹理缓存若仍按旧键位复用，会把旧
+    // 模式该索引的内容（如补位空白页）贴到新模式的页面上。切换须按内容源
+    // （itemIndex）迁移纹理——已光栅化的内容页不重做栅格化，且新索引下
+    // 取到正确内容
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation((el) =>
+      Promise.resolve({ ...fakeTexture(), tag: el.textContent ?? '' }),
+    )
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const mode = ref<'auto' | 1 | 2>(2)
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                ref: turnRef,
+                modelValue: 1,
+                displayedPages: mode.value,
+                prefetchWindow: 10,
+              },
+              { default: () => pages(6) },
+            ),
+            h(
+              'button',
+              { id: 'toggle', onClick: () => (mode.value = mode.value === 2 ? 1 : 2) },
+              'toggle',
+            ),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    // 双页 6 item → 8 页，prefetchWindow=10 全窗口光栅化（页 1、6 为空白走纯色纹理）
+    const rasterCount = mocks.elementToTexture.mock.calls.length
+    expect(rasterCount).toBe(6)
+    await wrapper.find('#toggle').trigger('click')
+    await flushPromises()
+    // 切单页：6 页全部由旧纹理按 itemIndex 迁移复用，无一次重光栅化
+    expect(mocks.elementToTexture.mock.calls.length).toBe(rasterCount)
+    // 新索引下静态网格取到正确内容：单页索引 4 = 第 5 个 item（双页旧键位 5）
+    const calls = mocks.setStaticPages.mock.calls
+    const textureOf = calls[calls.length - 1]![1] as (index: number) => { tag?: string }
+    expect(textureOf(4)).toMatchObject({ tag: 'page 5' })
   })
 
   it('forces double page when displayedPages is 2', async () => {
@@ -1141,6 +1277,18 @@ describe('VueTurn', () => {
     // 内容区段 = 补位(2) + 跨页(3,4) + 普通(5) 共 4 页为偶 → 封底纸(6,7) = 8 页
     const wrapper = await mountItems(['full', 'spread', 'full', 'full'])
     expect(wrapper.find('#indicator').text()).toBe('1/8')
+  })
+
+  it('ignores spread items with a console warning in single-page mode', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    // 单页不支持跨页显示：跨页项自动忽略不占页，并打印警告。
+    // 封面(0) + 普通内容(1) + 封底(2) = 3 页
+    const wrapper = await mountItems(['full', 'spread', 'full', 'full'], { displayedPages: 1 })
+    expect(wrapper.find('#indicator').text()).toBe('1/3')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('跨页'))
+    warn.mockRestore()
   })
 
   it('inserts a blank page when a spread would land on an even index', async () => {

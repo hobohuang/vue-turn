@@ -40,6 +40,12 @@ export interface FlipSpec {
   worldToX?: number
   fromFitWidth?: number
   toFitWidth?: number
+  /**
+   * 反向翻页：纸张从翻起态（进度 1，翻出页缝外侧）收回放平（进度 0），
+   * 正面（frontIndex）盖住 staticPages 呈现的当前页——单页模式页缝固定
+   * 在一侧时的"上一页从缝侧翻入"动画。未标记时进度 0→1 正常翻出
+   */
+  reverse?: boolean
 }
 
 export type FlipDirection = ForwardDirection
@@ -148,6 +154,8 @@ export interface TurnState {
   readonly canNext: boolean
   readonly canPrev: boolean
   readonly disabled: boolean
+  /** 当前显示模式：1 单页 / 2 双页（auto 解析后的实际值） */
+  readonly displayedPages: 1 | 2
   /** 当前缩放级别（1 为未缩放） */
   readonly zoom: number
 }

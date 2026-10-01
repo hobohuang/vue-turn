@@ -15,12 +15,7 @@ export default defineConfig(({ mode }) => ({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
-  build: {
-    // 库模式（npm run build:lib，--mode lib）：产出可分发的组件包
-    // - 不复制 public/（favicon 等站点资源不属于组件包）
-    // - CSS 文件名固定为 vue-turn.css（默认取包名，包名变更会连带产物改名）
-    // 默认构建（无 --mode lib）走应用模式，产出 index.html 演示站点
-    ...(mode === 'lib'
+  build: (mode === 'lib'
       ? {
           copyPublicDir: false,
           lib: {
@@ -41,5 +36,4 @@ export default defineConfig(({ mode }) => ({
           },
         }
       : {}),
-  },
 }))
