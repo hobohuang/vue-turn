@@ -1,6 +1,17 @@
 # 更新日志
 
-遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.2.1`。
+遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.2.2`。
+
+## 0.2.2 - 2026-10-01
+
+### 变更
+
+- **构建配置区分库模式与应用模式**：`vite build` 默认构建演示站点（`index.html`），库产物（`vue-turn.mjs`/`vue-turn.cjs`）只在 `npm run build:lib`（`--mode lib`）时产出。此前 `lib` 配置无条件生效，应用构建实际输出的也是组件包，演示页无法构建。对包消费者无影响（`prepublishOnly` 仍走 `build:lib`）。
+- **新增 GitHub Pages 演示页自动部署**：push 到 `main` 自动构建并发布演示页（`https://hobohuang.github.io/vue-turn/`），构建时经 `DEMO_BASE` 环境变量注入 `/vue-turn/` 子路径 base，并以 `404.html` 复制实现 SPA 路由回退。不影响库产物。
+
+### 文档
+
+- README 新增「部署演示页（GitHub Pages）」章节与在线演示入口。
 
 ## 0.2.1 - 2026-09-30
 
