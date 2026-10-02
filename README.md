@@ -544,3 +544,13 @@ cnpm run build:lib    # 构建可分发组件包（dist/）
 
 注意 `npm run build` 构建的是演示站点（含 `index.html`），`npm run build:lib` 构建的是可分发组件包，两者互不相干（见 `vite.config.ts` 中按 `--mode lib` 区分）。
 
+
+## 更新日志
+
+完整的版本变更记录见 [CHANGELOG.md](./CHANGELOG.md)(遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本),近期版本:
+
+| 版本 | 日期 | 要点 |
+| --- | --- | --- |
+| [0.4.0](./CHANGELOG.md#040---2026-10-02) | 2026-10-02 | **破坏性**:`type` 枚举统一封面/封底声明(移除 `cover`/`back-cover` 布尔属性与 `#back` 插槽)、衬页声明删除;新增跨页封皮 `type="jacket"`、书脊内阴影 `spineShadow`(默认开启)、type 校验(冲突拒绝渲染) |
+| [0.3.0](./CHANGELOG.md#030---2026-10-02) | 2026-10-02 | 单页模式按"一页一面"重新定义:空白背面、页缝固定一侧、反向翻页、纸叠只在缝对侧 |
+| [0.2.2](./CHANGELOG.md#022---2026-10-01) | 2026-10-01 | 库/应用构建模式区分;GitHub Pages 演示页自动部署 |
