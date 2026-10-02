@@ -315,6 +315,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       props.forwardDirection ?? 'left',
       sheetWorldWidth(safePageAspect),
       pageCount.value,
+      state.displayedPages.value,
     )
   }
 
@@ -496,13 +497,18 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     const trigger: FlipDirection = ratio > 0.5 ? (ltr ? 'left' : 'right') : (ltr ? 'right' : 'left')
     const spec = computeFlipSpecFor(trigger)
     if (!spec) return
+    // 单页模式禁用后退拖拽：反向翻页纸张从缝外翻入，静止时不在页面上、
+    // 无从抓取，按下即凭空出现一张翻起的纸——后退只走点击/键盘/实例方法
+    if (spec.reverse) return
     if (!emitBeforeFlip(trigger, state.page.value, state.page.value + spec.delta)) return
     clearStackHover()
     state.startFlip()
     emit('flip-start', trigger)
     // 该纸张 fold 开启：书页外（视口空白处）按下也走折页拖拽——方向按视口
-    // 半区判定，锚点取外缘中部（竖直折线），拖点横向跟手、纵向钉在页中
-    if (foldOfSpec(spec).enabled) {
+    // 半区判定，锚点取外缘中部（竖直折线），拖点横向跟手、纵向钉在页中。
+    // 反向翻页（单页后退）的纸张从缝外翻入，折页锚点模型不适用，
+    // 保持反向卷曲拖拽
+    if (foldOfSpec(spec).enabled && !spec.reverse) {
       const drag2 = startFoldDragGesture(event, spec, trigger, 0)
       if (drag2) {
         applyStacksFlip(spec)

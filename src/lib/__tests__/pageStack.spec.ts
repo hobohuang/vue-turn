@@ -59,9 +59,23 @@ describe('computeStackSides in spread mode', () => {
     expect(sides({ currentPage: 8 }).right).toBeNull()
   })
 
-  it('hugs the half-width edge in single-page mode', () => {
-    expect(sides({ displayedPages: 1 }).left?.edgeX).toBe(-WIDTH / 2)
-    expect(sides({ displayedPages: 1 }).right?.edgeX).toBe(WIDTH / 2)
+  it('shows only the unread stack on the seam-opposite side in single-page mode', () => {
+    // 单页模式页缝固定在阅读方向一侧：纸叠只出现在缝对侧（未读页堆叠），
+    // 已读页翻出缝侧、不堆叠
+    expect(sides({ displayedPages: 1 })).toEqual({
+      left: null,
+      right: { first: 3, count: 7, step: 1, edgeX: WIDTH / 2, dir: 1 },
+    })
+    // RTL：缝在右缘，纸叠在左
+    expect(sides({ displayedPages: 1, forwardDirection: 'right' })).toEqual({
+      left: { first: 3, count: 7, step: 1, edgeX: -WIDTH / 2, dir: -1 },
+      right: null,
+    })
+    // 翻到末页：剩余为 0，两侧皆无
+    expect(sides({ displayedPages: 1, currentPage: 9, numPages: 10 })).toEqual({
+      left: null,
+      right: null,
+    })
   })
 
   it('keeps layer counts consistent with visible and flat pages', () => {

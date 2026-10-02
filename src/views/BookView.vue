@@ -123,7 +123,11 @@ function log(name: string, detail = '') {
 
 // ---------- 事件处理：演示全部 15 个事件 ----------
 function onBeforeFlip(context: BeforeFlipContext) {
-  if (blockBackCover.value && context.to >= (turnRef.value?.numPages ?? 0) - 1) {
+  // 封底纸张的页数按显示模式取：双页占末尾两页（封底里 + 封底），
+  // 单页一页只有一面、封底里不占页，只有末页（封底）
+  const numPages = turnRef.value?.numPages ?? 0
+  const backCoverStart = (state.value?.displayedPages ?? 2) === 1 ? numPages : numPages - 1
+  if (blockBackCover.value && context.to >= backCoverStart) {
     context.preventDefault()
     log('before-flip', `已拦截 ${context.from} → ${context.to}（封底保护区）`)
     return

@@ -1037,6 +1037,55 @@ describe('VueTurn', () => {
     expect(spec?.hingeX).toBeLessThan(0)
   })
 
+  it('disables the backward drag in single-page mode', async () => {
+    // 单页后退纸张从缝外翻入，静止时不在页面上、无从抓取：后退拖拽禁用
+    // （前进拖拽保留）。后退导航只走点击/键盘/实例方法
+    const wrapper = await mountTurn(6, {
+      displayedPages: 1,
+      preset: 'custom',
+      look: { fold: false },
+    })
+    const turn = wrapper.findComponent(VueTurn)
+    stubViewportRect(wrapper)
+    // 左半区按下（后退）拖动：不进入拖拽、无翻页事件
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 1, button: 0, clientX: 200, clientY: 300 })
+    await fireViewportPointer(wrapper, 'pointermove', { pointerId: 1, clientX: 350, clientY: 300 })
+    await fireViewportPointer(wrapper, 'pointerup', { pointerId: 1, clientX: 420, clientY: 300 })
+    await flushPromises()
+    expect(mocks.beginDragFlip).not.toHaveBeenCalled()
+    expect(turn.emitted('flip-start')).toBeUndefined()
+    // 右半区按下（前进）拖动：正常进入拖拽
+    await fireViewportPointer(wrapper, 'pointerdown', { pointerId: 2, button: 0, clientX: 700, clientY: 300 })
+    expect(mocks.beginDragFlip).toHaveBeenCalledTimes(1)
+  })
+
+  it('plays soft back-flips as the reversed fold animation in single-page mode', async () => {
+    // 回归：soft 内页后退必须沿用折页动画（与下一页同一条形变路径），
+    // 由场景按 spec.reverse 反放（拖点从对侧镜像位收回外缘），
+    // 而不是退化成 hard 形式的整页卷曲
+    mocks.startFoldFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => {
+      onDone()
+      return true
+    })
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn(6, { displayedPages: 1 })
+    // 1→2：封面纸张（hard 档 fold 关闭）→ 卷曲
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    // 2→3：soft 内页前进 → 折页动画
+    await wrapper.find('#next').trigger('click')
+    await flushPromises()
+    expect(mocks.startFoldFlip).toHaveBeenCalledTimes(1)
+    expect(mocks.startFoldFlip.mock.calls[0]?.[0]?.reverse).toBe(false)
+    // 3→2：soft 内页后退 → 仍走折页动画，规格带 reverse
+    await wrapper.find('#prev').trigger('click')
+    await flushPromises()
+    expect(mocks.startFoldFlip).toHaveBeenCalledTimes(2)
+    const spec = mocks.startFoldFlip.mock.calls[1]?.[0]
+    expect(spec?.reverse).toBe(true)
+    expect(spec?.delta).toBe(-1)
+  })
+
   it('migrates rasterized textures by content when switching modes', async () => {
     // 回归：模式切换后页索引语义变化，纹理缓存若仍按旧键位复用，会把旧
     // 模式该索引的内容（如补位空白页）贴到新模式的页面上。切换须按内容源

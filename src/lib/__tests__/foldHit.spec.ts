@@ -70,6 +70,27 @@ describe('foldSideOf', () => {
     expect(foldSideOf(pick({ index: 3 }), [{ index: 3, slot: 'center' as const }], 'left', 6)).toBeNull()
   })
 
+  it('folds the forward half of a single-page center page toward forward', () => {
+    // 单页模式页缝固定在书脊侧：整页如"前进侧页"，仅前进半区可折前进
+    const center = [{ index: 3, slot: 'center' as const }]
+    expect(foldSideOf(pick({ index: 3, u: 0.8 }), center, 'left', 6, 1)).toEqual({
+      trigger: 'left',
+      worldRight: true,
+    })
+    // 后退半区不可折（走反向卷曲拖拽）
+    expect(foldSideOf(pick({ index: 3, u: 0.3 }), center, 'left', 6, 1)).toBeNull()
+    // RTL 镜像：缝在右缘，前进半区为 u < 0.5
+    expect(foldSideOf(pick({ index: 3, u: 0.2 }), center, 'right', 6, 1)).toEqual({
+      trigger: 'right',
+      worldRight: false,
+    })
+    expect(foldSideOf(pick({ index: 3, u: 0.8 }), center, 'right', 6, 1)).toBeNull()
+    // 封底页不可折前进
+    expect(
+      foldSideOf(pick({ index: 5, u: 0.8 }), [{ index: 5, slot: 'center' as const }], 'left', 6, 1),
+    ).toBeNull()
+  })
+
   it('splits merged spread meshes by uv', () => {
     expect(foldSideOf(pick({ spread: true, u: 0.8 }), [], 'left')?.worldRight).toBe(true)
     expect(foldSideOf(pick({ spread: true, u: 0.2 }), [], 'left')?.worldRight).toBe(false)

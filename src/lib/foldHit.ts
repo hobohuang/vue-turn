@@ -22,13 +22,18 @@ export interface FoldSide {
  * 居中页（书合着时唯一可见的单页）也可折：封面（index 0）只能前进翻开，
  * 封底（末索引）只能后退翻回——两者外缘均在"翻开会露出的那一侧"：
  * 封面外缘在前进侧（LTR 世界右）、封底外缘在后退侧（LTR 世界左）。
- * 其余居中显示的页（理论不存在）返回 null。
+ * 其余居中显示的页在双页模式不存在，返回 null。
+ *
+ * 单页模式（displayedPages=1）页缝固定在书脊侧：整页相当于一张"前进侧页"
+ * （外缘在前进侧），仅命中前进半区（与点击/拖拽的视口半区划分一致）时
+ * 可折前进——后退半区与封底页返回 null，由调用方走反向卷曲拖拽。
  */
 export function foldSideOf(
   pick: PagePick,
   placements: ReadonlyArray<StaticPlacement>,
   forwardDirection: FlipDirection,
   numPages?: number,
+  displayedPages: 1 | 2 = 2,
 ): FoldSide | null {
   const ltr = forwardDirection === 'left'
   let worldRight: boolean
@@ -39,8 +44,14 @@ export function foldSideOf(
     const placement = placements.find((p) => p.index === pick.index)
     if (!placement) return null
     if (placement.slot === 'center') {
+      if (displayedPages === 1) {
+        const forwardHalf = ltr ? pick.u > 0.5 : pick.u < 0.5
+        const isBackCover = numPages !== undefined && pick.index === numPages - 1
+        if (!forwardHalf || isBackCover) return null
+        worldRight = ltr
+      }
       // 居中页 = 合书态的封面/封底：按开合方向判定外缘
-      if (pick.index === 0) worldRight = ltr
+      else if (pick.index === 0) worldRight = ltr
       else if (numPages !== undefined && pick.index === numPages - 1) worldRight = !ltr
       else return null
     } else {
@@ -90,8 +101,9 @@ export function foldHitFromPick(
   forwardDirection: FlipDirection,
   sheetWidth: number,
   numPages?: number,
+  displayedPages: 1 | 2 = 2,
 ): FoldHit | null {
-  const side = foldSideOf(pick, placements, forwardDirection, numPages)
+  const side = foldSideOf(pick, placements, forwardDirection, numPages, displayedPages)
   if (!side) return null
   const dist = cornerDistance(pick, side.worldRight, sheetWidth)
   return {
@@ -119,8 +131,9 @@ export function foldStripFromPick(
   forwardDirection: FlipDirection,
   sheetWidth: number,
   numPages?: number,
+  displayedPages: 1 | 2 = 2,
 ): FoldStripHit | null {
-  const side = foldSideOf(pick, placements, forwardDirection, numPages)
+  const side = foldSideOf(pick, placements, forwardDirection, numPages, displayedPages)
   if (!side) return null
   const dist = cornerDistance(pick, side.worldRight, sheetWidth)
   const radius = FOLD_ZONE * sheetWidth

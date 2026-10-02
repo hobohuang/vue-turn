@@ -294,18 +294,14 @@ if (import.meta.env.DEV) {
 
 // 折页档位（内页按 preset/look、封面/封底纸张按 coverPreset/coverLook 各取一档，
 // 挂载时读取一次）：解析与归属判定见 composables/useFoldProfiles.ts。
-// 单页模式不启用折页/折角：页缝固定在阅读方向一侧、后退为反向翻页，
-// 折页锚点与提交语义按双页书脊建模——单页统一走整页卷曲
-const { isCoverSheet, foldOfSpec: foldOfSpecProfile, foldOfPage: foldOfPageProfile } = useFoldProfiles({
+// 单页模式同样启用：页缝固定在书脊侧，前进半区的折页/折角拖拽与双页
+// 同一套几何（锚点=外缘/外角、书脊约束以缝侧为基准），后退半区走反向卷曲
+const { isCoverSheet, foldOfSpec, foldOfPage } = useFoldProfiles({
   innerFold: resolveFold(props.preset, props.look),
   coverFold: resolveFold(props.coverPreset, coverLookOptions),
   pageSources: () => pageSources.value,
   pageAspect: safePageAspect,
 })
-const foldOfSpec: typeof foldOfSpecProfile = (spec) =>
-  state.displayedPages.value === 1 ? { enabled: false, bendWorld: 0 } : foldOfSpecProfile(spec)
-const foldOfPage: typeof foldOfPageProfile = (index) =>
-  state.displayedPages.value === 1 ? { enabled: false, bendWorld: 0 } : foldOfPageProfile(index)
 
 // ---------------------------------------------------------------------------
 // 纹理生命周期与光栅化调度（usePageTextures）
@@ -632,7 +628,9 @@ function flip(trigger: FlipDirection) {
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
   }
   // fold 开启时走折页动画（锚点外缘中部、竖直折线扫过整页），场景不可用
-  // 或该纸张所属档位 fold 关闭（如 hard 封面）回退卷曲动画
+  // 或该纸张所属档位 fold 关闭（如 hard 封面）回退卷曲动画。
+  // 反向翻页（单页后退）同样走折页动画：折页拖点从对侧镜像位收回外缘
+  // （场景层按 spec.reverse 反放），与前进折页同一条形变路径
   const fold = foldOfSpec(spec)
   const { front: frontTexture, back: backTexture } = sheetTextures(spec)
   if (

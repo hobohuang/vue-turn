@@ -200,16 +200,30 @@ export function usePeelPreview(options: PeelPreviewOptions) {
             forwardDirection(),
             sheetWorldWidth(safePageAspect),
             pageCount.value,
+            state.displayedPages.value,
           )
         : null
-      if (hit) ensureFoldPreview(hit.trigger, hit.cornerV, event)
-      else releasePeelNow()
-      return
+      if (hit) {
+        ensureFoldPreview(hit.trigger, hit.cornerV, event)
+        return
+      }
+      // 单页模式的后退半区/后退条带不可折（反向翻页纸张从缝外翻入），
+      // 落到边缘条带整页轻卷预览，而非直接收起
+      if (state.displayedPages.value !== 1) {
+        releasePeelNow()
+        return
+      }
     }
-    // fold 关闭：视口边缘条带整页轻微卷曲
+    // fold 关闭：视口边缘条带整页轻微卷曲。
+    // 单页模式的后退方向无预览——反向翻页纸张从缝外翻入，静止时不可见，
+    // 悬停凭空出现纸张比无预览更怪
     if (fwdDepth < zone && state.canGoForward.value) {
       ensurePeel(forwardTrigger, 1 - fwdDepth / zone)
-    } else if (backDepth < zone && state.canGoBack.value) {
+    } else if (
+      backDepth < zone &&
+      state.canGoBack.value &&
+      state.displayedPages.value !== 1
+    ) {
       ensurePeel(backwardTrigger, 1 - backDepth / zone)
     } else {
       releasePeelNow()

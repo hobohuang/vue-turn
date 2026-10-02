@@ -727,18 +727,24 @@ export class TurnScene {
     if (!base) return false
     const settleDuration = positive(duration, 900)
     const startTime = performance.now()
+    // 反向翻页（spec.reverse，单页后退）：纸张初始为对折越过缝侧的镜像位
+    // （qu=-W，进度 1），拖点收回外缘（qu=+W）完成放平——与前进折页同一
+    // 条形变路径反放
+    const reverse = base.reverse
+    const fromQ: [number, number] = reverse ? [-this.sheetWidth, 0] : [this.sheetWidth, 0]
+    const toQ: [number, number] = reverse ? [this.sheetWidth, 0] : [-this.sheetWidth, 0]
     const sheet: FoldSettleSheet = {
       ...base,
       kind: 'fold',
       mode: 'settle',
       startTime,
       duration: settleDuration,
-      fold: { pu: this.sheetWidth, pv: 0, qu: this.sheetWidth, qv: 0 },
-      progress: 0,
-      p0: 0,
-      target: 1,
-      foldFromQ: [this.sheetWidth, 0],
-      foldToQ: [-this.sheetWidth, 0],
+      fold: { pu: this.sheetWidth, pv: 0, qu: fromQ[0], qv: 0 },
+      progress: reverse ? 1 : 0,
+      p0: reverse ? 1 : 0,
+      target: reverse ? 0 : 1,
+      foldFromQ: fromQ,
+      foldToQ: toQ,
       bend: positive(bend, base.bend),
     }
     this.sheet = sheet
@@ -965,8 +971,15 @@ export class TurnScene {
       return
     }
     const { pu, pv, qu, qv } = sheet.fold
-    const target = commit ? 1 : 0
-    const toQ: [number, number] = commit ? [-this.sheetWidth, pv] : [pu, pv]
+    // 反向翻页纸张的提交态是放平（进度 0）：拖点目标与提交判定随之反转
+    const target = sheet.reverse ? (commit ? 0 : 1) : commit ? 1 : 0
+    const toQ: [number, number] = sheet.reverse
+      ? commit
+        ? [this.sheetWidth, pv]
+        : [pu, pv]
+      : commit
+        ? [-this.sheetWidth, pv]
+        : [pu, pv]
     if (qu === toQ[0] && qv === toQ[1]) {
       this.finishSheet(sheet, commit)
       return
@@ -1224,13 +1237,19 @@ export class TurnScene {
         sheet.fold.qv = clamped.qv
         sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
         if (t >= 1) {
-          this.finishSheet(sheet, sheet.target === 1)
+          // 反向翻页纸张的提交态是放平（进度 0）
+          this.finishSheet(sheet, sheet.reverse ? sheet.target === 0 : sheet.target === 1)
           return
         }
       }
       // 悬停预览：书体/静态页/纸叠钉在起始态，只有纸角形变跟随进度；
-      // 真实拖拽/回弹（含封面/封底开合）与内页一致——书体随进度联动
-      const slideP = sheet.preview ? 0 : sheet.progress
+      // 真实拖拽/回弹（含封面/封底开合）与内页一致——书体随进度联动。
+      // 反向翻页的书体过渡仍按 0→1 从当前态到目标态（slideP 取 1-进度）
+      const slideP = sheet.preview
+        ? 0
+        : sheet.reverse
+          ? 1 - sheet.progress
+          : sheet.progress
       sheet.group.position.x =
         sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
       for (const entry of this.staticMeshes.values()) {
