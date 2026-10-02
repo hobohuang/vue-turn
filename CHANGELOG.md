@@ -1,8 +1,8 @@
 # 更新日志
 
-遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.3.0`。
+遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.4.0`。
 
-## 未发布
+## 0.4.0 - 2026-10-02
 
 ### 破坏性变更
 
