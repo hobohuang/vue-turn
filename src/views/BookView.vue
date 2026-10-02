@@ -74,6 +74,11 @@ const displayModeValue = computed<DisplayMode>(() =>
   displayMode.value === 'auto' ? 'auto' : (Number(displayMode.value) as 1 | 2),
 )
 
+// 书皮模式：jacket 跨页封皮（一项声明整张书皮，右半封面/左半封底），
+// 或经典 cover + back-cover 两项分别声明。切换即重排内容（页码映射随之变化）
+const coverMode = ref<'jacket' | 'classic'>('jacket')
+const jacketMode = computed(() => coverMode.value === 'jacket')
+
 const direction = ref<ForwardDirection>('left')
 const keyboardMode = ref<KeyboardMode>('focus')
 const zoomMode = ref<ZoomMode>('both')
@@ -189,12 +194,12 @@ function onStackTap(page: number) {
 
 // 目录热区：与页面内 .toc-box 的绝对定位百分比一一对应，
 // 点击命中后跳转对应页（region.data 为目标页码）。
-// 页码对应新映射：封面纸(0,1)+内容自页 3 起，空白补位页 5、跨页大图 6-7、目录页 10
-const tocRegions: PageRegion[] = [
+// 页码按书皮模式取：两种模式页数相同（16 页），仅跨页/目录位置相差 1 页
+const tocRegions = computed<PageRegion[]>(() => [
   { x: 0.08, y: 0.66, w: 0.24, h: 0.14, data: 1 },
-  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 6 },
-  { x: 0.68, y: 0.66, w: 0.24, h: 0.14, data: 10 },
-]
+  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: jacketMode.value ? 6 : 7 },
+  { x: 0.68, y: 0.66, w: 0.24, h: 0.14, data: jacketMode.value ? 10 : 11 },
+])
 
 function onRegionTap(_page: number, region: PageRegion) {
   const target = Number(region.data)
@@ -263,19 +268,41 @@ function onZoomInput(event: Event) {
       @stack-tap="onStackTap"
       @region-tap="onRegionTap"
     >
-      <turn-item cover>
+      <!-- 书皮：jacket 模式一项声明整张书皮（双倍宽度内容，右半=封面、
+           左半=封底）；经典模式 cover / back-cover 两项分别声明 -->
+      <turn-item v-if="jacketMode" type="jacket">
+        <div class="jacket">
+          <div class="jacket-half jacket-back">
+            <span class="jacket-badge">vue-turn</span>
+            <h1 class="jacket-title">FIN</h1>
+            <p class="jacket-note">封底半区——同一项内容的左半，合上书从背后看就是它。</p>
+          </div>
+          <div class="jacket-half jacket-front">
+            <span class="cover-badge">vue-turn</span>
+            <h1 class="cover-title">TURN</h1>
+            <p class="cover-subtitle">基于 Three.js 的真实卷曲翻页</p>
+            <p class="cover-meta">Vue 3 · Three.js · TypeScript</p>
+          </div>
+        </div>
+      </turn-item>
+      <turn-item v-else type="cover">
         <div class="demo-page cover">
           <span class="cover-badge">vue-turn</span>
           <h1 class="cover-title">TURN</h1>
           <p class="cover-subtitle">基于 Three.js 的真实卷曲翻页</p>
           <p class="cover-meta">Vue 3 · Three.js · TypeScript</p>
         </div>
-        <template #back>
-          <div class="demo-page endpaper">
-            <span class="endpaper-mark">vue-turn</span>
-            <p class="endpaper-note">翻开封面即见——这一面与封面同属一张专用纸张，按 coverPreset 观感渲染。</p>
-          </div>
-        </template>
+      </turn-item>
+
+      <!-- 衬页示例：封面/封底纸张背面为固定空白纸页，需要封面底/封底里
+           内容时在对应位置自行添加普通页（本页即"封面底"） -->
+      <turn-item>
+        <div class="demo-page endpaper">
+          <span class="endpaper-mark">vue-turn</span>
+          <p class="endpaper-note">
+            翻开封面即见。衬页不再绑定封面纸张——需要封面底内容时，在封面后自行添加普通页即可。
+          </p>
+        </div>
       </turn-item>
 
       <turn-item>
@@ -362,8 +389,8 @@ export function curlPoint(s, θ, κ) {
             悬停页角查看折角预览（右上角可切换显示模式与阅读方向）。
           </p>
           <div class="toc-box">第 1 页 · 封面</div>
-          <div class="toc-box toc-box-mid">第 6 页 · 跨页大图</div>
-          <div class="toc-box toc-box-end">第 10 页 · 目录</div>
+          <div class="toc-box toc-box-mid">第 {{ jacketMode ? 6 : 7 }} 页 · 跨页大图</div>
+          <div class="toc-box toc-box-end">第 {{ jacketMode ? 10 : 11 }} 页 · 目录</div>
         </div>
       </turn-item>
 
@@ -382,23 +409,27 @@ export function curlPoint(s, θ, κ) {
             <li>两种镜像几何（A / B）统一处理左右与前进后退</li>
             <li>FlipSpec 纯函数描述每一次翻页的全部索引</li>
             <li>单页模式下铰链移到页缘，页面飞出画面</li>
-            <li>跨页未对齐左页时自动补空白页（第 5 页即补位页）</li>
+            <li>跨页未对齐左页时自动插空白页补位，内页区段为奇数时末尾补偶</li>
+            <li>type="jacket" 跨页封皮：右半封面、左半封底，复用跨页半图管线</li>
             <li>所有数学均有单元测试覆盖</li>
           </ul>
         </div>
       </turn-item>
 
-      <turn-item back-cover>
+      <!-- 衬页示例（封底里）：合上书前与封底纸张相对的一页 -->
+      <turn-item>
+        <div class="demo-page endpaper">
+          <p class="endpaper-note">封底里——合上书前与封底纸张相对的一页。</p>
+          <span class="endpaper-mark">FIN · vue-turn</span>
+        </div>
+      </turn-item>
+
+      <!-- jacket 模式的封底由书皮左半供给，无需再声明封底项 -->
+      <turn-item v-if="!jacketMode" type="back-cover">
         <div class="demo-page cover back-cover">
           <h1 class="cover-title small">FIN</h1>
           <p class="cover-subtitle">感谢阅读</p>
         </div>
-        <template #back>
-          <div class="demo-page endpaper">
-            <p class="endpaper-note">封底里——合上书前与最后一页相对的衬页。</p>
-            <span class="endpaper-mark">FIN · vue-turn</span>
-          </div>
-        </template>
       </turn-item>
 
       <template #fallback>
@@ -418,6 +449,13 @@ export function curlPoint(s, θ, κ) {
         </button>
       </div>
       <div v-show="settingsOpen" class="panel-body">
+        <label class="panel-row">
+          <span class="panel-label">书皮</span>
+          <select v-model="coverMode" class="panel-control">
+            <option value="jacket">jacket（跨页封皮）</option>
+            <option value="classic">cover + back-cover</option>
+          </select>
+        </label>
         <label class="panel-row">
           <span class="panel-label">显示模式</span>
           <select v-model="displayMode" class="panel-control">
@@ -855,7 +893,59 @@ export function curlPoint(s, θ, κ) {
   margin: 0;
 }
 
-/* 封面底/封底里：与封面同纸的衬页（#back 插槽），纸色暗于内页、纹理呼应封底 */
+/* 跨页封皮（type="jacket"）：离屏按双倍宽度光栅化，flex 两半各自撑满一页，
+   右半 = 封面、左半 = 封底，中缝为书脊（内缘内阴影加重模拟书脊凹陷） */
+.jacket {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.jacket-half {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  text-align: center;
+  color: #e8ecf4;
+}
+
+.jacket-front {
+  background: linear-gradient(200deg, #1d2738 0%, #0f1420 100%);
+  box-shadow: inset 28px 0 40px -28px rgba(0, 0, 0, 0.85);
+}
+
+.jacket-back {
+  background: linear-gradient(160deg, #0f1420 0%, #1d2738 100%);
+  box-shadow: inset -28px 0 40px -28px rgba(0, 0, 0, 0.85);
+}
+
+.jacket-badge {
+  padding: 6px 18px;
+  border: 1px solid rgba(232, 236, 244, 0.4);
+  border-radius: 999px;
+  font-size: 18px;
+  letter-spacing: 4px;
+}
+
+.jacket-title {
+  font-size: 90px;
+  letter-spacing: 24px;
+  text-indent: 24px;
+  margin: 0;
+}
+
+.jacket-note {
+  max-width: 22em;
+  font-size: 20px;
+  line-height: 1.8;
+  opacity: 0.6;
+  margin: 0;
+}
+
+/* 封面底/封底里：衬页现为普通内页（在封面/封底纸张后自行添加），纸色暗于内页 */
 .endpaper {
   align-items: center;
   justify-content: center;

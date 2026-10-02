@@ -1,5 +1,16 @@
 export type ForwardDirection = 'left' | 'right'
 
+/**
+ * turn-item 类型标注（type prop）：
+ * - cover 封面：独占封面纸张
+ * - back-cover 封底：独占封底纸张
+ * - jacket 跨页封皮：一张双倍宽度内容同时供给封面与封底（右半 = 封面、
+ *   左半 = 封底），不能再与 cover / back-cover 混用
+ * 未声明的项为普通内容页；全书未声明封面/封底时由位置兜底（首个内容面
+ * 提升为封面、末个提升为封底）
+ */
+export type TurnItemType = 'cover' | 'back-cover' | 'jacket'
+
 export type SheetGeometry = 'A' | 'B'
 
 // 缩放手势模式：off 关闭、wheel 滚轮步进、dblclick 双击切换（单击翻页需延迟判定）、both 两者

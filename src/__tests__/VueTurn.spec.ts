@@ -1658,7 +1658,7 @@ describe('VueTurn', () => {
     expect(mocks.startFlip.mock.calls[1]?.[5]).toEqual({})
   })
 
-  it('supports declared cover/back-cover sheets with #back inside faces', async () => {
+  it('supports declared cover/back-cover sheets via type annotations', async () => {
     mocks.elementToTexture.mockReset()
     mocks.elementToTexture.mockImplementation((el) =>
       Promise.resolve({ ...fakeTexture(), tag: el.textContent ?? '' }),
@@ -1680,17 +1680,12 @@ describe('VueTurn', () => {
               },
               {
                 default: () => [
-                  // 封面 + 封面底同纸；中间两个内容页；封底里 + 封底同纸
-                  h(TurnItem, { cover: true }, {
-                    default: () => [h('div', 'cover')],
-                    back: () => [h('div', 'inside-front')],
-                  }),
+                  // 封面 + 封底各独占一张专用纸张，中间两个内容页；
+                  // 封面纸张背面/封底里侧为固定空白纸页（无独立内容面）
+                  h(TurnItem, { type: 'cover' }, { default: () => [h('div', 'cover')] }),
                   h(TurnItem, null, { default: () => [h('div', 'page 1')] }),
                   h(TurnItem, null, { default: () => [h('div', 'page 2')] }),
-                  h(TurnItem, { backCover: true }, {
-                    default: () => [h('div', 'back cover')],
-                    back: () => [h('div', 'inside-back')],
-                  }),
+                  h(TurnItem, { type: 'back-cover' }, { default: () => [h('div', 'back cover')] }),
                 ],
               },
             ),
@@ -1701,8 +1696,8 @@ describe('VueTurn', () => {
     await flushPromises()
     // 封面纸(0,1) + 内容(2,3) + 封底纸(4,5) = 6 页，无补位空白
     expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 1, 4, 5])
-    // 封面底/封底里作为独立离屏面被光栅化：6 个面全部有内容 → 6 次光栅化
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(6)
+    // 4 个内容面全部光栅化（空白纸页走纯色纸纹，不光栅化）
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(4)
     const calls = mocks.setStaticPages.mock.calls
     const lastCall = calls[calls.length - 1]?.[0]
     // 合书态：封面居中单页
@@ -1710,9 +1705,7 @@ describe('VueTurn', () => {
     wrapper.unmount()
   })
 
-  it('recognizes kebab-case back-cover attribute from compiled templates', async () => {
-    // SFC 模板编译后属性以 kebab-case 落在 vnode.props 上（{ "back-cover": "" }），
-    // 回归：collectPages 必须按 kebab 键读取，否则封底声明被忽略、#back 面丢失
+  it('renders a jacket as one double-width face split into cover/back halves', async () => {
     mocks.elementToTexture.mockReset()
     mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
     const Host = defineComponent({
@@ -1732,12 +1725,8 @@ describe('VueTurn', () => {
               },
               {
                 default: () => [
-                  h(TurnItem, { cover: true }, { default: () => [h('div', 'cover')] }),
+                  h(TurnItem, { type: 'jacket' }, { default: () => [h('div', 'jacket')] }),
                   h(TurnItem, null, { default: () => [h('div', 'page 1')] }),
-                  h(TurnItem, { 'back-cover': true } as unknown as { backCover: boolean }, {
-                    default: () => [h('div', 'back cover')],
-                    back: () => [h('div', 'inside-back')],
-                  }),
                 ],
               },
             ),
@@ -1746,12 +1735,41 @@ describe('VueTurn', () => {
     })
     const wrapper = mount(Host)
     await flushPromises()
-    // 封底里作为独立离屏面被收集（封面无 #back → 4 面：cover / page 1 / inside-back / back cover）
-    const faces = wrapper.findAll('.page-source').map((d) => d.text())
-    expect(faces).toHaveLength(4)
-    expect(faces[2]).toContain('inside-back')
-    // 封底里 = 页索引 4、封底 = 5（内容区段 1 页为奇 → 页 3 补偶空白）
+    // jacket 是唯一的双倍宽度离屏面（右半封面 / 左半封底）
+    const faces = wrapper.findAll('.page-source')
+    expect(faces).toHaveLength(2)
+    const widthOf = (el: Element) => Number.parseInt((el as HTMLElement).style.width, 10)
+    expect(widthOf(faces[0]!.element)).toBe(widthOf(faces[1]!.element) * 2)
+    // 封面页(0)=jacket 右半、空白纸页(1)、内容(2)、补偶(3)、封底里(4)、封底(5)=jacket 左半
     expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 1, 4, 5])
+    wrapper.unmount()
+  })
+
+  it('refuses to render the book when item type annotations are invalid', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    const Host = defineComponent({
+      setup() {
+        return () =>
+          h('div', [
+            h(VueTurn, {}, {
+              default: () => [
+                h(TurnItem, { type: 'cover' }, { default: () => [h('div', 'cover')] }),
+                h(TurnItem, { type: 'cover' }, { default: () => [h('div', 'dup')] }),
+                h(TurnItem, null, { default: () => [h('div', 'page')] }),
+              ],
+            }),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    // 重复 type 声明：整本书拒绝渲染（无页、无光栅化），控制台报错
+    expect(wrapper.findAll('.page-source')).toHaveLength(0)
+    expect(mocks.elementToTexture).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('本书拒绝渲染'))
+    error.mockRestore()
     wrapper.unmount()
   })
 

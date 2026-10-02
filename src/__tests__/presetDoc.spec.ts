@@ -123,11 +123,11 @@ function createHost(props: HostProps = {}) {
             },
             {
               default: () => [
-                h(TurnItem, { cover: true }, { default: () => [h('div', 'cover')] }),
+                h(TurnItem, { type: 'cover' }, { default: () => [h('div', 'cover')] }),
                 ...Array.from({ length: 4 }, (_, i) =>
                   h(TurnItem, null, { default: () => [h('div', `page ${i + 1}`)] }),
                 ),
-                h(TurnItem, { backCover: true }, { default: () => [h('div', 'back cover')] }),
+                h(TurnItem, { type: 'back-cover' }, { default: () => [h('div', 'back cover')] }),
               ],
             },
           ),
@@ -271,7 +271,7 @@ describe('README：封面与封底（coverPreset）', () => {
   })
 
   it('封面/封底独占纸张：页索引 0,1 与末两索引挂封面图层', async () => {
-    // 7 面（封面 + 4 内页 + 封底），封面无 #back → 内页区段 4 页 + 补 1 空白
+    // 7 面（封面 + 4 内页 + 封底），内页区段 4 页 + 补 1 空白
     const host = await mountBook()
     expect(mocks.setCoverPages).toHaveBeenLastCalledWith([0, 1, 6, 7])
     expect(host.inst.numPages).toBe(8)

@@ -13,46 +13,24 @@ describe('buildPageSources', () => {
   it('marks the first item as the cover front regardless of spread', () => {
     const sources = buildPageSources([item(true), item(), item()])
     expect(sources[0]).toMatchObject({ itemIndex: 0, region: 'full', blank: false, cover: true })
-    // 封面 spread 标记不生效：占 1 页而非左右两半
-    expect(sources[1]).toMatchObject({ cover: true })
+    // 封面内容面的 spread 标记不生效：占 1 页而非左右两半（跨页封面请用 jacket）
+    expect(sources[1]).toMatchObject({ cover: true, blank: true })
   })
 
   it('reserves a dedicated sheet for the cover with a blank inside face', () => {
-    // 未定义封面底：p0=封面、p1=空白衬页（同纸，cover），内容从 p2 起
+    // 封面纸张背面恒为空白纸页：p0=封面、p1=空白（同纸，cover），内容从 p2 起
     const sources = buildPageSources([item(), item(), item()])
     expect(sources[0]).toMatchObject({ itemIndex: 0, cover: true, blank: false })
     expect(sources[1]).toMatchObject({ itemIndex: -1, cover: true, blank: true })
     expect(sources[2]).toMatchObject({ itemIndex: 1, cover: false, blank: false })
   })
 
-  it('places declared cover back content on the cover sheet inside face', () => {
-    const sources = buildPageSources([
-      item(false, 'coverFront'),
-      item(false, 'coverBack'),
-      item(),
-      item(),
-    ])
-    expect(sources[0]).toMatchObject({ itemIndex: 0, cover: true })
-    expect(sources[1]).toMatchObject({ itemIndex: 1, cover: true, blank: false })
-    expect(sources[2]).toMatchObject({ itemIndex: 2, cover: false })
-  })
-
   it('reserves a dedicated sheet for the back cover with a blank inside face', () => {
-    // 未定义封底里：末索引=封底、末索引-1=空白衬页（同纸，cover）
+    // 封底纸张里侧恒为空白纸页：末索引=封底、末索引-1=空白（同纸，cover）
     // 封面纸(0,1) + 内容(2) + 补偶(3) + 封底纸(4,5)
     const sources = buildPageSources([item(), item(), item()])
     expect(sources[5]).toMatchObject({ itemIndex: 2, cover: true, blank: false })
     expect(sources[4]).toMatchObject({ itemIndex: -1, cover: true, blank: true })
-  })
-
-  it('places declared back cover inside content on the back sheet front face', () => {
-    const sources = buildPageSources([
-      item(),
-      item(false, 'backCoverBack'),
-      item(false, 'backCoverFront'),
-    ])
-    expect(sources[2]).toMatchObject({ itemIndex: 1, cover: true, blank: false })
-    expect(sources[3]).toMatchObject({ itemIndex: 2, cover: true, blank: false })
   })
 
   it('maps plain items one page each starting at index 2', () => {
@@ -160,34 +138,72 @@ describe('buildPageSources', () => {
   })
 })
 
+describe('buildPageSources with a jacket (coverSpread)', () => {
+  it('splits the jacket content into cover right half and back cover left half', () => {
+    // 封面纸(0,1) + 内容(2,3,4) + 补偶(5) + 封底纸(6,7)：
+    // 封面页取 jacket 右半、封底页取 jacket 左半，同源（itemIndex 0）
+    const sources = buildPageSources([item(false, 'coverSpread'), item(), item(), item()])
+    expect(sources).toHaveLength(8)
+    expect(sources[0]).toMatchObject({ itemIndex: 0, region: 'right', blank: false, cover: true })
+    expect(sources[7]).toMatchObject({ itemIndex: 0, region: 'left', blank: false, cover: true })
+    expect(sources.slice(2, 5).every((s) => s.itemIndex !== 0 && !s.cover)).toBe(true)
+  })
+
+  it('keeps the jacket halves as dedicated sheets even with content items', () => {
+    // jacket 已供给封面与封底：内容项不再被位置兜底提升，全部保持普通页
+    const sources = buildPageSources([
+      item(false, 'coverSpread'),
+      item(),
+      item(false, 'backCoverFront'),
+    ])
+    expect(sources[0]).toMatchObject({ itemIndex: 0, region: 'right', cover: true })
+    expect(sources[2]).toMatchObject({ itemIndex: 1, region: 'full', cover: false })
+    expect(sources[5]).toMatchObject({ itemIndex: 2, region: 'full', cover: true })
+  })
+
+  it('maps a jacket-only book to two half pages around blank inside faces', () => {
+    const sources = buildPageSources([item(false, 'coverSpread')])
+    expect(sources).toHaveLength(4)
+    expect(sources[0]).toMatchObject({ itemIndex: 0, region: 'right', cover: true })
+    expect(sources[1]).toMatchObject({ blank: true, cover: true })
+    expect(sources[2]).toMatchObject({ blank: true, cover: true })
+    expect(sources[3]).toMatchObject({ itemIndex: 0, region: 'left', cover: true })
+  })
+
+  it('splits the jacket halves in single-page mode too (no ignoring, no blanks)', () => {
+    // 单页模式书不能没有封面：封面显示右半、封底显示左半，无空白纸页
+    const sources = buildPageSources([item(false, 'coverSpread'), item(), item()], {
+      singlePage: true,
+    })
+    expect(sources).toHaveLength(4)
+    expect(sources[0]).toMatchObject({ itemIndex: 0, region: 'right', cover: true })
+    expect(sources[1]).toMatchObject({ itemIndex: 1, region: 'full', cover: false })
+    expect(sources[2]).toMatchObject({ itemIndex: 2, region: 'full', cover: false })
+    expect(sources[3]).toMatchObject({ itemIndex: 0, region: 'left', cover: true })
+  })
+
+  it('resolves a defensive coverSpread + coverFront conflict deterministically', () => {
+    // 上层校验已拒绝 jacket 与 cover 混用；纯函数兜底为 coverFront 作封面、
+    // coverSpread 左半作封底（首个标注生效）
+    const sources = buildPageSources([item(false, 'coverFront'), item(false, 'coverSpread')])
+    expect(sources[0]).toMatchObject({ itemIndex: 0, region: 'full', cover: true })
+    expect(sources[3]).toMatchObject({ itemIndex: 1, region: 'left', cover: true })
+  })
+
+  it('lists the jacket sheets in coverPageIndices', () => {
+    const sources = buildPageSources([item(false, 'coverSpread'), item(), item()])
+    // 封面纸(0,1) + 内容(2,3) + 封底纸(4,5)
+    expect(coverPageIndices(sources)).toEqual([0, 1, 4, 5])
+  })
+})
+
 describe('buildPageSources in single-page mode', () => {
   it('adds no blank endpapers or parity blanks', () => {
-    // 封面(0) + 内容(1,2,3) + 封底(4)：无衬页/补位页，总页数不再保证偶数
+    // 封面(0) + 内容(1,2,3) + 封底(4)：无空白纸页/补位页，总页数不再保证偶数
     const sources = buildPageSources([item(), item(), item(), item(), item()], { singlePage: true })
     expect(sources).toHaveLength(5)
     expect(sources.every((s) => !s.blank)).toBe(true)
     expect(sources.map((s) => s.itemIndex)).toEqual([0, 1, 2, 3, 4])
-  })
-
-  it('drops declared #back faces along with auto endpapers', () => {
-    // 一页只有一面：封面底/封底里依附于纸张背面，单页翻页背面恒为空白，
-    // 衬页面没有任何显示机会——显式声明的 #back 内容同样不占页
-    const sources = buildPageSources(
-      [
-        item(false, 'coverFront'),
-        item(false, 'coverBack'),
-        item(),
-        item(false, 'backCoverBack'),
-        item(false, 'backCoverFront'),
-      ],
-      { singlePage: true },
-    )
-    expect(sources).toHaveLength(3)
-    expect(sources.every((s) => !s.blank)).toBe(true)
-    expect(sources.map((s) => s.itemIndex)).toEqual([0, 2, 4])
-    expect(sources[0]).toMatchObject({ cover: true })
-    expect(sources[1]).toMatchObject({ cover: false })
-    expect(sources[2]).toMatchObject({ cover: true })
   })
 
   it('ignores spread items and warns', () => {
@@ -215,17 +231,6 @@ describe('coverPageIndices', () => {
   it('lists the four cover-sheet pages in order', () => {
     // 封面纸(0,1) + 内容(2) + 补偶(3) + 封底纸(4,5)
     const sources = buildPageSources([item(), item(), item()])
-    expect(coverPageIndices(sources)).toEqual([0, 1, 4, 5])
-  })
-
-  it('includes declared cover back and back cover inside faces', () => {
-    const sources = buildPageSources([
-      item(false, 'coverFront'),
-      item(false, 'coverBack'),
-      item(),
-      item(false, 'backCoverBack'),
-      item(false, 'backCoverFront'),
-    ])
     expect(coverPageIndices(sources)).toEqual([0, 1, 4, 5])
   })
 

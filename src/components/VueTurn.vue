@@ -235,7 +235,8 @@ const slots = useSlots()
 // 纯领域逻辑见 composables/usePageSources.ts
 const { pageFaces } = usePageSources(slots)
 
-// 页源映射：封面/封底各占专用纸张（背面=#back 内容）、跨页奇数对齐补位、
+// 页源映射：封面/封底各占专用纸张（背面为固定空白纸页，jacket 右半封面/
+// 左半封底）、跨页奇数对齐补位、
 // 内页区段奇数补偶；单页模式（一页只有一面）不自动补空白页/衬页，跨页项
 // 自动忽略并警告（纯函数实现见 lib/pageMapping.ts，含单测）。
 // 依赖 displayedPages：模式切换会改变页数与页码语义，切换时须同步页数并
