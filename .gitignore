@@ -37,3 +37,6 @@ __screenshots__/
 
 # npm pack 产物
 *.tgz
+
+# 个人备忘(不入库)
+PUBLISH.md
