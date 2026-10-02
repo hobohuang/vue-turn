@@ -400,7 +400,11 @@ export function usePageTextures(options: PageTexturesOptions) {
   // （flipSpec：左槽 = 起始页 +1）会让按页码取半图的拆分态左右互换——
   // 静止合并整页是方向无关的（左半恒在左），拆分态统一按屏幕侧解析即可
   // 在翻起/落下的瞬间与合并态无缝衔接。side='center'（合并整页、单页
-  // 模式）或非跨页页取页面自身纹理
+  // 模式）或非跨页页取页面自身纹理。
+  // 例外：跨页封皮页（封面/封底纸张）的半图身份固定（右半=封面、左半=
+  // 封底），恒取自身区域的半图、与屏幕侧无关——它们是永久单侧半页面，
+  // 不参与内页跨页的合并/拆分态切换；RTL 翻页若按屏幕侧解析，封面纸张
+  // 会错拿封底半图导致翻页中内容跳变
   function textureAtSide(
     index: number,
     side: 'left' | 'right' | 'center',
@@ -408,7 +412,8 @@ export function usePageTextures(options: PageTexturesOptions) {
     if (side !== 'center') {
       const source = options.pageSources.value[index]
       if (source && !source.blank && source.region !== 'full') {
-        return spreadHalves.get(source.itemIndex)?.[side] ?? textures.get(index) ?? null
+        const half = source.cover ? source.region : side
+        return spreadHalves.get(source.itemIndex)?.[half] ?? textures.get(index) ?? null
       }
     }
     return textures.get(index) ?? null

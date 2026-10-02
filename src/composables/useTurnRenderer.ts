@@ -2,6 +2,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type * as THREE from 'three'
 
 import { TurnScene, type PagePick } from '../lib/TurnScene'
+import type { SpineShadeU } from '../lib/spineShading'
 import type {
   FlipSheetOptions,
   FlipSpec,
@@ -21,6 +22,8 @@ export interface TurnRendererOptions {
   coverAmbient?: number
   /** 封面/封底灯光组：方向光强度 */
   coverGloss?: number
+  /** 书脊内阴影开关（挂载时冻结） */
+  spineShadow?: boolean
   fitMargin?: number
   maxZoom?: number
   // WebGL 上下文恢复回调
@@ -68,8 +71,15 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     textureOf: (index: number) => THREE.Texture | null,
     // false 表示翻页前置布局，相机由翻页动画接管
     refit = true,
+    // 书脊内阴影 U 定位回调（书脊阴影关闭时由调用方省略）
+    spineOf?: (index: number, placement: StaticPlacement) => SpineShadeU | null,
   ) {
-    scene?.setStaticPages(placements, textureOf, refit)
+    scene?.setStaticPages(placements, textureOf, refit, spineOf)
+  }
+
+  // 书脊内阴影的页数缩放系数（spineScaleOf，随页数变化实时更新）
+  function setSpineScale(scale: number) {
+    scene?.setSpineScale(scale)
   }
 
   function applyStaticTexture(index: number, texture: THREE.Texture) {
@@ -235,6 +245,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     webglSupported,
     maxAnisotropy,
     setStaticPages,
+    setSpineScale,
     applyStaticTexture,
     setCoverPages,
     setStacks,

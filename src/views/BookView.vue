@@ -837,20 +837,11 @@ export function curlPoint(s, θ, κ) {
   padding: 72px 64px;
   display: flex;
   flex-direction: column;
-  /* 书脊方向的水平渐变：外缘浅、书脊侧深，且书脊边颜色沿整条边恒定。
-     深端取组件空白补位页的纯色（textureFactory BLANK_PAGE_COLOR #f5f2e9）——
-     补位空白页没有 DOM 内容、以恒定纯色渲染，只有书脊边颜色恒定的渐变
-     才能与它严丝合缝（此前的 150deg 对角渐变沿书脊边由浅变深，底部色差
-     最明显）。左页外缘在左，故 90deg 浅 → 深 */
-  background: linear-gradient(90deg, #fdfcf9 0%, #f5f2e9 100%);
+  /* 纯色纸底（与空白补位页纸色一致）：书脊侧的明暗渐变由组件的
+     spineShadow 书脊内阴影渲染，内容不再手绘 */
+  background: #f5f2e9;
   color: #2b2a26;
   font-family: 'Georgia', 'Noto Serif SC', serif;
-}
-
-/* 书脊右页：渐变镜像为 270deg——左右两页都在书脊侧偏深（#f5f2e9）、
-   外缘偏浅，摊开时书脊两侧颜色衔接一致 */
-.demo-page.right {
-  background: linear-gradient(270deg, #fdfcf9 0%, #f5f2e9 100%);
 }
 
 .cover {
@@ -894,7 +885,8 @@ export function curlPoint(s, θ, κ) {
 }
 
 /* 跨页封皮（type="jacket"）：离屏按双倍宽度光栅化，flex 两半各自撑满一页，
-   右半 = 封面、左半 = 封底，中缝为书脊（内缘内阴影加重模拟书脊凹陷） */
+   右半 = 封面、左半 = 封底。书脊侧的内阴影由组件 spineShadow 渲染，
+   这里只负责封面/封底的配色 */
 .jacket {
   display: flex;
   width: 100%;
@@ -914,12 +906,10 @@ export function curlPoint(s, θ, κ) {
 
 .jacket-front {
   background: linear-gradient(200deg, #1d2738 0%, #0f1420 100%);
-  box-shadow: inset 28px 0 40px -28px rgba(0, 0, 0, 0.85);
 }
 
 .jacket-back {
   background: linear-gradient(160deg, #0f1420 0%, #1d2738 100%);
-  box-shadow: inset -28px 0 40px -28px rgba(0, 0, 0, 0.85);
 }
 
 .jacket-badge {

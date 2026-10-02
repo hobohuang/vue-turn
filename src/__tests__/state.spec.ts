@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
       ) => void
     >(),
     setStaticPages: vi.fn<() => void>(),
+    setSpineScale: vi.fn<(scale: number) => void>(),
     applyStaticTexture: vi.fn<() => void>(),
     setCoverPages: vi.fn<() => void>(),
     setStacks: vi.fn<() => void>(),
@@ -50,6 +51,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     webglSupported: ref(true),
     maxAnisotropy: ref(8),
     setStaticPages: mocks.setStaticPages,
+    setSpineScale: mocks.setSpineScale,
     applyStaticTexture: mocks.applyStaticTexture,
     setCoverPages: mocks.setCoverPages,
     startFlip: mocks.startFlip,

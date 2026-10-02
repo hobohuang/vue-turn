@@ -39,6 +39,7 @@ import { ZOOM_TOLERANCE } from '../composables/useZoomPan'
 import { spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '../lib/flipSpec'
 import { positive } from '../lib/math'
 import { buildPageSources, coverPageIndices } from '../lib/pageMapping'
+import { spineScaleOf, spineUOfPlacement } from '../lib/spineShading'
 import { mergeLook, resolveFold, resolveLook } from '../lib/presets'
 import type {
   BeforeFlipContext,
@@ -108,6 +109,9 @@ const props = withDefaults(
     zoomMode?: ZoomMode
     /** 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页变化，可悬停/点击跳页） */
     stack?: boolean
+    /** 书脊内阴影：所有书页靠书脊一侧的渐变变暗（默认开启，false 关闭）。
+     * 长在纸面上、跟随卷曲/折页形变；单双页与阅读方向自动定侧。挂载时冻结 */
+    spineShadow?: boolean
   }>(),
   {
     pageAspect: 0.75,
@@ -129,6 +133,7 @@ const props = withDefaults(
     maxZoom: 3,
     zoomMode: 'off',
     stack: true,
+    spineShadow: true,
   },
 )
 
@@ -204,6 +209,8 @@ const renderer = useTurnRenderer({
   // 封面/封底光影：coverPreset 独立灯光组
   coverAmbient: coverLook.ambient,
   coverGloss: coverLook.gloss,
+  // 书脊内阴影开关（挂载时冻结）
+  spineShadow: props.spineShadow,
   fitMargin: props.fitMargin,
   // 传入校验后的值并 watch 同步：maxZoom 为交互参数（非挂载冻结的观感
   // 参数），运行时修改应生效，避免交互层钳制与场景钳制漂移
@@ -221,6 +228,7 @@ const {
   webglSupported,
   maxAnisotropy,
   setStaticPages,
+  setSpineScale,
   applyStaticTexture,
   setCoverPages,
   setStacks,
@@ -283,7 +291,7 @@ watch(safeMaxZoom, (value) => {
 // 修改不生效也不报错——业务方最容易踩的"改了没反应"静默坑
 if (import.meta.env.DEV) {
   watch(
-    () => [props.pageAspect, props.fitMargin, props.preset, props.coverPreset, props.look, props.coverLook],
+    () => [props.pageAspect, props.fitMargin, props.preset, props.coverPreset, props.look, props.coverLook, props.spineShadow],
     () => {
       console.warn(
         '[vue-turn] 观感/几何参数（preset/coverPreset/look/coverLook/pageAspect/fitMargin）' +
@@ -434,6 +442,16 @@ watch(
 // 现有网格；消费方（纹理/交互层）在调用时点读取，不做响应式依赖
 const lastPlacements = shallowRef<StaticPlacement[]>([])
 
+// 书脊内阴影 U 定位：按当前显示模式/阅读方向/页索引计算该页书脊与外缘的
+// U 坐标（lib/spineShading 纯函数）；prop 关闭时传 undefined 彻底不注入
+function spineOf(index: number, placement: StaticPlacement) {
+  return spineUOfPlacement(placement, {
+    displayedPages: state.displayedPages.value,
+    ltr: props.forwardDirection === 'left',
+    numPages: pageCount.value,
+  })
+}
+
 // ---------------------------------------------------------------------------
 // 纸叠：书本左右两侧的页层厚度条带（厚度随翻页在两侧间转移）
 // （渲染几何与翻页过渡的计算见 composables/usePageStack.ts）
@@ -450,6 +468,9 @@ const { applyStacksIdle, applyStacksFlip, currentStackSides } = usePageStack({
 
 function renderStatic() {
   if (state.isFlipping.value) return
+  // 书脊内阴影随页数缩放（薄书浅、厚书封顶）：页数变化经既有 watch 触发
+  // renderStatic，在此先行更新系数，随后的 setStaticPages 写入各页 uniforms
+  setSpineScale(spineScaleOf(pageCount.value))
   const placements = spreadLayout({
     currentPage: state.currentPage.value,
     displayedPages: state.displayedPages.value,
@@ -464,15 +485,20 @@ function renderStatic() {
   const spreadStarts = new Set(merged.filter((p) => p.spread).map((p) => p.index))
   // 同步封面/封底索引：静态页与后续翻页纸张据此挂封面图层
   setCoverPages(coverPageIndices(pageSources.value))
-  setStaticPages(merged, (index) => {
-    if (spreadStarts.has(index)) {
-      const source = pageSources.value[index]
-      if (!source) return null
-      // 跨页整图基准纹理以 itemIndex 为 key（与单页纹理的页索引 key 不同）
-      return getSpreadFullTexture(source.itemIndex)
-    }
-    return textures.get(index) ?? null
-  })
+  setStaticPages(
+    merged,
+    (index) => {
+      if (spreadStarts.has(index)) {
+        const source = pageSources.value[index]
+        if (!source) return null
+        // 跨页整图基准纹理以 itemIndex 为 key（与单页纹理的页索引 key 不同）
+        return getSpreadFullTexture(source.itemIndex)
+      }
+      return textures.get(index) ?? null
+    },
+    true,
+    props.spineShadow ? spineOf : undefined,
+  )
   applyStacksIdle()
 }
 
@@ -614,7 +640,7 @@ function flip(trigger: FlipDirection) {
   state.startFlip()
   emit('flip-start', trigger)
   // 翻页前置布局：相机由翻页动画接管（静态跨页半页按槽位解析半图）
-  setStaticPages(spec.staticPages, staticTextures(spec), false)
+  setStaticPages(spec.staticPages, staticTextures(spec), false, props.spineShadow ? spineOf : undefined)
   applyStacksFlip(spec)
   const onDone = () => {
     state.commitFlip(spec.delta)

@@ -89,6 +89,7 @@ const mocks = vi.hoisted(() => {
     panBy: vi.fn<(dx: number, dy: number) => void>(),
     pickPage: vi.fn<(x: number, y: number) => unknown>(),
     setStaticPages: vi.fn<(placements: unknown[], textureOf: (index: number) => unknown) => void>(),
+    setSpineScale: vi.fn<(scale: number) => void>(),
     applyStaticTexture: vi.fn<(index: number, texture: FakeTexture) => void>(),
     setCoverPages: vi.fn<(indices: number[]) => void>(),
     setStacks: vi.fn<() => void>(),
@@ -104,6 +105,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     webglSupported: ref(true),
     maxAnisotropy: ref(8),
     setStaticPages: mocks.setStaticPages,
+    setSpineScale: mocks.setSpineScale,
     applyStaticTexture: mocks.applyStaticTexture,
     setCoverPages: mocks.setCoverPages,
     startFlip: mocks.startFlip,
@@ -1742,6 +1744,53 @@ describe('VueTurn', () => {
     expect(widthOf(faces[0]!.element)).toBe(widthOf(faces[1]!.element) * 2)
     // 封面页(0)=jacket 右半、空白纸页(1)、内容(2)、补偶(3)、封底里(4)、封底(5)=jacket 左半
     expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 1, 4, 5])
+    wrapper.unmount()
+  })
+
+  it('resolves the jacket halves by region, not screen side, in RTL flips', async () => {
+    // RTL 封面翻开：纸张前表面 = 封面半图（右半，offset.x = 0.5）。
+    // 回归：半图若按屏幕侧解析（几何 B → 屏幕左侧），封面纸张会错拿
+    // 封底左半图，翻页中内容从封底跳变为封面
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    const Host = defineComponent({
+      setup() {
+        const turnRef = ref<TurnInstance | null>(null)
+        const page = ref(1)
+        return () =>
+          h('div', [
+            h(
+              VueTurn,
+              {
+                ref: turnRef,
+                modelValue: page.value,
+                forwardDirection: 'right',
+                'onUpdate:modelValue': (v: number) => {
+                  page.value = v
+                },
+              },
+              {
+                default: () => [
+                  h(TurnItem, { type: 'jacket' }, { default: () => [h('div', 'jacket')] }),
+                  h(TurnItem, null, { default: () => [h('div', 'page 1')] }),
+                ],
+              },
+            ),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
+    inst.next()
+    await flushPromises()
+    const front = mocks.startFlip.mock.calls[0]?.[1] as {
+      offset: { set: (...args: number[]) => void }
+    } | null
+    expect(front).not.toBeNull()
+    // 右半图克隆的标志：offset.set(0.5, 0)（左半图克隆不设 offset）
+    expect(front!.offset.set).toHaveBeenCalledWith(0.5, 0)
     wrapper.unmount()
   })
 

@@ -6,6 +6,7 @@ import { PAGE_HEIGHT, sheetWorldWidth } from './flipSpec'
 import { clamp, positive } from './math'
 import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from './pageFold'
 import { curledColumns, easeInOutCubic } from './pageCurl'
+import type { SpineShadeU } from './spineShading'
 import type {
   FlipSheetOptions,
   FlipSpec,
@@ -48,6 +49,31 @@ const CURL_LIFT_Y_TOP_BIAS = 0.65
 // fold 路径翘起权重的爬坡参考高度（占页宽比例）：顶点翘起权重取 fold 自身
 // 抬升高度除以该值并钳制到 1——折缝圆弧段 z 平滑上升，权重随之从 0 爬到 1
 const FOLD_LIFT_RAMP = 0.25
+// 书脊内阴影：页面材质注入的"缝谷"渐变变暗，模仿真实书页装订侧的曲面
+// 受光——深色缝芯（窄、深）+ 长尾缓降（宽、浅，书页拱起的曲面感）+ 外缘
+// 微暗（纸层堆叠）。全部强度/宽度乘页数缩放系数（spineScaleOf），上限即
+// scale=1 的照片匹配值；缩放曲线与常量不对外暴露
+const SPINE_CORE = 0.45
+const SPINE_CORE_W = 0.02
+const SPINE_TAIL = 0.2
+const SPINE_TAIL_W = 0.18
+const SPINE_OUTER = 0.1
+const SPINE_OUTER_W = 0.04
+
+/** 书脊内阴影的注入 uniforms（挂在材质 userData 上跨编译复用）：
+ * 几何（uSpineU/uSpineOuter/uSpineDual）按页更新，六项强度/宽度
+ * 随页数缩放系数实时更新 */
+interface SpineShadeUniforms {
+  uSpineU: { value: number }
+  uSpineOuter: { value: number }
+  uSpineDual: { value: number }
+  uCore: { value: number }
+  uCoreW: { value: number }
+  uTail: { value: number }
+  uTailW: { value: number }
+  uOuter: { value: number }
+  uOuterW: { value: number }
+}
 
 function createRenderer(): THREE.WebGLRenderer | null {
   // 探测与渲染共用同一 canvas：探测用的 context 无法显式释放，弃置会
@@ -74,6 +100,8 @@ export interface TurnSceneOptions {
   coverAmbient?: number
   /** 封面/封底灯光组：方向光（纸张光泽）强度 */
   coverGloss?: number
+  /** 书脊内阴影：所有书页靠书脊一侧的渐变变暗（默认开启），挂载时冻结 */
+  spineShadow?: boolean
   // 相机适配边距（视口外扩比例）
   fitMargin?: number
   // 渲染像素比上限
@@ -232,6 +260,9 @@ export class TurnScene {
   private readonly staticMeshes = new Map<number, StaticEntry>()
   // 封面/封底页索引集合：这些页的网格挂到封面图层（封面灯光照亮）
   private readonly coverPages = new Set<number>()
+  // 书脊内阴影开关（挂载时冻结）与页数缩放系数（随页数变化实时更新）
+  private readonly spineShadow: boolean
+  private spineScale = 1
   private stackFrom: StackVisual | null = null
   private stackTo: StackVisual | null = null
   private sheet: SheetState | null = null
@@ -253,6 +284,7 @@ export class TurnScene {
     // 会让卷曲形变整页塌缩到书脊
     this.nPolygons = Math.max(2, Math.round(positive(options.nPolygons ?? 64, 64)))
     this.curl = options.curl ?? 0.8
+    this.spineShadow = options.spineShadow ?? true
     this.sheetWidth = sheetWorldWidth(this.pageAspect)
     this.pageFitWidth = this.sheetWidth * 2
     this.targetFitWidth = this.sheetWidth * 2
@@ -375,11 +407,111 @@ export class TurnScene {
     if (this.rig.refit()) this.markDirty()
   }
 
+  // 页数缩放系数（spineScaleOf，0~1 封顶）：书越厚缝谷越深越宽。
+  // 更新后由调用方的 setStaticPages 把新系数写入各页 uniforms
+  setSpineScale(scale: number) {
+    const next = Number.isFinite(scale) ? clamp(scale, 0, 1) : 1
+    if (this.spineScale === next) return
+    this.spineScale = next
+    this.markDirty()
+  }
+
+  // 书脊内阴影：往页面材质注入"缝谷"渐变变暗的片段着色——按 UV 到书脊
+  // U 坐标的距离做双分量指数衰减（深缝芯 + 长尾缓降），叠加外缘微暗。
+  // 阴影按 UV 计算并乘入漫反射色——长在纸面上，随卷曲/折页顶点形变，
+  // 翻页中不脱落。u=null 时全部强度置 0（保留注入，布局切换不重编译）。
+  // 材质各自持有 uniforms 实例（每页书脊位置不同），GLSL 相同故程序可共享
+  private applySpineShading(material: THREE.MeshLambertMaterial, u: SpineShadeU | null) {
+    if (!this.spineShadow) return
+    // USE_UV 强制声明 vUv：页面可能暂无 map（纹理未就绪），Lambert 默认
+    // 不声明 uv varying
+    if (material.defines?.USE_UV === undefined) {
+      material.defines = { ...material.defines, USE_UV: '' }
+    }
+    if (material.userData.spineUniforms === undefined) {
+      const uniforms: SpineShadeUniforms = {
+        uSpineU: { value: 0 },
+        uSpineOuter: { value: 0 },
+        uSpineDual: { value: 0 },
+        uCore: { value: 0 },
+        uCoreW: { value: 0 },
+        uTail: { value: 0 },
+        uTailW: { value: 0 },
+        uOuter: { value: 0 },
+        uOuterW: { value: 0 },
+      }
+      material.userData.spineUniforms = uniforms
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uSpineU = uniforms.uSpineU
+        shader.uniforms.uSpineOuter = uniforms.uSpineOuter
+        shader.uniforms.uSpineDual = uniforms.uSpineDual
+        shader.uniforms.uCore = uniforms.uCore
+        shader.uniforms.uCoreW = uniforms.uCoreW
+        shader.uniforms.uTail = uniforms.uTail
+        shader.uniforms.uTailW = uniforms.uTailW
+        shader.uniforms.uOuter = uniforms.uOuter
+        shader.uniforms.uOuterW = uniforms.uOuterW
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <common>',
+            [
+              '#include <common>',
+              'uniform float uSpineU;',
+              'uniform float uSpineOuter;',
+              'uniform float uSpineDual;',
+              'uniform float uCore;',
+              'uniform float uCoreW;',
+              'uniform float uTail;',
+              'uniform float uTailW;',
+              'uniform float uOuter;',
+              'uniform float uOuterW;',
+            ].join('\n'),
+          )
+          .replace(
+            '#include <map_fragment>',
+            [
+              '#include <map_fragment>',
+              // 缝谷：到书脊的双分量指数衰减（深缝芯+长尾）+ 外缘微暗；
+              // max 防 scale 极小时宽度为 0 的除零
+              '#ifdef USE_UV',
+              'float dIn = abs(vUv.x - uSpineU);',
+              'float dOut = uSpineDual > 0.5 ? min(vUv.x, 1.0 - vUv.x) : abs(vUv.x - uSpineOuter);',
+              'float spineShade = uCore * exp(-dIn / max(uCoreW, 1e-4));',
+              'spineShade += uTail * exp(-dIn / max(uTailW, 1e-4));',
+              'spineShade += uOuter * exp(-dOut / max(uOuterW, 1e-4));',
+              'diffuseColor.rgb *= 1.0 - clamp(spineShade, 0.0, 0.95);',
+              '#endif',
+            ].join('\n'),
+          )
+      }
+      this.writeSpineUniforms(uniforms, u)
+    } else {
+      this.writeSpineUniforms(material.userData.spineUniforms as SpineShadeUniforms, u)
+    }
+  }
+
+  // 把几何定位与"常量 × 页数缩放"写入材质 uniforms
+  private writeSpineUniforms(uniforms: SpineShadeUniforms, u: SpineShadeU | null) {
+    const scale = this.spineScale
+    uniforms.uSpineU.value = u?.inner ?? 0
+    uniforms.uSpineDual.value = u?.outer === 'both' ? 1 : 0
+    uniforms.uSpineOuter.value = u === null ? 0 : u.outer === 'both' ? 0 : u.outer
+    uniforms.uCore.value = u === null ? 0 : SPINE_CORE * scale
+    uniforms.uCoreW.value = SPINE_CORE_W * scale
+    uniforms.uTail.value = u === null ? 0 : SPINE_TAIL * scale
+    uniforms.uTailW.value = SPINE_TAIL_W * scale
+    uniforms.uOuter.value = u === null ? 0 : SPINE_OUTER * scale
+    uniforms.uOuterW.value = SPINE_OUTER_W * scale
+  }
+
   setStaticPages(
     placements: StaticPlacement[],
     textureOf: (index: number) => THREE.Texture | null,
     // false 表示这是翻页前置布局（spec.staticPages），相机由翻页动画接管，不重新适配
     refit = true,
+    // 书脊内阴影 U 定位：按当前布局/阅读方向返回该页书脊与外缘的 U 坐标，
+    // null 表示该页不渲染阴影；未提供时静态页不注入
+    spineOf?: (index: number, placement: StaticPlacement) => SpineShadeU | null,
   ) {
     this.pageFitWidth = placements.reduce(
       (width, p) =>
@@ -403,6 +535,7 @@ export class TurnScene {
           existing.material.map = texture
           existing.material.needsUpdate = true
         }
+        this.applySpineShading(existing.material, spineOf?.(p.index, p) ?? null)
         existing.fromX = this.slotX(p.fromSlot ?? p.slot)
         existing.toX = this.slotX(p.slot)
         existing.fromIsWorld = p.fromSlot !== undefined
@@ -433,6 +566,7 @@ export class TurnScene {
         material.color.set(0xffffff)
         material.needsUpdate = true
       }
+      this.applySpineShading(material, spineOf?.(p.index, p) ?? null)
       const mesh = new THREE.Mesh(geometry, material)
       const fromX = this.slotX(p.fromSlot ?? p.slot)
       mesh.position.set(fromX, 0, STATIC_Z)
@@ -627,6 +761,10 @@ export class TurnScene {
       backMaterial.map = backTexture
       backMaterial.needsUpdate = true
     }
+    // 翻页纸张的书脊即铰点、自由边即外缘：几何 A/B 的 UV 都保证 u=0 在
+    // 铰点侧、背面 UV 镜像后铰点在 u=1——与阅读方向无关
+    this.applySpineShading(frontMaterial, { inner: 0, outer: 1 })
+    this.applySpineShading(backMaterial, { inner: 1, outer: 0 })
 
     const front = new THREE.Mesh(geometry, frontMaterial)
     const back = new THREE.Mesh(backGeometry, backMaterial)
