@@ -9,7 +9,9 @@ const itemNode = (props: Record<string, unknown> = {}, text = 'page') =>
 
 describe('validateItemTypes', () => {
   it('accepts undeclared and valid annotations', () => {
-    expect(validateItemTypes([undefined, 'cover', undefined, 'back-cover', undefined])).toBeNull()
+    expect(
+      validateItemTypes([undefined, 'cover', 'cover-inside', 'back-cover', 'back-cover-inside']),
+    ).toBeNull()
     // null 与 undefined 同样视为未声明
     expect(validateItemTypes([null])).toBeNull()
     expect(validateItemTypes([])).toBeNull()
@@ -27,6 +29,15 @@ describe('validateItemTypes', () => {
   it('rejects jacket mixed with cover or back-cover', () => {
     expect(validateItemTypes(['jacket', 'cover'])).toContain('混用')
     expect(validateItemTypes(['back-cover', 'jacket'])).toContain('混用')
+    // jacket 与两种衬页可共存
+    expect(validateItemTypes(['jacket', 'cover-inside', 'back-cover-inside'])).toBeNull()
+  })
+
+  it('rejects orphan inside pages without a sheet to bind to', () => {
+    expect(validateItemTypes(['cover-inside'])).toContain('cover-inside')
+    expect(validateItemTypes(['back-cover-inside'])).toContain('back-cover-inside')
+    expect(validateItemTypes(['cover-inside', 'back-cover'])).toContain('cover-inside')
+    expect(validateItemTypes(['cover', 'back-cover-inside'])).toContain('back-cover-inside')
   })
 })
 
@@ -36,12 +47,18 @@ describe('usePageSources', () => {
 
   it('maps declared types to face kinds regardless of position', () => {
     const faces = facesOf([
-      itemNode({}, 'plain 1'),
       itemNode({ type: 'cover' }, 'cover'),
+      itemNode({ type: 'cover-inside' }, 'inside front'),
+      itemNode({ type: 'back-cover-inside' }, 'inside back'),
       itemNode({ type: 'back-cover' }, 'back cover'),
     ])
-    expect(faces.value.map((f) => f.face)).toEqual(['content', 'coverFront', 'backCoverFront'])
-    expect(faces.value[1]!.spread).toBe(false)
+    expect(faces.value.map((f) => f.face)).toEqual([
+      'coverFront',
+      'coverBack',
+      'backCoverBack',
+      'backCoverFront',
+    ])
+    expect(faces.value.every((f) => !f.spread)).toBe(true)
   })
 
   it('maps the jacket to a spread coverSpread face', () => {

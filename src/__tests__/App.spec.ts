@@ -149,7 +149,7 @@ describe('App', () => {
     router.push('/book')
     await flushPromises()
     expect(wrapper.findComponent(VueTurn).exists()).toBe(true)
-    expect(wrapper.find('.indicator').text()).toBe('第 1 / 16 页')
+    expect(wrapper.find('.indicator').text()).toBe('第 1 / 14 页')
   })
 
   it('corrects an invalid route page back to page one', async () => {

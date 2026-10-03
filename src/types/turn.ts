@@ -3,13 +3,21 @@ export type ForwardDirection = 'left' | 'right'
 /**
  * turn-item 类型标注（type prop）：
  * - cover 封面：独占封面纸张
+ * - cover-inside 封面底：内容绑定到封面纸张里侧（翻开封面所见）
  * - back-cover 封底：独占封底纸张
+ * - back-cover-inside 封底里：内容绑定到封底纸张里侧（合上书前所见）
  * - jacket 跨页封皮：一张双倍宽度内容同时供给封面与封底（右半 = 封面、
- *   左半 = 封底），不能再与 cover / back-cover 混用
- * 未声明的项为普通内容页；全书未声明封面/封底时由位置兜底（首个内容面
- * 提升为封面、末个提升为封底）
+ *   左半 = 封底），不能再与 cover / back-cover 混用，可与两种衬页共存
+ * 衬页必须依附于对应封皮纸（cover-inside 需全书存在 cover 或 jacket，
+ * back-cover-inside 需 back-cover 或 jacket）。未声明的项为普通内容页；
+ * 全书未声明封面/封底时由位置兜底（首个内容面提升为封面、末个提升为封底）
  */
-export type TurnItemType = 'cover' | 'back-cover' | 'jacket'
+export type TurnItemType =
+  | 'cover'
+  | 'cover-inside'
+  | 'back-cover'
+  | 'back-cover-inside'
+  | 'jacket'
 
 export type SheetGeometry = 'A' | 'B'
 

@@ -2,6 +2,16 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.4.0`。
 
+## 未发布
+
+### 新增
+
+- **衬页内容绑定恢复（`type` 新增 `cover-inside` / `back-cover-inside`）**：封面底/封底里重新可声明内容，与封面/封底同一套 type 枚举机制——内容直接绑定到封面/封底专用纸张的里侧，随封皮一起按 `coverPreset` 档翻转（真实书籍的衬页粘在封皮上）；声明位置不限。校验沿用严格策略：衬页必须依附于对应封皮纸（`cover-inside` 需全书存在 `cover` 或 `jacket`，`back-cover-inside` 需 `back-cover` 或 `jacket`，与 `jacket` 可共存），孤儿衬页/重复声明/非法枚举值均 `console.error` 并整本书拒绝渲染。未声明衬页时里侧兜底为空白纸页，单页模式下衬页不占页（无显示机会）。0.4.0 中"衬页内容自行添加普通页"的约定作废。
+
+### 文档
+
+- README「TurnItem Attributes」「封面与封底」「跨页封皮」「显示模式」等章节同步衬页绑定恢复后的行为。
+
 ## 0.4.0 - 2026-10-02
 
 ### 破坏性变更

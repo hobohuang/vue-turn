@@ -1682,11 +1682,13 @@ describe('VueTurn', () => {
               },
               {
                 default: () => [
-                  // 封面 + 封底各独占一张专用纸张，中间两个内容页；
-                  // 封面纸张背面/封底里侧为固定空白纸页（无独立内容面）
+                  // 封面 + 封底各独占一张专用纸张，衬页经 type 绑定到
+                  // 纸张里侧；中间两个内容页
                   h(TurnItem, { type: 'cover' }, { default: () => [h('div', 'cover')] }),
+                  h(TurnItem, { type: 'cover-inside' }, { default: () => [h('div', 'inside-front')] }),
                   h(TurnItem, null, { default: () => [h('div', 'page 1')] }),
                   h(TurnItem, null, { default: () => [h('div', 'page 2')] }),
+                  h(TurnItem, { type: 'back-cover-inside' }, { default: () => [h('div', 'inside-back')] }),
                   h(TurnItem, { type: 'back-cover' }, { default: () => [h('div', 'back cover')] }),
                 ],
               },
@@ -1698,12 +1700,39 @@ describe('VueTurn', () => {
     await flushPromises()
     // 封面纸(0,1) + 内容(2,3) + 封底纸(4,5) = 6 页，无补位空白
     expect(mocks.setCoverPages).toHaveBeenCalledWith([0, 1, 4, 5])
-    // 4 个内容面全部光栅化（空白纸页走纯色纸纹，不光栅化）
-    expect(mocks.elementToTexture).toHaveBeenCalledTimes(4)
+    // 6 个内容面全部光栅化（衬页绑定后不再有空白纸页）
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(6)
     const calls = mocks.setStaticPages.mock.calls
     const lastCall = calls[calls.length - 1]?.[0]
     // 合书态：封面居中单页
     expect(lastCall).toEqual([{ index: 0, slot: 'center' }])
+    wrapper.unmount()
+  })
+
+  it('refuses to render when an inside page has no sheet to bind to', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.elementToTexture.mockReset()
+    mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
+    const Host = defineComponent({
+      setup() {
+        return () =>
+          h('div', [
+            h(VueTurn, {}, {
+              default: () => [
+                h(TurnItem, { type: 'cover-inside' }, { default: () => [h('div', 'orphan')] }),
+                h(TurnItem, null, { default: () => [h('div', 'page')] }),
+              ],
+            }),
+          ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    // 孤儿衬页（无 cover/jacket 可依附）：整本书拒绝渲染，控制台报错
+    expect(wrapper.findAll('.page-source')).toHaveLength(0)
+    expect(mocks.elementToTexture).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('本书拒绝渲染'))
+    error.mockRestore()
     wrapper.unmount()
   })
 
@@ -1795,7 +1824,6 @@ describe('VueTurn', () => {
   })
 
   it('refuses to render the book when item type annotations are invalid', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     mocks.elementToTexture.mockReset()
     mocks.elementToTexture.mockImplementation(() => Promise.resolve(fakeTexture()))
     const Host = defineComponent({
@@ -1814,11 +1842,10 @@ describe('VueTurn', () => {
     })
     const wrapper = mount(Host)
     await flushPromises()
-    // 重复 type 声明：整本书拒绝渲染（无页、无光栅化），控制台报错
+    // 重复 type 声明：整本书拒绝渲染（无页、无光栅化）；
+    // 控制台报错为应用级单例只提示一次，前面的孤儿衬页用例已断言过
     expect(wrapper.findAll('.page-source')).toHaveLength(0)
     expect(mocks.elementToTexture).not.toHaveBeenCalled()
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('本书拒绝渲染'))
-    error.mockRestore()
     wrapper.unmount()
   })
 

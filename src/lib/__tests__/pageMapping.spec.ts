@@ -33,6 +33,37 @@ describe('buildPageSources', () => {
     expect(sources[4]).toMatchObject({ itemIndex: -1, cover: true, blank: true })
   })
 
+  it('places declared cover inside content on the cover sheet inside face', () => {
+    const sources = buildPageSources([
+      item(false, 'coverFront'),
+      item(false, 'coverBack'),
+      item(),
+      item(),
+    ])
+    expect(sources[0]).toMatchObject({ itemIndex: 0, cover: true })
+    expect(sources[1]).toMatchObject({ itemIndex: 1, cover: true, blank: false })
+    expect(sources[2]).toMatchObject({ itemIndex: 2, cover: false })
+  })
+
+  it('places declared back cover inside content on the back sheet front face', () => {
+    const sources = buildPageSources([
+      item(),
+      item(false, 'backCoverBack'),
+      item(false, 'backCoverFront'),
+    ])
+    expect(sources[2]).toMatchObject({ itemIndex: 1, cover: true, blank: false })
+    expect(sources[3]).toMatchObject({ itemIndex: 2, cover: true, blank: false })
+  })
+
+  it('binds the inside face even when cover and back cover are promoted positionally', () => {
+    // 只声明封面底、未声明封面/封底(孤儿标注由上层拦截,此处测纯函数兜底):
+    // 首个/末个内容面按位置提升为封面/封底,里侧仍绑定为封面底
+    const sources = buildPageSources([item(false, 'coverBack'), item(), item()])
+    expect(sources[0]).toMatchObject({ itemIndex: 1, cover: true, blank: false })
+    expect(sources[1]).toMatchObject({ itemIndex: 0, cover: true, blank: false })
+    expect(sources[3]).toMatchObject({ itemIndex: 2, cover: true, blank: false })
+  })
+
   it('maps plain items one page each starting at index 2', () => {
     const sources = buildPageSources([item(), item(), item(), item(), item()])
     // 封面纸(0,1) + 内容(2,3,4) + 补偶空白(5) + 封底纸(6,7)
@@ -204,6 +235,26 @@ describe('buildPageSources in single-page mode', () => {
     expect(sources).toHaveLength(5)
     expect(sources.every((s) => !s.blank)).toBe(true)
     expect(sources.map((s) => s.itemIndex)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('drops declared inside faces in single-page mode', () => {
+    // 一页只有一面：封面底/封底里依附于纸张里侧，单页翻页背面恒为空白，
+    // 它们没有任何显示机会——声明的内容不占页
+    const sources = buildPageSources(
+      [
+        item(false, 'coverFront'),
+        item(false, 'coverBack'),
+        item(),
+        item(false, 'backCoverBack'),
+        item(false, 'backCoverFront'),
+      ],
+      { singlePage: true },
+    )
+    expect(sources.map((s) => s.itemIndex)).toEqual([0, 2, 4])
+    expect(sources.every((s) => !s.blank)).toBe(true)
+    expect(sources[0]).toMatchObject({ cover: true })
+    expect(sources[1]).toMatchObject({ cover: false })
+    expect(sources[2]).toMatchObject({ cover: true })
   })
 
   it('ignores spread items and warns', () => {

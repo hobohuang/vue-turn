@@ -194,12 +194,12 @@ function onStackTap(page: number) {
 
 // 目录热区：与页面内 .toc-box 的绝对定位百分比一一对应，
 // 点击命中后跳转对应页（region.data 为目标页码）。
-// 页码按书皮模式取：两种模式页数相同（16 页），仅跨页/目录位置相差 1 页
-const tocRegions = computed<PageRegion[]>(() => [
+// 页码对应映射：封面纸(0,1)+内容自页 3 起，空白补位页 5、跨页大图 6-7、目录页 10
+const tocRegions: PageRegion[] = [
   { x: 0.08, y: 0.66, w: 0.24, h: 0.14, data: 1 },
-  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: jacketMode.value ? 6 : 7 },
-  { x: 0.68, y: 0.66, w: 0.24, h: 0.14, data: jacketMode.value ? 10 : 11 },
-])
+  { x: 0.38, y: 0.66, w: 0.24, h: 0.14, data: 6 },
+  { x: 0.68, y: 0.66, w: 0.24, h: 0.14, data: 10 },
+]
 
 function onRegionTap(_page: number, region: PageRegion) {
   const target = Number(region.data)
@@ -294,14 +294,11 @@ function onZoomInput(event: Event) {
         </div>
       </turn-item>
 
-      <!-- 衬页示例：封面/封底纸张背面为固定空白纸页，需要封面底/封底里
-           内容时在对应位置自行添加普通页（本页即"封面底"） -->
-      <turn-item>
+      <!-- 衬页：type 声明直接绑定到封面/封底纸张里侧（同纸、封面档观感） -->
+      <turn-item type="cover-inside">
         <div class="demo-page endpaper">
           <span class="endpaper-mark">vue-turn</span>
-          <p class="endpaper-note">
-            翻开封面即见。衬页不再绑定封面纸张——需要封面底内容时，在封面后自行添加普通页即可。
-          </p>
+          <p class="endpaper-note">翻开封面即见——这一面与封面同属一张专用纸张，按封面档观感渲染。</p>
         </div>
       </turn-item>
 
@@ -389,8 +386,8 @@ export function curlPoint(s, θ, κ) {
             悬停页角查看折角预览（右上角可切换显示模式与阅读方向）。
           </p>
           <div class="toc-box">第 1 页 · 封面</div>
-          <div class="toc-box toc-box-mid">第 {{ jacketMode ? 6 : 7 }} 页 · 跨页大图</div>
-          <div class="toc-box toc-box-end">第 {{ jacketMode ? 10 : 11 }} 页 · 目录</div>
+          <div class="toc-box toc-box-mid">第 6 页 · 跨页大图</div>
+          <div class="toc-box toc-box-end">第 10 页 · 目录</div>
         </div>
       </turn-item>
 
@@ -416,10 +413,10 @@ export function curlPoint(s, θ, κ) {
         </div>
       </turn-item>
 
-      <!-- 衬页示例（封底里）：合上书前与封底纸张相对的一页 -->
-      <turn-item>
+      <!-- 衬页（封底里）：与封底同属一张专用纸张 -->
+      <turn-item type="back-cover-inside">
         <div class="demo-page endpaper">
-          <p class="endpaper-note">封底里——合上书前与封底纸张相对的一页。</p>
+          <p class="endpaper-note">封底里——合上书前与封底纸张相对的一面，与封底同纸。</p>
           <span class="endpaper-mark">FIN · vue-turn</span>
         </div>
       </turn-item>

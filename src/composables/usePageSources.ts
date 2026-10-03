@@ -10,7 +10,13 @@ let warnedInvalidChild = false
 let erroredItemTypes = false
 
 /** type prop 的合法取值 */
-const ITEM_TYPES: ReadonlyArray<TurnItemType> = ['cover', 'back-cover', 'jacket']
+const ITEM_TYPES: ReadonlyArray<TurnItemType> = [
+  'cover',
+  'cover-inside',
+  'back-cover',
+  'back-cover-inside',
+  'jacket',
+]
 
 interface PageItem {
   vnode: VNode
@@ -34,7 +40,8 @@ function isTruthyProp(value: unknown): boolean {
 
 /**
  * type 标注校验（纯函数，便于单测）：非法枚举值、同类型重复声明、
- * jacket 与 cover / back-cover 混用均视为整本书无效——调用方拒绝渲染。
+ * jacket 与 cover / back-cover 混用、孤儿衬页（衬页声明了但全书没有
+ * 可依附的封皮纸）均视为整本书无效——调用方拒绝渲染。
  * 返回首个错误的描述，合法时返回 null。
  */
 export function validateItemTypes(types: ReadonlyArray<unknown>): string | null {
@@ -53,6 +60,12 @@ export function validateItemTypes(types: ReadonlyArray<unknown>): string | null 
   }
   if (seen.has('jacket') && (seen.has('cover') || seen.has('back-cover'))) {
     return 'type="jacket" 已同时供给封面与封底，不能再与 cover / back-cover 混用'
+  }
+  if (seen.has('cover-inside') && !seen.has('cover') && !seen.has('jacket')) {
+    return 'type="cover-inside" 需要全书存在 cover 或 jacket（衬页必须依附于封面纸张）'
+  }
+  if (seen.has('back-cover-inside') && !seen.has('back-cover') && !seen.has('jacket')) {
+    return 'type="back-cover-inside" 需要全书存在 back-cover 或 jacket（衬页必须依附于封底纸张）'
   }
   return null
 }
@@ -85,11 +98,13 @@ function collectPages(slots: Slots): PageItem[] {
 
 /**
  * 页面收集与面映射：渲染期从默认插槽收集 turn-item（展平 v-for Fragment），
- * 并按 type 标注把 item 归类为面——cover → coverFront、back-cover →
- * backCoverFront、jacket → coverSpread（双倍宽度外皮，封面取右半、封底取
- * 左半）、未声明 → content。type 按面种类分拣归位、与声明位置无关；未声明
- * 任何封面/封底时由 buildPageSources（lib/pageMapping.ts）按位置约定兜底。
- * 标注非法（重复/混用/未知值）时整本书拒绝渲染（pageFaces 为空）。
+ * 并按 type 标注把 item 归类为面——cover → coverFront、cover-inside →
+ * coverBack（绑定封面纸张里侧）、back-cover → backCoverFront、
+ * back-cover-inside → backCoverBack（绑定封底纸张里侧）、jacket →
+ * coverSpread（双倍宽度外皮，封面取右半、封底取左半）、未声明 → content。
+ * type 按面种类分拣归位、与声明位置无关；未声明任何封面/封底时由
+ * buildPageSources（lib/pageMapping.ts）按位置约定兜底。
+ * 标注非法（重复/混用/孤儿衬页/未知值）时整本书拒绝渲染（pageFaces 为空）。
  *
  * 必须在渲染函数内调用插槽（computed 内读取 slots.default），
  * 才能让父组件的内容变化正常触发本组件更新。
@@ -109,8 +124,12 @@ export function usePageSources(slots: Slots) {
       switch (item.type) {
         case 'cover':
           return { vnode: item.vnode, spread: false, regions: item.regions, face: 'coverFront' }
+        case 'cover-inside':
+          return { vnode: item.vnode, spread: false, regions: item.regions, face: 'coverBack' }
         case 'back-cover':
           return { vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverFront' }
+        case 'back-cover-inside':
+          return { vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverBack' }
         case 'jacket':
           return { vnode: item.vnode, spread: true, regions: item.regions, face: 'coverSpread' }
         default:

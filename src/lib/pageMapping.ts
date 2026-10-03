@@ -3,13 +3,14 @@
  *
  * 双页模式规则（与真实书籍一致）：
  * - 封面是一张专用纸张：正面（索引 0）= 标注为 coverFront 的面或跨页封皮
- *   （coverSpread）内容的右半（未标注时兜底提升首个内容面），背面
- *   （索引 1）固定为空白纸页（与封面同纸，独立光照）
+ *   （coverSpread）内容的右半（未标注时兜底提升首个内容面），里侧
+ *   （索引 1）= 标注为 coverBack 的封面底（未标注则空白纸页，与封面
+ *   同纸、独立光照）
  * - 普通内容从索引 2（右页/阳面）开始占页；跨页项占 2 页（左右各半），
  *   未对齐到奇数索引时自动插入空白页补位（跨页必须从奇数索引即左页开始）
  * - 封底同样是一张专用纸张：外侧（末索引）= 标注为 backCoverFront 的面
  *   或跨页封皮内容的左半（未标注时兜底提升末个内容面），里侧
- *   （末索引-1）固定为空白纸页
+ *   （末索引-1）= 标注为 backCoverBack 的封底里（未标注则空白纸页）
  * - 内页区段计数为奇数时在封底纸张之前补一张空白页保证总页数为偶数：
  *   补在内页区段末尾不会破坏跨页的奇数起始对齐，且封底固定占据末索引，
  *   其合上动画（要求末索引为奇数）不受影响
@@ -20,8 +21,8 @@
  * 相距很远且恒为居中单页（slot center），不会像内页跨页那样合并渲染。
  *
  * 单页模式规则（singlePage，一页只有一面，无左右配对，奇偶约定全部取消）：
- * - 不自动插入任何空白纸页：封面背面、封底里侧不占页——一页只有一面，
- *   翻页背面恒为空白纸页，它们没有任何显示机会
+ * - 不自动插入任何空白纸页：封面底、封底里不占页——一页只有一面，翻页
+ *   背面恒为空白纸页，它们没有任何显示机会（声明的内容不展示、不占页）
  * - 跨页封皮同样切半显示：封面显示右半、封底显示左半（书不能没有封面，
  *   不随内页跨页一起被忽略）
  * - 内页跨页项不支持跨页显示：自动忽略（不占页），并打印控制台警告
@@ -31,8 +32,10 @@
 export type PageFaceKind =
   | 'content'
   | 'coverFront'
+  | 'coverBack'
   | 'coverSpread'
   | 'backCoverFront'
+  | 'backCoverBack'
 
 /** 页源：页索引空间中一页的内容来源 */
 export interface PageSource {
@@ -82,13 +85,19 @@ export function buildPageSources(
 
   // 按标注分拣：封面/封底各面（重复标注首个生效，其余视作内容面）
   let coverFront = -1
+  let coverBack = -1
   let coverSpread = -1
   let backCoverFront = -1
+  let backCoverBack = -1
   const content: number[] = []
   for (let index = 0; index < items.length; index++) {
     switch (items[index]!.face) {
       case 'coverFront':
         if (coverFront < 0) coverFront = index
+        else content.push(index)
+        break
+      case 'coverBack':
+        if (coverBack < 0) coverBack = index
         else content.push(index)
         break
       case 'coverSpread':
@@ -97,6 +106,10 @@ export function buildPageSources(
         break
       case 'backCoverFront':
         if (backCoverFront < 0) backCoverFront = index
+        else content.push(index)
+        break
+      case 'backCoverBack':
+        if (backCoverBack < 0) backCoverBack = index
         else content.push(index)
         break
       default:
@@ -121,8 +134,13 @@ export function buildPageSources(
     cover: true,
   })
   if (!singlePage) {
-    // 封面纸张背面（翻开封面所见）：固定空白纸页（与封面同纸、独立光照）
-    sources.push(blankSource(true))
+    // 封面纸张里侧（翻开封面所见）= 标注为 coverBack 的封面底，
+    // 未标注则空白纸页（与封面同纸、独立光照）
+    sources.push(
+      coverBack >= 0
+        ? { itemIndex: coverBack, region: 'full', blank: false, cover: true }
+        : blankSource(true),
+    )
   }
 
   // 内页内容：双页模式从索引 2（右页）开始，跨页需从奇数索引（左页）开始，
@@ -156,9 +174,13 @@ export function buildPageSources(
   }
 
   // 封底纸张：外侧 = 封底（跨页封皮时取左半，单双页模式一致）。
-  // 双页模式另有一张固定空白纸页与最后一页相对（封底里侧位置）
+  // 双页模式另有里侧 = 标注为 backCoverBack 的封底里（未标注则空白纸页）
   if (!singlePage) {
-    sources.push(blankSource(true))
+    sources.push(
+      backCoverBack >= 0
+        ? { itemIndex: backCoverBack, region: 'full', blank: false, cover: true }
+        : blankSource(true),
+    )
   }
   sources.push({
     itemIndex: back,
