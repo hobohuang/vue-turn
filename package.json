@@ -1,6 +1,6 @@
 {
   "name": "vue-turnbook",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "基于 Three.js 的 Vue 3 书本翻页组件：真实纸张卷曲、双页跨页、封面封底开合、折角拖拽、纸叠与页面热区",
   "keywords": [
     "vue3",
