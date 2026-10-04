@@ -74,16 +74,14 @@ export interface FlipSpec {
 
 export type FlipDirection = ForwardDirection
 
-/** 纸叠条带一侧的渲染几何：贴在可见页面外缘的页层块 */
+/** 纸叠条带一侧的渲染几何：贴在可见页面外缘的页层块。
+ * 位置不在此描述——条带内缘由渲染层每帧从静态页网格实际边缘读取，
+ * 视觉态只携带厚度与层数（书体平移由书体组承载，条带随之自动跟随） */
 export interface StackSideVisual {
-  /** 条带内侧贴合的页面外缘 x（世界坐标） */
-  edgeX: number
   /** 厚度（世界单位） */
   thickness: number
   /** 该侧纸叠层数（驱动层理纹理密度：一层纸一条页线） */
   layers: number
-  /** 伸展方向：-1 向左 / +1 向右 */
-  dir: 1 | -1
 }
 
 /** 纸叠条带整体（渲染用） */

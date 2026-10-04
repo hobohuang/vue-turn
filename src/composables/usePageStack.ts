@@ -30,9 +30,12 @@ export interface PageStackOptions {
 }
 
 /**
- * 纸叠视觉计算：书本左右两侧页层厚度条带的渲染几何与翻页过渡。
+ * 纸叠视觉计算：书本左右两侧页层厚度条带的层数/厚度与翻页过渡。
  *
- * - stackSidesFor 是页面映射的统一计算入口：渲染几何（stackVisualFor）与
+ * 条带位置不在本层建模——渲染层每帧从静态页网格实际边缘读取内缘，
+ * 书本动条带自动跟；本层只负责各页状态下每侧的层数与厚度。
+ *
+ * - stackSidesFor 是页面映射的统一计算入口：层数计算（stackVisualFor）与
  *   悬停命中换算页码（currentStackSides）共用，避免两处参数漂移
  * - applyStacksIdle 空闲布局：纸叠吸附到当前页状态
  * - applyStacksFlip 翻页前置布局：纸叠随动画从当前状态过渡到目标状态；
@@ -48,11 +51,10 @@ export function usePageStack(options: PageStackOptions) {
       displayedPages: state.displayedPages.value,
       forwardDirection: forwardDirection(),
       numPages: pageCount.value,
-      sheetWidth: sheetWorldWidth(safePageAspect),
     })
   }
 
-  // 某页状态下的纸叠渲染几何
+  // 某页状态下的纸叠渲染几何（厚度与层数）
   function stackVisualFor(pageIndex: number): StackVisual {
     const width = sheetWorldWidth(safePageAspect)
     const sides = stackSidesFor(pageIndex)
@@ -65,8 +67,6 @@ export function usePageStack(options: PageStackOptions) {
     const toVisual = (side: StackSide | null) =>
       side
         ? {
-            edgeX: side.edgeX,
-            dir: side.dir,
             thickness: stackThickness(side.count, pageCount.value, maxDepth) * compact,
             layers: side.count,
           }

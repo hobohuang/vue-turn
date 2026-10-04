@@ -5,6 +5,7 @@ import { StackRenderer } from './StackRenderer'
 import { PAGE_HEIGHT, sheetWorldWidth } from './flipSpec'
 import { clamp, positive } from './math'
 import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from './pageFold'
+import { deriveStackEdges } from './pageStack'
 import { curledColumns, easeInOutCubic } from './pageCurl'
 import type { SpineShadeU } from './spineShading'
 import type {
@@ -16,11 +17,6 @@ import type {
 } from '../types/turn'
 
 const STATIC_Z = -0.01
-// 扇形翻页的纸叠淡出/淡入区间（全局进度比例）：起步时条带在出发侧页缘
-// 缩入书内（避免一翻页就凭空消失的突兀感），中段隐藏（飞纸与插值条带
-// 在同一区域交叠、观感杂乱），临近完成时在落点侧从页缘"长出"目标厚度
-const FAN_STACK_FADE_OUT = 0.15
-const FAN_STACK_FADE_IN = 0.85
 // 渲染像素比默认上限：平衡清晰度与性能
 const DEFAULT_MAX_PIXEL_RATIO = 2
 // 拖拽松手后回弹/补完动画的最短时长
@@ -264,10 +260,6 @@ interface FanState {
 interface StaticEntry {
   mesh: THREE.Mesh
   material: THREE.MeshLambertMaterial
-  fromX: number
-  toX: number
-  // fromSlot 显式给出时，起始位置已是世界坐标，不再叠加世界偏移
-  fromIsWorld: boolean
   index: number
   spread: boolean
 }
@@ -276,6 +268,12 @@ interface StaticEntry {
  * 3D 翻书场景：静态页网格、翻页纸张形变与渲染循环的编排层。
  * 相机控制委托 CameraRig，纸叠渲染委托 StackRenderer；
  * 本类持有页面网格、纸张状态机与射线拾取。
+ *
+ * 书体组（bookBody）：静态页、翻页纸张与纸叠条带的公共父节点。
+ * 翻页期"书体平移"（spec.worldFromX/worldToX，封面/封底开合时书本
+ * 整体平移）只写在 bookBody.position.x 上——子节点一律使用书体局部
+ * 坐标（静态页钉在槽位、纸张组钉在铰点、纸叠条带贴页面实际外缘），
+ * 书本动则全体自动跟随，无逐网格的世界偏移烘焙。
  */
 export class TurnScene {
   private readonly container: HTMLElement
@@ -287,6 +285,7 @@ export class TurnScene {
   private contextLost = false
   private readonly onContextRestored?: () => void
   private readonly scene = new THREE.Scene()
+  private readonly bookBody = new THREE.Group()
   private readonly rig: CameraRig
   private readonly raycaster = new THREE.Raycaster()
   private readonly stacks: StackRenderer
@@ -349,7 +348,9 @@ export class TurnScene {
     // 拾取放行封面图层（射线默认只测图层 0，会漏掉封面网格）
     this.raycaster.layers.enableAll()
 
+    this.scene.add(this.bookBody)
     this.stacks = new StackRenderer({
+      parent: this.bookBody,
       scene: this.scene,
       camera: this.rig.camera,
       raycaster: this.raycaster,
@@ -412,7 +413,7 @@ export class TurnScene {
     this.rig.cancelAnimation()
     // 清空静态网格：上下文丢失后几何体/材质失效，恢复时由调用方重建
     for (const entry of this.staticMeshes.values()) {
-      this.scene.remove(entry.mesh)
+      this.bookBody.remove(entry.mesh)
       entry.mesh.geometry.dispose()
       entry.material.dispose()
     }
@@ -560,9 +561,9 @@ export class TurnScene {
     this.markDirty()
 
     // placement diff 复用：按页索引比对，几何形态（spread）相同的页复用
-    // 现有网格与材质，仅更新纹理与起止位置。该调用频率很高（每次翻页 2 次、
-    // 光栅化完成、peel 悬停进出边缘条带），全量销毁重建会造成 GPU 资源反复
-    // 分配释放；静态页通常只有 1-3 个网格，diff 成本可忽略
+    // 现有网格与材质，仅更新纹理与位置。该调用频率很高（每次翻页 2 次、
+    // 光栅化完成、peel 悬停进出边缘条带），全量销毁重建会造成 GPU 资源
+    // 反复分配释放；静态页通常只有 1-3 个网格，diff 成本可忽略
     const kept = new Set<number>()
     for (const p of placements) {
       const spread = p.spread === true
@@ -574,10 +575,7 @@ export class TurnScene {
           existing.material.needsUpdate = true
         }
         this.applySpineShading(existing.material, spineOf?.(p.index, p) ?? null)
-        existing.fromX = this.slotX(p.fromSlot ?? p.slot)
-        existing.toX = this.slotX(p.slot)
-        existing.fromIsWorld = p.fromSlot !== undefined
-        existing.mesh.position.set(existing.fromX, 0, STATIC_Z)
+        existing.mesh.position.set(this.slotX(p.slot), 0, STATIC_Z)
         // 封面图层归属可能随 coverPages 集合变化
         if (this.coverPages.has(p.index)) existing.mesh.layers.set(COVER_LAYER)
         else existing.mesh.layers.set(0)
@@ -585,7 +583,7 @@ export class TurnScene {
         continue
       }
       if (existing) {
-        this.scene.remove(existing.mesh)
+        this.bookBody.remove(existing.mesh)
         existing.mesh.geometry.dispose()
         existing.material.dispose()
         this.staticMeshes.delete(p.index)
@@ -606,17 +604,16 @@ export class TurnScene {
       }
       this.applySpineShading(material, spineOf?.(p.index, p) ?? null)
       const mesh = new THREE.Mesh(geometry, material)
-      const fromX = this.slotX(p.fromSlot ?? p.slot)
-      mesh.position.set(fromX, 0, STATIC_Z)
+      // 静态页在书体局部坐标中钉在目标槽位、全程不动（含 fromSlot 条目：
+      // 唯一用例封底展开的起始槽位恰为 目标槽位+起点偏移，书体平移即可
+      // 复现同一轨迹，无需逐网格起点烘焙）
+      mesh.position.set(this.slotX(p.slot), 0, STATIC_Z)
       // 封面/封底挂封面图层，由封面灯光组照亮
       if (this.coverPages.has(p.index)) mesh.layers.set(COVER_LAYER)
-      this.scene.add(mesh)
+      this.bookBody.add(mesh)
       this.staticMeshes.set(p.index, {
         mesh,
         material,
-        fromX,
-        toX: this.slotX(p.slot),
-        fromIsWorld: p.fromSlot !== undefined,
         index: p.index,
         spread,
       })
@@ -625,7 +622,7 @@ export class TurnScene {
     // 移除新布局中不再出现的页
     for (const [index, entry] of this.staticMeshes) {
       if (kept.has(index)) continue
-      this.scene.remove(entry.mesh)
+      this.bookBody.remove(entry.mesh)
       entry.mesh.geometry.dispose()
       entry.material.dispose()
       this.staticMeshes.delete(index)
@@ -664,14 +661,27 @@ export class TurnScene {
     this.recomputeFitWidth()
     this.stacks.setHover(null)
     // 无纸张动画时立即应用终点（渲染不可用的兜底路径也走到这里）；
-    // 扇形翻页进行中由 updateFan 按全局进度驱动，不能提前吸附终点
+    // 扇形翻页进行中由 updateFan 按全局进度驱动，不能提前吸附终点。
+    // 空闲收敛同时复位书体平移（翻页收尾后书体回正）
     if (!this.sheet && !this.fan) {
-      this.stacks.apply(this.stackFrom, this.stackTo, 1)
+      this.bookBody.position.x = 0
+      this.stacks.apply(this.stackFrom, this.stackTo, 1, this.stackEdges())
       // 空闲态纸叠厚度变化影响适配宽度，相机距离随之收敛
       // （否则要等到下一次 resize/翻页才收敛，条带可能被视口裁剪）
       this.refitCamera()
     }
     this.markDirty()
+  }
+
+  // 静态页网格的实际外缘（书体局部坐标）：纸叠条带内缘的跟随来源。
+  // 跨页合并网格宽为两页，半宽取整页宽
+  private stackEdges() {
+    return deriveStackEdges(
+      Array.from(this.staticMeshes.values(), (entry) => ({
+        x: entry.mesh.position.x,
+        halfWidth: entry.spread ? this.sheetWidth : this.sheetWidth / 2,
+      })),
+    )
   }
 
   // 某视觉态下纸叠两侧厚度之和（相机适配宽度计入纸叠，条带不被视口裁剪）
@@ -705,18 +715,10 @@ export class TurnScene {
     return 0
   }
 
-  // 翻页的世界偏移应用到静态页（封面开合时书本整体平移）；
-  // 无 fromSlot 的条目起点属于起始布局，起终点都要叠加偏移
-  private applyWorldOffsets(spec: FlipSpec) {
-    const worldFromX = spec.worldFromX ?? 0
-    const worldToX = spec.worldToX ?? 0
-    if (worldFromX === 0 && worldToX === 0) return
-    for (const entry of this.staticMeshes.values()) {
-      if (!entry.fromIsWorld) {
-        entry.fromX = entry.mesh.position.x + worldFromX
-        entry.toX += worldToX
-      }
-    }
+  // 翻页起点先把书体平移到起始偏移（终点位由每帧插值驱动）；
+  // 静态页/纸张组都在书体局部坐标，无需逐网格烘焙偏移
+  private applyWorldOffset(spec: FlipSpec) {
+    this.bookBody.position.x = spec.worldFromX ?? 0
   }
 
   // 创建翻页纸张的公共部分（几何/材质/镜像），各模式变体在此基础上扩展；
@@ -816,10 +818,13 @@ export class TurnScene {
     if (this.coverPages.has(spec.backIndex)) back.layers.set(COVER_LAYER)
 
     const group = new THREE.Group()
-    group.position.set(spec.hingeX + worldFromX, 0, 0)
+    // 纸张组钉在铰点（书体局部坐标）；书体平移由 bookBody 承载。
+    // 例外：悬停预览纸张由 beginDragFlip 叠加起点偏移（书体不动、
+    // 静态布局保持空闲态，偏移只能由纸张自身携带）
+    group.position.set(spec.hingeX, 0, 0)
     group.add(front)
     group.add(back)
-    this.scene.add(group)
+    this.bookBody.add(group)
 
     const fromFitWidth = positive(spec.fromFitWidth ?? this.targetFitWidth, this.targetFitWidth)
     const toFitWidth = positive(spec.toFitWidth ?? this.targetFitWidth, this.targetFitWidth)
@@ -864,7 +869,7 @@ export class TurnScene {
     if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
 
-    this.applyWorldOffsets(spec)
+    this.applyWorldOffset(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
     if (!base) return
     const startTime = performance.now()
@@ -902,7 +907,7 @@ export class TurnScene {
     if (!this.renderer || this.contextLost) return false
     if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
-    this.applyWorldOffsets(spec)
+    this.applyWorldOffset(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
     if (!base) return false
     const settleDuration = positive(duration, 900)
@@ -961,15 +966,8 @@ export class TurnScene {
     const sheetDuration = duration * 0.62
     const worldFromX = plans[0]?.spec.worldFromX ?? 0
     const worldToX = plans[count - 1]?.spec.worldToX ?? 0
-    // 全局书体平移写入静态页起止（与单张翻页的 applyWorldOffsets 同规则）
-    if (worldFromX !== 0 || worldToX !== 0) {
-      for (const entry of this.staticMeshes.values()) {
-        if (!entry.fromIsWorld) {
-          entry.fromX = entry.mesh.position.x + worldFromX
-        }
-        entry.toX += worldToX
-      }
-    }
+    // 全局书体平移：起点立即生效，终点位由 updateFan 随全局进度插值
+    this.bookBody.position.x = worldFromX
 
     const sheets: FanRunningSheet[] = []
     for (let i = 0; i < count; i++) {
@@ -1005,7 +1003,7 @@ export class TurnScene {
         fanIndex: i,
         landed: false,
       }
-      sheet.group.position.x = sheet.hingeX + worldFromX
+      // 纸张组已钉在铰点（书体局部坐标），无需叠加全局偏移
       sheet.group.visible = !reverse
       sheets.push(sheet)
     }
@@ -1051,27 +1049,15 @@ export class TurnScene {
       }
       if (!sheet.landed) allLanded = false
     }
-    // 铰点 + 全局偏移插值：纸张组统一跟随书体平移（落定的纸张属于书本，
-    // 随书体一起滑动到终点位）
-    for (const sheet of fan.sheets) {
-      sheet.group.position.x =
-        sheet.hingeX + fan.worldFromX + (fan.worldToX - fan.worldFromX) * slideP
-    }
-    for (const entry of this.staticMeshes.values()) {
-      entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
-    }
-    // 纸叠条带三段式包络：起步在出发侧页缘缩入书内（淡出）→ 中段隐藏 →
-    // 临近完成在落点侧从页缘"长出"目标厚度（淡入）。全部落定后由收尾
-    // 布局（renderStatic → applyStacksIdle）接管精确状态
-    if (slideP < FAN_STACK_FADE_OUT) {
-      const fade = easeInOutCubic(slideP / FAN_STACK_FADE_OUT)
-      this.stacks.apply(this.stackFrom, null, fade)
-    } else if (slideP < FAN_STACK_FADE_IN) {
-      this.stacks.apply(null, null, 1)
-    } else {
-      const fade = easeInOutCubic((slideP - FAN_STACK_FADE_IN) / (1 - FAN_STACK_FADE_IN))
-      this.stacks.apply(null, this.stackTo, fade)
-    }
+    // 书体平移：纸张组/静态页/纸叠条带都在书体局部坐标，随本插值整体滑动
+    // （落定的纸张属于书本，随书体一起平移到终点位）
+    this.bookBody.position.x =
+      fan.worldFromX + (fan.worldToX - fan.worldFromX) * slideP
+    // 纸叠厚度随全局进度从起点态连续过渡到目标态：出发侧随飞纸起飞
+    // 逐张变薄、落点侧随落纸增厚（与单张翻页同一插值语义，无凭空
+    // 消失/长出的包络）；条带内缘始终跟随静态页实际边缘。全部落定后
+    // 由收尾布局（renderStatic → applyStacksIdle）接管精确状态
+    this.stacks.apply(this.stackFrom, this.stackTo, slideP, this.stackEdges())
     if (allLanded && slideT >= 1) {
       this.finishFan(true)
     }
@@ -1108,7 +1094,7 @@ export class TurnScene {
       this.rig.resetTo(lastSheet.toFitWidth + this.stackExtentWidth(this.stackTo), 0)
     }
     for (const sheet of fan.sheets) {
-      this.scene.remove(sheet.group)
+      this.bookBody.remove(sheet.group)
       sheet.geometry.dispose()
       sheet.backGeometry.dispose()
       sheet.frontMaterial.dispose()
@@ -1118,6 +1104,8 @@ export class TurnScene {
         sheet.onDone?.(committed)
       }
     }
+    // 收尾后书体回正（后续 renderStatic → setStacks 空闲收敛亦会复位）
+    this.bookBody.position.x = 0
     this.markDirty()
     fan.onDone()
   }
@@ -1137,12 +1125,18 @@ export class TurnScene {
     if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
 
-    // 真实拖拽才应用布局切换的世界偏移；悬停预览不动静态网格——
-    // 预览不重设静态布局，若在此叠加偏移会把空闲布局的静态页起点
-    // 篡改到翻开态位置（如封面被挪到侧旁），预览收起时再跳回，形成闪烁
-    if (!preview) this.applyWorldOffsets(spec)
+    // 真实拖拽才把书体平移到起始偏移；悬停预览不动书体——预览不重设
+    // 静态布局，若在此平移书体会把空闲布局的静态页挪到翻开态位置
+    // （如封面被挪到侧旁），预览收起时再跳回，形成闪烁。
+    // 预览纸张的起点偏移由纸张自身携带（见下）
+    if (!preview) this.applyWorldOffset(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, false, options)
     if (!base) return false
+    if (preview) {
+      // 书体未平移，起点偏移叠加在纸张组上：预览纸面精确覆盖在它即将
+      // 翻起的静态页上方（如合书封面的居中位置）；接管时由 activateSheet 归位
+      base.group.position.x = base.hingeX + (spec.worldFromX ?? 0)
+    }
     // 反向翻页（spec.reverse）：纸张初始即翻出缝外侧（进度 1），拖入时回收
     this.sheet = {
       ...base,
@@ -1157,17 +1151,21 @@ export class TurnScene {
   }
 
   // 悬停预览纸张转为真实交互（按下接管且不重建纸张时调用）：
-  // 清除预览标记，恢复书体平移/静态页滑动/纸叠插值随进度联动。
+  // 清除预览标记，恢复书体平移/纸叠插值随进度联动。
   // spec 为接管的翻页 spec：调用方已用 spec.staticPages 重设静态布局，
-  // 此处补齐布局切换的世界偏移（预览路径不应用偏移，见 beginDragFlip）
+  // 此处把书体平移到起始偏移，并把预览期间由纸张携带的起点偏移
+  // 交还书体组（视觉位置不变，坐标系切换）
   activateSheet(spec?: FlipSpec) {
     const sheet = this.sheet
     if (!sheet) return
     if (!sheet.preview) return
     sheet.preview = false
-    // 预览标记清除后书体/静态页/纸叠开始随进度联动，唤醒循环重绘
+    if (spec) {
+      this.applyWorldOffset(spec)
+      sheet.group.position.x = sheet.hingeX
+    }
+    // 预览标记清除后书体/纸叠开始随进度联动，唤醒循环重绘
     this.markDirty()
-    if (spec) this.applyWorldOffsets(spec)
   }
 
   // 拖拽进度 [0,1]：调用方传入的是"拖向提交"的进度（0 按下 / 1 满程），
@@ -1215,12 +1213,13 @@ export class TurnScene {
         existing.progress = 0
         if (!preview) {
           existing.preview = false
-          this.applyWorldOffsets(spec)
+          this.applyWorldOffset(spec)
         }
         this.markDirty()
         return true
       }
-      // 卷曲拖拽中的纸张转折角：重建为折角拖拽（沿用几何与纹理）
+      // 卷曲拖拽中的纸张转折角：重建为折角拖拽（沿用几何与纹理）。
+      // 预览纸张携带的起点偏移交还书体组（真实/预览皆归位到书体承载）
       const { kind: _kind, progress: _progress, preview: _preview, ...rest } = existing
       this.sheet = {
         ...rest,
@@ -1230,17 +1229,18 @@ export class TurnScene {
         progress: 0,
         bend: positive(bend, existing.bend),
       }
-      this.applyWorldOffsets(spec)
+      this.applyWorldOffset(spec)
+      this.sheet.group.position.x = this.sheet.hingeX
       this.markDirty()
       return true
     }
     if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
     // 静态页已由调用方按 spec.staticPages 重设（真实拖拽与折角预览皆然：
-    // 折角下方露出的须是底页而非当前页），此处统一叠加布局切换的世界偏移；
+    // 折角下方露出的须是底页而非当前页），此处把书体平移到起始偏移；
     // 预览的书体平移/纸叠/相机仍钉在起始态（updateSheet 中 preview 的
     // slideP=0），收起时由调用方 renderStatic 恢复空闲布局
-    this.applyWorldOffsets(spec)
+    this.applyWorldOffset(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
     if (!base) return false
     this.sheet = {
@@ -1257,7 +1257,8 @@ export class TurnScene {
     return true
   }
 
-  // 指针位置转页平面世界坐标（z=0 平面射线求交）
+  // 指针位置转页平面坐标（z=0 平面射线求交，书体局部坐标系——
+  // 书体平移期间书页/折角几何都在局部坐标，指针须换算到同一坐标系）
   pagePointFromClient(clientX: number, clientY: number): [number, number] | null {
     if (!this.renderer) return null
     const rect = this.renderer.domElement.getBoundingClientRect()
@@ -1271,7 +1272,7 @@ export class TurnScene {
     if (Math.abs(direction.z) < 1e-6) return null
     const t = -origin.z / direction.z
     if (t < 0) return null
-    return [origin.x + direction.x * t, origin.y + direction.y * t]
+    return [origin.x + direction.x * t - this.bookBody.position.x, origin.y + direction.y * t]
   }
 
   // 折角拖拽跟随指针：指针投射到页平面后换算为页宽坐标并钳制。
@@ -1283,7 +1284,7 @@ export class TurnScene {
     if (!sheet || sheet.kind !== 'fold' || sheet.mode !== 'drag') return null
     const world = this.pagePointFromClient(clientX, clientY)
     if (!world) return sheet.progress
-    // 页宽坐标：世界 x 减去纸张组原点（书脊铰点 + 布局偏移）；
+    // 页宽坐标：书体局部 x 减去纸张组原点（铰点）；
     // 镜像几何（B）顶点 x = 组原点 - s，方向取反
     let qu = world[0] - sheet.group.position.x
     if (sheet.sign < 0) qu = -qu
@@ -1437,10 +1438,12 @@ export class TurnScene {
   private finishSheet(sheet: SheetState, committed: boolean) {
     if (!sheet.preview) {
       this.rig.resetTo(this.sheetFitWidth(sheet, committed), 0)
+      // 真实翻页收尾后书体回正（后续 renderStatic → setStacks 空闲收敛亦会复位）
+      this.bookBody.position.x = 0
     }
     if (this.sheet === sheet) this.sheet = null
     this.markDirty()
-    this.scene.remove(sheet.group)
+    this.bookBody.remove(sheet.group)
     sheet.geometry.dispose()
     sheet.backGeometry.dispose()
     sheet.frontMaterial.dispose()
@@ -1613,20 +1616,19 @@ export class TurnScene {
           return
         }
       }
-      // 悬停预览：书体/静态页/纸叠钉在起始态，只有纸角形变跟随进度；
-      // 真实拖拽/回弹（含封面/封底开合）与内页一致——书体随进度联动。
-      // 反向翻页的书体过渡仍按 0→1 从当前态到目标态（slideP 取 1-进度）
+      // 悬停预览：书体/纸叠钉在起始态（slideP=0，书体停在起始偏移），
+      // 只有纸角形变跟随进度；真实拖拽/回弹（含封面/封底开合）与内页
+      // 一致——书体随进度联动。反向翻页的书体过渡仍按 0→1 从当前态
+      // 到目标态（slideP 取 1-进度）
       const slideP = sheet.preview
         ? 0
         : sheet.reverse
           ? 1 - sheet.progress
           : sheet.progress
-      sheet.group.position.x =
-        sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
-      for (const entry of this.staticMeshes.values()) {
-        entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
-      }
-      this.stacks.apply(this.stackFrom, this.stackTo, slideP)
+      this.bookBody.position.x =
+        sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
+      // 纸叠厚度/层数随翻页插值；内缘跟随静态页实际边缘（书体局部）
+      this.stacks.apply(this.stackFrom, this.stackTo, slideP, this.stackEdges())
       this.deformSheetFold(sheet)
       return
     }
@@ -1659,15 +1661,15 @@ export class TurnScene {
         return
       }
     }
-    // 铰点 + 世界偏移插值：跨页/封面 hingeX=0（单页模式 hingeX=±半页宽）
-    sheet.group.position.x =
-      sheet.hingeX + sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
-    for (const entry of this.staticMeshes.values()) {
-      entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
+    // 书体平移插值：纸张组钉在铰点、静态页钉在槽位，均随书体整体滑动
+    // （跨页/封面 hingeX=0，单页模式 hingeX=±半页宽）。
+    // 悬停预览不动书体（起点偏移由纸张自身携带，见 beginDragFlip）
+    if (!sheet.preview) {
+      this.bookBody.position.x =
+        sheet.worldFromX + (sheet.worldToX - sheet.worldFromX) * slideP
     }
-    // 纸叠厚度/位置与静态页同步插值；开合翻页的边缘过渡由
-    // from/to 的绝对边缘线性插值完成，与书体滑动同步
-    this.stacks.apply(this.stackFrom, this.stackTo, slideP)
+    // 纸叠厚度/位置与书体同步插值；条带内缘跟随静态页实际边缘
+    this.stacks.apply(this.stackFrom, this.stackTo, slideP, this.stackEdges())
     this.deformSheet(sheet, pe)
   }
 
@@ -1679,7 +1681,7 @@ export class TurnScene {
     if (!sheet) return
     this.sheet = null
     this.markDirty()
-    this.scene.remove(sheet.group)
+    this.bookBody.remove(sheet.group)
     sheet.geometry.dispose()
     sheet.backGeometry.dispose()
     sheet.frontMaterial.dispose()
@@ -1741,7 +1743,7 @@ export class TurnScene {
     this.fan = null
     if (fan) {
       for (const sheet of fan.sheets) {
-        this.scene.remove(sheet.group)
+        this.bookBody.remove(sheet.group)
         sheet.geometry.dispose()
         sheet.backGeometry.dispose()
         sheet.frontMaterial.dispose()
@@ -1749,7 +1751,7 @@ export class TurnScene {
       }
     }
     for (const entry of this.staticMeshes.values()) {
-      this.scene.remove(entry.mesh)
+      this.bookBody.remove(entry.mesh)
       entry.mesh.geometry.dispose()
       entry.material.dispose()
     }

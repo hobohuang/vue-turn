@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { computeStackSides, pageAtFraction, stackThickness, STACK_SATURATE } from '@/lib/pageStack'
-
-const WIDTH = 3
+import {
+  computeStackSides,
+  deriveStackEdges,
+  pageAtFraction,
+  stackThickness,
+  STACK_SATURATE,
+} from '@/lib/pageStack'
 
 function sides(overrides: Partial<Parameters<typeof computeStackSides>[0]>) {
   return computeStackSides({
@@ -10,7 +14,6 @@ function sides(overrides: Partial<Parameters<typeof computeStackSides>[0]>) {
     displayedPages: 2,
     forwardDirection: 'left',
     numPages: 10,
-    sheetWidth: WIDTH,
     ...overrides,
   })
 }
@@ -19,15 +22,15 @@ describe('computeStackSides in spread mode', () => {
   it('splits read pages left and remaining pages right for ltr', () => {
     // 封面已平躺左侧，不计入纸叠层数
     expect(sides({})).toEqual({
-      left: { first: 1, count: 1, step: -1, edgeX: -WIDTH, dir: -1 },
-      right: { first: 4, count: 6, step: 1, edgeX: WIDTH, dir: 1 },
+      left: { first: 1, count: 1, step: -1 },
+      right: { first: 4, count: 6, step: 1 },
     })
   })
 
   it('mirrors sides for rtl', () => {
     expect(sides({ forwardDirection: 'right' })).toEqual({
-      left: { first: 4, count: 6, step: 1, edgeX: -WIDTH, dir: -1 },
-      right: { first: 1, count: 1, step: -1, edgeX: WIDTH, dir: 1 },
+      left: { first: 4, count: 6, step: 1 },
+      right: { first: 1, count: 1, step: -1 },
     })
   })
 
@@ -35,11 +38,11 @@ describe('computeStackSides in spread mode', () => {
     // 封面朝上：右侧纸叠为除封面外的整本书
     expect(sides({ currentPage: 0 })).toEqual({
       left: null,
-      right: { first: 1, count: 9, step: 1, edgeX: WIDTH / 2, dir: 1 },
+      right: { first: 1, count: 9, step: 1 },
     })
     // 封底朝上：左侧纸叠为除封底外的整本书（封面计入）
     expect(sides({ currentPage: 9, numPages: 10 })).toEqual({
-      left: { first: 8, count: 8, step: -1, edgeX: -WIDTH / 2, dir: -1 },
+      left: { first: 8, count: 8, step: -1 },
       right: null,
     })
   })
@@ -48,13 +51,7 @@ describe('computeStackSides in spread mode', () => {
     // 封面平躺后左侧只剩已读内页
     expect(sides({ currentPage: 1 }).left).toBeNull()
     // 封底合上时右侧为 1 层（封底本身，尚未平躺）
-    expect(sides({ currentPage: 7 }).right).toEqual({
-      first: 9,
-      count: 1,
-      step: 1,
-      edgeX: WIDTH,
-      dir: 1,
-    })
+    expect(sides({ currentPage: 7 }).right).toEqual({ first: 9, count: 1, step: 1 })
     // 封底平躺后右侧无纸叠
     expect(sides({ currentPage: 8 }).right).toBeNull()
   })
@@ -64,11 +61,11 @@ describe('computeStackSides in spread mode', () => {
     // 已读页翻出缝侧、不堆叠
     expect(sides({ displayedPages: 1 })).toEqual({
       left: null,
-      right: { first: 3, count: 7, step: 1, edgeX: WIDTH / 2, dir: 1 },
+      right: { first: 3, count: 7, step: 1 },
     })
     // RTL：缝在右缘，纸叠在左
     expect(sides({ displayedPages: 1, forwardDirection: 'right' })).toEqual({
-      left: { first: 3, count: 7, step: 1, edgeX: -WIDTH / 2, dir: -1 },
+      left: { first: 3, count: 7, step: 1 },
       right: null,
     })
     // 翻到末页：剩余为 0，两侧皆无
@@ -87,6 +84,59 @@ describe('computeStackSides in spread mode', () => {
       // 两侧层数 + 可见两页 + 平躺封面 = 总页数
       expect((s.left?.count ?? 0) + (s.right?.count ?? 0) + 2 + 1).toBe(10)
     }
+  })
+})
+
+describe('deriveStackEdges', () => {
+  // 单页世界宽 1.5（跨页合并网格为 3）
+  const W = 1.5
+
+  it('derives both edges from an open spread', () => {
+    expect(
+      deriveStackEdges([
+        { x: -W / 2, halfWidth: W / 2 },
+        { x: W / 2, halfWidth: W / 2 },
+      ]),
+    ).toEqual({ left: -W, right: W })
+  })
+
+  it('derives half-width edges from a centered page (closed book)', () => {
+    expect(deriveStackEdges([{ x: 0, halfWidth: W / 2 }])).toEqual({
+      left: -W / 2,
+      right: W / 2,
+    })
+  })
+
+  it('derives full-width edges from a merged spread mesh', () => {
+    expect(deriveStackEdges([{ x: 0, halfWidth: W }])).toEqual({ left: -W, right: W })
+  })
+
+  it('reports null only when no page reaches the spine', () => {
+    // 仅右侧有页：左缘压在书脊（0），右缘来自该页；
+    // 该侧无层数时条带本就隐藏，0 与 null 等价
+    expect(deriveStackEdges([{ x: W / 2, halfWidth: W / 2 }])).toEqual({
+      left: 0,
+      right: W,
+    })
+    // 页面整体位于书脊严格右侧（非槽位布局）时左缘为 null
+    expect(deriveStackEdges([{ x: (W / 2) * 2, halfWidth: W / 2 }])).toEqual({
+      left: null,
+      right: W * 1.5,
+    })
+  })
+
+  it('takes the outermost edge when pages stack up', () => {
+    expect(
+      deriveStackEdges([
+        { x: -W / 2, halfWidth: W / 2 },
+        { x: -W / 2 + 0.01, halfWidth: W / 2 },
+        { x: W / 2, halfWidth: W / 2 },
+      ]),
+    ).toEqual({ left: -W, right: W })
+  })
+
+  it('returns both null for an empty layout', () => {
+    expect(deriveStackEdges([])).toEqual({ left: null, right: null })
   })
 })
 
@@ -115,8 +165,8 @@ describe('stackThickness', () => {
 })
 
 describe('pageAtFraction', () => {
-  const leftSide = { first: 5, count: 6, step: -1, edgeX: -3, dir: -1 } as const
-  const rightSide = { first: 6, count: 4, step: 1, edgeX: 3, dir: 1 } as const
+  const leftSide = { first: 5, count: 6, step: -1 } as const
+  const rightSide = { first: 6, count: 4, step: 1 } as const
 
   it('maps the inner edge to the first layer', () => {
     expect(pageAtFraction(leftSide, 0)).toBe(5)
