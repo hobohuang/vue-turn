@@ -16,6 +16,11 @@ import type {
 } from '../types/turn'
 
 const STATIC_Z = -0.01
+// 扇形翻页的纸叠淡出/淡入区间（全局进度比例）：起步时条带在出发侧页缘
+// 缩入书内（避免一翻页就凭空消失的突兀感），中段隐藏（飞纸与插值条带
+// 在同一区域交叠、观感杂乱），临近完成时在落点侧从页缘"长出"目标厚度
+const FAN_STACK_FADE_OUT = 0.15
+const FAN_STACK_FADE_IN = 0.85
 // 渲染像素比默认上限：平衡清晰度与性能
 const DEFAULT_MAX_PIXEL_RATIO = 2
 // 拖拽松手后回弹/补完动画的最短时长
@@ -228,6 +233,34 @@ type SheetState =
 type CurlSheet = CurlTimeSheet | CurlDragSheet | CurlSettleSheet
 type FoldSheet = FoldDragSheet | FoldSettleSheet
 
+/** 扇形翻页的单张纸计划：多页跳转时每步一张纸并发翻动 */
+export interface FanSheetPlan {
+  spec: FlipSpec
+  frontTexture: THREE.Texture | null
+  backTexture: THREE.Texture | null
+  /** 骨架纸（空白占位）：降低折页网格分段——无内容细节时形变开销随张数可控 */
+  skeleton?: boolean
+  /** 该张纸落定（翻页提交）时触发；全部落定后触发 startFanFlip 的整体 onDone */
+  onDone: (committed: boolean) => void
+}
+
+/** 扇形翻页运行中的一张纸：折页 settle 动画 + 错峰时钟与落定标记 */
+interface FanRunningSheet extends FoldSettleSheet {
+  fanIndex: number
+  landed: boolean
+}
+
+/** 扇形翻页运行态：多张纸并发、全局书体平移与一次整体收尾 */
+interface FanState {
+  sheets: FanRunningSheet[]
+  /** 全局书体平移起止（首张纸 spec 的起点偏移 → 末张纸 spec 的终点偏移） */
+  worldFromX: number
+  worldToX: number
+  startTime: number
+  duration: number
+  onDone: () => void
+}
+
 interface StaticEntry {
   mesh: THREE.Mesh
   material: THREE.MeshLambertMaterial
@@ -266,6 +299,8 @@ export class TurnScene {
   private stackFrom: StackVisual | null = null
   private stackTo: StackVisual | null = null
   private sheet: SheetState | null = null
+  // 扇形翻页运行态（多页跳转的并发纸张）：与单纸张状态机互斥存在
+  private fan: FanState | null = null
   // 页面布局适配宽度（不含纸叠）
   private pageFitWidth: number
   // 页面布局 + 纸叠的总适配宽度（推送给相机装配）
@@ -346,7 +381,7 @@ export class TurnScene {
   }
 
   get isFlipping() {
-    return this.sheet !== null
+    return this.sheet !== null || this.fan !== null
   }
 
   get hasRenderer() {
@@ -369,6 +404,9 @@ export class TurnScene {
       this.removeSheet()
       onDone?.(false)
     }
+    // 扇形翻页同样无法继续：未落定纸张按提交收尾（跳转语义是前进到目标，
+    // 半空中取消会让页码与书面撕裂）
+    if (this.fan) this.finishFan(true)
     // 相机动画同样失效：冻结在当前位置，恢复后由 refit/下一次动画收敛
     // （否则恢复前 rig.update 仍对着失效上下文插值，恢复后停在陈旧终点）
     this.rig.cancelAnimation()
@@ -401,9 +439,9 @@ export class TurnScene {
     this.markDirty()
   }
 
-  // 空闲时重适配相机；纸张动画进行中跳过（随后由动画终点收敛）
+  // 空闲时重适配相机；纸张动画（单张/扇形）进行中跳过（随后由动画终点收敛）
   private refitCamera() {
-    if (this.sheet) return
+    if (this.sheet || this.fan) return
     if (this.rig.refit()) this.markDirty()
   }
 
@@ -625,8 +663,9 @@ export class TurnScene {
     this.stackTo = to ?? from
     this.recomputeFitWidth()
     this.stacks.setHover(null)
-    // 无纸张动画时立即应用终点（渲染不可用的兜底路径也走到这里）
-    if (!this.sheet) {
+    // 无纸张动画时立即应用终点（渲染不可用的兜底路径也走到这里）；
+    // 扇形翻页进行中由 updateFan 按全局进度驱动，不能提前吸附终点
+    if (!this.sheet && !this.fan) {
       this.stacks.apply(this.stackFrom, this.stackTo, 1)
       // 空闲态纸叠厚度变化影响适配宽度，相机距离随之收敛
       // （否则要等到下一次 resize/翻页才收敛，条带可能被视口裁剪）
@@ -695,14 +734,15 @@ export class TurnScene {
     const worldToX = spec.worldToX ?? 0
     const curl = options?.curl ?? this.curl
     const nPolygons = Math.max(2, Math.round(options?.nPolygons ?? this.nPolygons))
+    const foldSegments = Math.max(8, Math.round(options?.foldSegments ?? FOLD_SEGMENTS))
 
     const geometry = new THREE.PlaneGeometry(
       this.sheetWidth,
       PAGE_HEIGHT,
       // 折角纸张横向同样需要足够分段（封面 hard 档 nPolygons=32 时
       // 过渡带横向欠采样，折痕边缘同样会起波浪）
-      fold ? Math.max(nPolygons, FOLD_SEGMENTS) : nPolygons,
-      fold ? FOLD_SEGMENTS : 2,
+      fold ? Math.max(nPolygons, foldSegments) : nPolygons,
+      fold ? foldSegments : 2,
     )
     const positions = geometry.attributes.position
     const uvs = geometry.attributes.uv
@@ -821,6 +861,7 @@ export class TurnScene {
       onDone(true)
       return
     }
+    if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
 
     this.applyWorldOffsets(spec)
@@ -859,6 +900,7 @@ export class TurnScene {
   ): boolean {
     // 渲染不可用返回 false，由调用方回退 startFlip（其自带同步提交兜底）
     if (!this.renderer || this.contextLost) return false
+    if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
     this.applyWorldOffsets(spec)
     const base = this.createSheet(spec, frontTexture, backTexture, onDone, true, options)
@@ -896,6 +938,190 @@ export class TurnScene {
     return true
   }
 
+  // 扇形翻页（多页跳转）：多张纸错峰并发翻动——每张纸是一步的折页 settle
+  // 动画（相位依次延迟，形成波浪式的扇面），全部落定后触发整体 onDone。
+  // 静态布局由调用方一次性摆好（出发侧留驻页 + 落点侧揭示页），书体平移
+  // 取首张纸起点偏移 → 末张纸终点偏移随全局进度插值；落定的纸张保留在场
+  // （堆叠在落点侧），整体收尾时统一释放
+  startFanFlip(
+    plans: FanSheetPlan[],
+    fanOptions: { duration: number; onDone: () => void },
+  ): boolean {
+    // 渲染不可用返回 false，由调用方回退（瞬间跳转）
+    if (!this.renderer || this.contextLost) return false
+    if (plans.length === 0) return false
+    if (this.fan) this.finishFan(true)
+    if (this.sheet) this.removeSheet()
+
+    const now = performance.now()
+    const duration = positive(fanOptions.duration, 900)
+    const count = plans.length
+    // 每张纸的翻动时长占总时长的大头，剩余均分为错峰间隔——相邻纸张的
+    // 相位差恒定，形成连续的扇面波浪
+    const sheetDuration = duration * 0.62
+    const worldFromX = plans[0]?.spec.worldFromX ?? 0
+    const worldToX = plans[count - 1]?.spec.worldToX ?? 0
+    // 全局书体平移写入静态页起止（与单张翻页的 applyWorldOffsets 同规则）
+    if (worldFromX !== 0 || worldToX !== 0) {
+      for (const entry of this.staticMeshes.values()) {
+        if (!entry.fromIsWorld) {
+          entry.fromX = entry.mesh.position.x + worldFromX
+        }
+        entry.toX += worldToX
+      }
+    }
+
+    const sheets: FanRunningSheet[] = []
+    for (let i = 0; i < count; i++) {
+      const plan = plans[i]
+      if (!plan) break
+      const base = this.createSheet(
+        plan.spec,
+        plan.frontTexture,
+        plan.backTexture,
+        plan.onDone,
+        true,
+        plan.skeleton ? { nPolygons: 24, foldSegments: 32 } : undefined,
+      )
+      if (!base) break
+      const reverse = base.reverse
+      // 反向翻页（单页后退）：纸张初始对折在缝外侧，起飞前不可见
+      // （前进纸张起飞前平贴在出发侧纸堆上，属于画面的一部分）
+      const fromQ: [number, number] = reverse ? [-this.sheetWidth, 0] : [this.sheetWidth, 0]
+      const toQ: [number, number] = reverse ? [this.sheetWidth, 0] : [-this.sheetWidth, 0]
+      const delay = count > 1 ? (i * (duration - sheetDuration)) / (count - 1) : 0
+      const sheet: FanRunningSheet = {
+        ...base,
+        kind: 'fold',
+        mode: 'settle',
+        startTime: now + delay,
+        duration: sheetDuration,
+        fold: { pu: this.sheetWidth, pv: 0, qu: fromQ[0], qv: 0 },
+        progress: reverse ? 1 : 0,
+        p0: reverse ? 1 : 0,
+        target: reverse ? 0 : 1,
+        foldFromQ: fromQ,
+        foldToQ: toQ,
+        fanIndex: i,
+        landed: false,
+      }
+      sheet.group.position.x = sheet.hingeX + worldFromX
+      sheet.group.visible = !reverse
+      sheets.push(sheet)
+    }
+    if (sheets.length === 0) return false
+
+    this.fan = { sheets, worldFromX, worldToX, startTime: now, duration, onDone: fanOptions.onDone }
+    // 相机一次复位到目标适配距离（缩放/平移复位，级别归 1），
+    // 随书体平移与纸叠转移在整个扇形窗口内收敛
+    const lastPlan = plans[count - 1]
+    const toFit = positive(lastPlan?.spec.toFitWidth ?? this.targetFitWidth, this.targetFitWidth)
+    this.rig.resetTo(toFit + this.stackExtentWidth(this.stackTo), duration, now)
+    this.wake()
+    return true
+  }
+
+  // 扇形翻页逐帧推进：全局书体平移/静态页/纸叠按整体进度插值一次，
+  // 各纸张按自己的错峰时钟独立播放折页动画（复用 deformSheetFold）
+  private updateFan(now: number) {
+    const fan = this.fan
+    if (!fan) return
+    const slideT = Math.min(1, (now - fan.startTime) / fan.duration)
+    const slideP = easeInOutCubic(slideT)
+    const count = fan.sheets.length
+    let allLanded = true
+    for (const sheet of fan.sheets) {
+      // 层叠顺序：起飞前出发侧纸堆先翻的在上，落定后落点侧纸堆后翻的在上——
+      // 进度过半（纸张立起最高点）时切换，被形变抬升遮挡、不可感知
+      sheet.group.position.z =
+        (sheet.progress > 0.5 ? sheet.fanIndex : count - 1 - sheet.fanIndex) * 0.0025
+      if (!sheet.landed) {
+        const t = (now - sheet.startTime) / sheet.duration
+        if (t >= 1) {
+          sheet.landed = true
+          this.deformFanSheetAt(sheet, 1)
+          sheet.group.visible = true
+          sheet.onDone?.(true)
+        } else if (t >= 0) {
+          if (!sheet.group.visible) sheet.group.visible = true
+          this.deformFanSheetAt(sheet, easeInOutCubic(t))
+        } else {
+          allLanded = false
+        }
+      }
+      if (!sheet.landed) allLanded = false
+    }
+    // 铰点 + 全局偏移插值：纸张组统一跟随书体平移（落定的纸张属于书本，
+    // 随书体一起滑动到终点位）
+    for (const sheet of fan.sheets) {
+      sheet.group.position.x =
+        sheet.hingeX + fan.worldFromX + (fan.worldToX - fan.worldFromX) * slideP
+    }
+    for (const entry of this.staticMeshes.values()) {
+      entry.mesh.position.x = entry.fromX + (entry.toX - entry.fromX) * slideP
+    }
+    // 纸叠条带三段式包络：起步在出发侧页缘缩入书内（淡出）→ 中段隐藏 →
+    // 临近完成在落点侧从页缘"长出"目标厚度（淡入）。全部落定后由收尾
+    // 布局（renderStatic → applyStacksIdle）接管精确状态
+    if (slideP < FAN_STACK_FADE_OUT) {
+      const fade = easeInOutCubic(slideP / FAN_STACK_FADE_OUT)
+      this.stacks.apply(this.stackFrom, null, fade)
+    } else if (slideP < FAN_STACK_FADE_IN) {
+      this.stacks.apply(null, null, 1)
+    } else {
+      const fade = easeInOutCubic((slideP - FAN_STACK_FADE_IN) / (1 - FAN_STACK_FADE_IN))
+      this.stacks.apply(null, this.stackTo, fade)
+    }
+    if (allLanded && slideT >= 1) {
+      this.finishFan(true)
+    }
+  }
+
+  // 扇形纸张按局部进度设置折页形变（settle 路径的插值逻辑，时钟由 fan 驱动）
+  private deformFanSheetAt(sheet: FanRunningSheet, eased: number) {
+    const from = sheet.foldFromQ
+    const to = sheet.foldToQ
+    sheet.fold.qu = from[0] + (to[0] - from[0]) * eased
+    sheet.fold.qv = from[1] + (to[1] - from[1]) * eased
+    // 插值中间态同样受书脊约束（端点天然安全，中途保险）
+    const clamped = clampFoldDragToSpine(
+      sheet.fold.pu,
+      sheet.fold.pv,
+      sheet.fold.qu,
+      sheet.fold.qv,
+      PAGE_HEIGHT,
+    )
+    sheet.fold.qu = clamped.qu
+    sheet.fold.qv = clamped.qv
+    sheet.progress = foldProgress(sheet.fold.qu, this.sheetWidth)
+    this.deformSheetFold(sheet)
+  }
+
+  // 扇形翻页收尾：释放全部纸张（落定的纸张此刻才离场，由静态布局接管），
+  // 未落定纸张按 committed 提交（stop 中断 = 跳过动画直接到目标）
+  private finishFan(committed: boolean) {
+    const fan = this.fan
+    this.fan = null
+    if (!fan) return
+    const lastSheet = fan.sheets[fan.sheets.length - 1]
+    if (lastSheet) {
+      this.rig.resetTo(lastSheet.toFitWidth + this.stackExtentWidth(this.stackTo), 0)
+    }
+    for (const sheet of fan.sheets) {
+      this.scene.remove(sheet.group)
+      sheet.geometry.dispose()
+      sheet.backGeometry.dispose()
+      sheet.frontMaterial.dispose()
+      sheet.backMaterial.dispose()
+      if (!sheet.landed) {
+        sheet.landed = true
+        sheet.onDone?.(committed)
+      }
+    }
+    this.markDirty()
+    fan.onDone()
+  }
+
   // 开始拖拽翻页：返回 false 表示渲染不可用，调用方不应进入拖拽状态。
   // preview=true 为悬停预览纸张：书体/静态页/纸叠钉在起始态，只预览卷曲形变
   beginDragFlip(
@@ -908,6 +1134,7 @@ export class TurnScene {
   ): boolean {
     if (!this.renderer || this.contextLost) return false
     // 已有纸张（折角悬停/上一次拖拽）静默替换，不触发其 onDone
+    if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
 
     // 真实拖拽才应用布局切换的世界偏移；悬停预览不动静态网格——
@@ -1007,6 +1234,7 @@ export class TurnScene {
       this.markDirty()
       return true
     }
+    if (this.fan) this.finishFan(true)
     if (this.sheet) this.removeSheet()
     // 静态页已由调用方按 spec.staticPages 重设（真实拖拽与折角预览皆然：
     // 折角下方露出的须是底页而非当前页），此处统一叠加布局切换的世界偏移；
@@ -1185,8 +1413,13 @@ export class TurnScene {
   }
 
   // 中断当前翻页并立即收尾：time/settle 按各自终点，drag 按最近端点。
-  // 反向翻页纸张的提交态是放平（进度 0），最近端点判定随之反转
+  // 反向翻页纸张的提交态是放平（进度 0），最近端点判定随之反转。
+  // 扇形翻页按提交收尾（未落定纸张直接到终点）——中断语义是跳过动画
   stopFlip() {
+    if (this.fan) {
+      this.finishFan(true)
+      return
+    }
     const sheet = this.sheet
     if (!sheet) return
     if (sheet.mode === 'drag') {
@@ -1229,14 +1462,14 @@ export class TurnScene {
 
   // 设置缩放级别（钳制到 [1, maxZoom]）；翻页进行中忽略
   setZoom(level: number, animate = true, duration = 200) {
-    if (!this.renderer || this.sheet) return
+    if (!this.renderer || this.sheet || this.fan) return
     this.rig.setZoom(level, animate, duration)
     this.markDirty()
   }
 
   // 按屏幕像素平移相机（放大后拖动查看）；翻页进行中忽略
   panBy(dxPixels: number, dyPixels: number) {
-    if (!this.renderer || this.sheet) return
+    if (!this.renderer || this.sheet || this.fan) return
     this.rig.panBy(dxPixels, dyPixels)
     this.markDirty()
   }
@@ -1476,12 +1709,15 @@ export class TurnScene {
       return
     }
     this.updateSheet(now)
+    this.updateFan(now)
     // 相机动画结束帧显式标脏，保证终点帧被渲染
     if (this.rig.update(now)) this.dirty = true
     // time/settle 模式逐帧动画；drag 模式由指针驱动，仅状态变化帧渲染
     //（写入入口已 markDirty/wake 唤醒）
     const animating =
-      (this.sheet !== null && this.sheet.mode !== 'drag') || this.rig.isAnimating
+      (this.sheet !== null && this.sheet.mode !== 'drag') ||
+      this.fan !== null ||
+      this.rig.isAnimating
     if ((animating || this.dirty) && this.renderer && !this.contextLost) {
       this.renderer.render(this.scene, this.rig.camera)
       this.dirty = false
@@ -1500,6 +1736,18 @@ export class TurnScene {
     this.disposed = true
     cancelAnimationFrame(this.rafId)
     this.removeSheet()
+    // 组件卸载：扇形纸张直接释放，不触发回调（编排层同在卸载流程中）
+    const fan = this.fan
+    this.fan = null
+    if (fan) {
+      for (const sheet of fan.sheets) {
+        this.scene.remove(sheet.group)
+        sheet.geometry.dispose()
+        sheet.backGeometry.dispose()
+        sheet.frontMaterial.dispose()
+        sheet.backMaterial.dispose()
+      }
+    }
     for (const entry of this.staticMeshes.values()) {
       this.scene.remove(entry.mesh)
       entry.mesh.geometry.dispose()

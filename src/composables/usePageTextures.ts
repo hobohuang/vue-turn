@@ -263,6 +263,23 @@ export function usePageTextures(options: PageTexturesOptions) {
     }
   }
 
+  // 显式范围光栅化（跳页连翻预取）：[start, end) 内补生成缺失纹理。
+  // 不重建静态布局、不发 ready——预取结果只服务即将开始的连翻步骤，
+  // 慢页由步骤推进中的 rasterizeWindow 跟进补齐。与窗口光栅化共用 seq
+  // 机制：期间发生的 refresh/模式切换会作废本批结果
+  async function rasterizeRange(start: number, end: number) {
+    const seq = ++rasterSeq
+    await nextTick()
+    if (disposed || seq !== rasterSeq) return
+    const from = Math.max(0, Math.floor(start))
+    const to = Math.min(options.pageSources.value.length, Math.ceil(end))
+    const tasks: Promise<void>[] = []
+    for (let i = from; i < to; i++) {
+      if (!textures.has(i)) tasks.push(rasterizePage(i, seq))
+    }
+    await Promise.all(tasks)
+  }
+
   // 手动重绘指定页面纹理（页码从 1 开始）；翻页中排队，结束后补刷。
   // 跨页半图两半共刷：重光栅化会为 item 生成新基准纹理，只刷一半会让
   // 左右两半出自不同基准（一半新内容一半旧内容）
@@ -424,15 +441,19 @@ export function usePageTextures(options: PageTexturesOptions) {
   // 中），半图按屏幕侧解析；单页模式一页只有一面内容，背面统一为空白
   // 纸页（贴统一纸色纸纹，与自动补位的空白页观感一致）
   let blankSheetBack: THREE.Texture | null = null
+  // 空白纸页纹理（懒创建）：跳页扇形翻页的骨架占位纸共用同一张纯色纸纹
+  function blankTexture(): THREE.Texture {
+    if (!blankSheetBack) blankSheetBack = solidColorTexture()
+    return blankSheetBack
+  }
   function sheetTextures(spec: FlipSpec): {
     front: THREE.Texture | null
     back: THREE.Texture | null
   } {
     if (options.displayedPages.value === 1) {
-      if (!blankSheetBack) blankSheetBack = solidColorTexture()
       return {
         front: textures.get(spec.frontIndex) ?? null,
-        back: blankSheetBack,
+        back: blankTexture(),
       }
     }
     const frontSide = spec.geometry === 'A' ? 'right' : 'left'
@@ -523,6 +544,8 @@ export function usePageTextures(options: PageTexturesOptions) {
     textureAtSide,
     /** 翻页纸张正/背面纹理（跨页半图按屏幕侧解析） */
     sheetTextures,
+    /** 空白纸页纹理（跳页扇形翻页的骨架占位纸用，懒创建共享实例） */
+    blankTexture,
     /** 翻页前置静态布局的纹理回调（静态跨页半页按槽位解析） */
     staticTextures,
     syncPageCount,
@@ -530,6 +553,8 @@ export function usePageTextures(options: PageTexturesOptions) {
     remapModeTextures,
     rasterizeWindow,
     rasterizePages,
+    /** 显式范围光栅化（跳页连翻预取）：[start, end) 内补生成缺失纹理 */
+    rasterizeRange,
     releaseOutsideWindow,
     /** 手动重绘全部页面纹理（cacheBust 生效） */
     refresh: () => rasterizeAll(true),

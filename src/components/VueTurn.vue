@@ -36,7 +36,8 @@ import { usePageStack } from '../composables/usePageStack'
 import { usePageTextures } from '../composables/usePageTextures'
 import { useTurnRenderer } from '../composables/useTurnRenderer'
 import { ZOOM_TOLERANCE } from '../composables/useZoomPan'
-import { spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '../lib/flipSpec'
+import { fanStaticLayout, spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '../lib/flipSpec'
+import { FAN_SHEET_BUDGET, planJump, type JumpPlanStep } from '../lib/jumpPlan'
 import { positive } from '../lib/math'
 import { buildPageSources, coverPageIndices } from '../lib/pageMapping'
 import { spineScaleOf, spineUOfPlacement } from '../lib/spineShading'
@@ -64,6 +65,10 @@ const props = withDefaults(
     pageAspect?: number
     /** 单次翻页动画时长（毫秒） */
     flipDuration?: number
+    /** 跳页连翻动画：goToPage / v-model / 纸叠点击 / Home·End 跳转时播放连续
+     * 翻页过渡——近距离逐张连翻，远距离按比例合并成大步（封面/封底边界步
+     * 不合并），总时长约一个 flipDuration；false 恢复瞬间跳转 */
+    jumpAnimation?: boolean
     /** 观感预设（纸张类型）：为专业渲染参数提供成组基线——soft 普通纸张哑光（默认）、hard 纸板刚体强光泽、custom 自定义；look 可逐项覆盖 */
     preset?: TurnPreset
     /** 封面/封底观感预设（默认 hard 纸板）：控制封面与封底的纸张（卷曲/折角/网格密度）与光影（独立灯光组）；coverLook 可逐项覆盖 */
@@ -116,6 +121,7 @@ const props = withDefaults(
   {
     pageAspect: 0.75,
     flipDuration: 900,
+    jumpAnimation: true,
     preset: 'soft',
     coverPreset: 'hard',
     forwardDirection: 'left',
@@ -234,6 +240,7 @@ const {
   setStacks,
   startFlip,
   startFoldFlip,
+  startFanFlip,
   getZoom,
 } = renderer
 
@@ -321,9 +328,12 @@ const {
   getSpreadFullTexture,
   sheetTextures,
   staticTextures,
+  textureAtSide,
+  blankTexture,
   syncPageCount,
   remapModeTextures,
   rasterizeWindow,
+  rasterizeRange,
   releaseOutsideWindow,
   refresh,
   refreshPage,
@@ -401,22 +411,19 @@ watch(
   { immediate: true },
 )
 
-// v-model：外部页码变化时跳转；翻页中则推迟到动画结束。
-// 与 goToPage 一致走 before-flip 拦截，被取消时回写当前页码纠正外部状态
+// v-model：外部页码变化时跳转（jumpAnimation 开启时播放连翻动画）；
+// 翻页中则推迟到动画结束。before-flip 拦截统一由 flipTo 派发（排队跳转
+// 在出队执行时拦截），被取消时回写当前页码纠正外部状态
 watch(
   () => props.modelValue,
   (value) => {
     if (value === undefined) return
     const target = Number.isFinite(value) ? Math.round(value) - 1 : 0
     if (target === state.currentPage.value) return
-    if (!emitBeforeFlip(null, state.page.value, target + 1)) {
-      emit('update:modelValue', state.page.value)
-      return
-    }
     if (state.isFlipping.value) {
       pendingTarget = target
-    } else {
-      jumpTo(target)
+    } else if (!flipTo(target)) {
+      emit('update:modelValue', state.page.value)
     }
   },
 )
@@ -433,7 +440,10 @@ watch(
     if (pendingTarget !== null) {
       const target = pendingTarget
       pendingTarget = null
-      jumpTo(target)
+      // before-flip 拦截在出队执行时统一由 flipTo 派发，被取消时回写纠正
+      if (!flipTo(target)) {
+        emit('update:modelValue', state.page.value)
+      }
     }
   },
 )
@@ -457,7 +467,7 @@ function spineOf(index: number, placement: StaticPlacement) {
 // （渲染几何与翻页过渡的计算见 composables/usePageStack.ts）
 // ---------------------------------------------------------------------------
 
-const { applyStacksIdle, applyStacksFlip, currentStackSides } = usePageStack({
+const { applyStacksIdle, applyStacksFlip, applyStacksFan, currentStackSides } = usePageStack({
   state,
   pageCount,
   safePageAspect,
@@ -507,7 +517,8 @@ watch([() => state.currentPage.value, () => state.displayedPages.value], () => {
 })
 
 // 页码变化统一出口：同步 v-model 并派发 change/first/last
-// mountedDone：挂载初始页同步不触发 first/last（与 turn.js 语义一致：仅用户导航触发）
+// mountedDone：挂载初始页同步不触发 first/last（与 turn.js 语义一致：仅用户导航触发）。
+// 跳页连翻的中途落页不触发 first/last（经过≠停留），链尾或链被中断时正常判定
 let mountedDone = false
 watch(
   () => state.currentPage.value,
@@ -515,6 +526,8 @@ watch(
     emit('update:modelValue', state.page.value)
     emit('change', state.page.value)
     if (!mountedDone) return
+    // 扇形翻页的中途落页不触发 first/last：仅在全部落定后判定
+    if (fanRemaining > 0) return
     if (state.page.value === 1) emit('first')
     if (pageCount.value > 0 && state.page.value === pageCount.value) emit('last')
   },
@@ -639,10 +652,7 @@ function flip(trigger: FlipDirection) {
   const prevZoom = getZoom()
   state.startFlip()
   emit('flip-start', trigger)
-  // 翻页前置布局：相机由翻页动画接管（静态跨页半页按槽位解析半图）
-  setStaticPages(spec.staticPages, staticTextures(spec), false, props.spineShadow ? spineOf : undefined)
-  applyStacksFlip(spec)
-  const onDone = () => {
+  runFlip(spec, safeFlipDuration.value, () => {
     state.commitFlip(spec.delta)
     renderStatic()
     emit('flip-end', trigger)
@@ -653,11 +663,18 @@ function flip(trigger: FlipDirection) {
     }
     // 懒光栅化：翻页结束后预取新窗口内缺失纹理，再释放窗口外纹理控制显存
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
-  }
-  // fold 开启时走折页动画（锚点外缘中部、竖直折线扫过整页），场景不可用
-  // 或该纸张所属档位 fold 关闭（如 hard 封面）回退卷曲动画。
-  // 反向翻页（单页后退）同样走折页动画：折页拖点从对侧镜像位收回外缘
-  // （场景层按 spec.reverse 反放），与前进折页同一条形变路径
+  })
+}
+
+// 翻页动画执行体（单页翻页与跳页连翻步骤共用）：前置静态布局 + 纸叠过渡
+// + 场景动画。fold 开启走折页动画（锚点外缘中部、竖直折线扫过整页），场景
+// 不可用或该纸张所属档位 fold 关闭（如 hard 封面）回退卷曲动画；反向翻页
+// （单页后退）同样走折页动画（场景层按 spec.reverse 反放）。onDone 在落页
+// 时触发（事件派发/页码提交/收尾由调用方负责）
+function runFlip(spec: FlipSpec, durationMs: number, onDone: () => void) {
+  // 翻页前置布局：相机由翻页动画接管（静态跨页半页按槽位解析半图）
+  setStaticPages(spec.staticPages, staticTextures(spec), false, props.spineShadow ? spineOf : undefined)
+  applyStacksFlip(spec)
   const fold = foldOfSpec(spec)
   const { front: frontTexture, back: backTexture } = sheetTextures(spec)
   if (
@@ -666,7 +683,7 @@ function flip(trigger: FlipDirection) {
       spec,
       frontTexture,
       backTexture,
-      safeFlipDuration.value,
+      durationMs,
       onDone,
       sheetOptions(spec),
       fold.bendWorld,
@@ -676,7 +693,7 @@ function flip(trigger: FlipDirection) {
       spec,
       frontTexture,
       backTexture,
-      safeFlipDuration.value,
+      durationMs,
       onDone,
       sheetOptions(spec),
     )
@@ -698,20 +715,183 @@ function jumpTo(target: number) {
   void rasterizeWindow(false).then(() => releaseOutsideWindow())
 }
 
+// ---------------------------------------------------------------------------
+// 跳页扇形翻页（jump fan）：goToPage / v-model / 纸叠点击 / Home·End 跳转
+// 播放多页并发的扇形翻页过渡——jumpPlan 逐张规划（每步一张纸、远距离
+// 合并大步），多张纸错峰并发翻动；飞纸用骨架纸占位（免中间页光栅化），
+// 首张纸正面带当前页内容、末张纸背面带落点页内容锚定起止
+// ---------------------------------------------------------------------------
+
+// 预取等待上限（毫秒）：覆盖 [current, target] 的纹理与超时竞速，
+// 未赶上光栅化的页短暂空白、就绪后由 applyStaticTexture 自动补上
+const JUMP_PREFETCH_TIMEOUT = 500
+
+// 扇形翻页未落定的纸张数（>0 表示扇形进行中）： currentPage watch 据此
+// 抑制中途落页的 first/last 事件（经过≠停留）
+let fanRemaining = 0
+
+// 跳页到指定页索引（已验证在界内）：返回 false 表示被 before-flip 取消
+function flipTo(target: number): boolean {
+  if (disabledRef.value || state.isFlipping.value) return false
+  const aligned = state.alignPage(target)
+  if (aligned === state.currentPage.value) return true
+  if (!emitBeforeFlip(null, state.page.value, aligned + 1)) return false
+  // 跳转会重建静态布局，先收起折角悬停的纸张与纸叠悬停
+  releasePeelNow()
+  clearStackHover()
+  // 场景未建立（不支持 WebGL / 测试环境）时扇形无从驱动：
+  // 与翻页的"场景未建立时同步提交"兜底一致，退化为瞬间跳转
+  if (!props.jumpAnimation || pageCount.value === 0 || !webglSupported.value) {
+    jumpTo(aligned)
+    return true
+  }
+  const steps = planJump({
+    currentPage: state.currentPage.value,
+    target: aligned,
+    displayedPages: state.displayedPages.value,
+    forwardDirection: props.forwardDirection,
+    numPages: pageCount.value,
+    pageAspect: safePageAspect,
+  })
+  if (steps.length === 0) {
+    jumpTo(aligned)
+    return true
+  }
+  // flip-start/flip-end 携带的触发方向：前进方向随阅读方向，后退取反向
+  const forward = aligned > state.currentPage.value
+  const direction: FlipDirection = forward
+    ? props.forwardDirection
+    : props.forwardDirection === 'left'
+      ? 'right'
+      : 'left'
+  const prevZoom = getZoom()
+  state.startFlip()
+  emit('flip-start', direction)
+  fanRemaining = steps.length
+  const from = Math.min(state.currentPage.value, aligned)
+  const to = Math.max(state.currentPage.value, aligned) + state.displayedPages.value
+  void Promise.race([
+    rasterizeRange(from, to),
+    new Promise<void>((resolve) => setTimeout(resolve, JUMP_PREFETCH_TIMEOUT)),
+  ]).then(() => {
+    // 等待期间被 stop() 打断：扇形已终局（fanRemaining 复位），不再开跑
+    if (fanRemaining === 0) return
+    if (steps.length === 1) {
+      // 单张纸：与普通翻页同一条路径、同一个 flipDuration
+      runJumpStep(steps[0]!, () => finishJump(direction, prevZoom))
+    } else {
+      startJumpFan(steps, aligned, direction, prevZoom)
+    }
+  })
+  return true
+}
+
+// 单步跳页的折页 spec：currentPage 取步起点、leafSpan 取步跨距
+function jumpStepSpec(step: JumpPlanStep): FlipSpec {
+  return computeFlipSpec({
+    currentPage: step.from,
+    displayedPages: state.displayedPages.value,
+    forwardDirection: props.forwardDirection,
+    backward: step.delta < 0,
+    pageAspect: safePageAspect,
+    numPages: pageCount.value,
+    leafSpan: step.span,
+  })
+}
+
+function runJumpStep(step: JumpPlanStep, done: () => void) {
+  runFlip(jumpStepSpec(step), safeFlipDuration.value, () => {
+    state.commitFlip(step.delta)
+    fanRemaining--
+    done()
+  })
+}
+
+// 扇形翻页：一次性摆好动画期静态布局（留驻页 + 揭示页），每步一张纸
+// 错峰并发翻动；落定逐张提交页码（change/v-model 随之派发），全部落定
+// 后由整体 onDone 收尾
+function startJumpFan(
+  steps: JumpPlanStep[],
+  target: number,
+  direction: FlipDirection,
+  prevZoom: number,
+) {
+  const placements = fanStaticLayout({
+    currentPage: state.currentPage.value,
+    target,
+    displayedPages: state.displayedPages.value,
+    forwardDirection: props.forwardDirection,
+    numPages: pageCount.value,
+  })
+  // 纸叠随全局进度从起点页状态过渡到目标页状态（不设则沿用过期起止，
+  // 临近完成时出现与合书状态矛盾的残留条带）
+  applyStacksFan(state.currentPage.value, target)
+  setStaticPages(
+    placements,
+    (index) => {
+      if (state.displayedPages.value === 1) return textures.get(index) ?? null
+      const slot = placements.find((p) => p.index === index)?.slot ?? 'center'
+      return textureAtSide(index, slot)
+    },
+    false,
+    props.spineShadow ? spineOf : undefined,
+  )
+  const skeletonPaper = blankTexture()
+  const last = steps.length - 1
+  const plans = steps.map((step, i) => {
+    const { front, back } = sheetTextures(jumpStepSpec(step))
+    const isFirst = i === 0
+    const isLast = i === last
+    return {
+      spec: jumpStepSpec(step),
+      // 首张纸正面 = 当前页内容（锚定起点）、末张纸背面 = 落点页内容
+      //（锚定落点），其余面为骨架纸——中间页不参与光栅化
+      frontTexture: isFirst ? front : skeletonPaper,
+      backTexture: isLast ? back : skeletonPaper,
+      skeleton: !(isFirst || isLast),
+      onDone: (committed: boolean) => {
+        if (!committed) return
+        state.commitFlip(step.delta)
+        fanRemaining--
+        // 未全部落定前保持翻页中状态（同一 tick 内置回，异步 watch
+        // 不会观察到中间态；中途落页照常拒绝新翻页）
+        if (fanRemaining > 0) state.startFlip()
+      },
+    }
+  })
+  const started = startFanFlip(plans, {
+    duration: Math.max(safeFlipDuration.value, plans.length * FAN_SHEET_BUDGET),
+    onDone: () => finishJump(direction, prevZoom),
+  })
+  if (!started) {
+    // 场景拒绝（如上下文丢失）：回退瞬间跳转，仍按一次翻页收尾
+    fanRemaining = 0
+    jumpTo(target)
+    finishJump(direction, prevZoom)
+  }
+}
+
+// 扇形/单步跳页终局：收尾事件与收尾调度（最终布局由 renderStatic 重建）
+function finishJump(direction: FlipDirection, prevZoom: number) {
+  fanRemaining = 0
+  emit('flip-end', direction)
+  // 缩放复位仅在实际发生翻页动画时成立（等待预取期被取消时相机未动）
+  if (prevZoom > 1 + ZOOM_TOLERANCE) {
+    zoomLevel.value = 1
+    emit('zoom-change', 1)
+  }
+  state.cancelFlip()
+  renderStatic()
+  void rasterizeWindow(false).then(() => releaseOutsideWindow())
+}
+
 // 跳转到指定页：翻页中或页码越界时拒绝并返回 false，调用方可感知跳转是否生效
 function goToPage(page: number): boolean {
   if (disabledRef.value) return false
   if (state.isFlipping.value) return false
   const target = Math.round(Number(page)) - 1
   if (!Number.isFinite(target) || target < 0 || target > pageCount.value - 1) return false
-  if (target !== state.currentPage.value) {
-    if (!emitBeforeFlip(null, state.page.value, target + 1)) return false
-    // 跳转会重建静态布局，先收起折角悬停的纸张与纸叠悬停
-    releasePeelNow()
-    clearStackHover()
-  }
-  jumpTo(target)
-  return true
+  return flipTo(target)
 }
 
 // ---------------------------------------------------------------------------

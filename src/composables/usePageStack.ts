@@ -96,6 +96,18 @@ export function usePageStack(options: PageStackOptions) {
     options.setStacks(from, to)
   }
 
+  // 扇形翻页前置布局：纸叠随全局进度从起点页状态过渡到目标页状态。
+  // 中途两侧同时有厚度是物理正确的（飞起的纸页尚未落定）；临近完成时
+  // 落点侧厚度随 slideP 收敛到目标态（跳到封底则收敛为 0，不会残留
+  // 与合书状态矛盾的条带）
+  function applyStacksFan(fromPage: number, toPage: number) {
+    if (!stackEnabled()) {
+      options.setStacks(null)
+      return
+    }
+    options.setStacks(stackVisualFor(fromPage), stackVisualFor(toPage))
+  }
+
   // 当前布局下的纸叠页面映射（悬停命中换算页码用）
   const currentStackSides = computed(() => stackSidesFor(state.currentPage.value))
 
@@ -104,5 +116,5 @@ export function usePageStack(options: PageStackOptions) {
     if (!state.isFlipping.value) applyStacksIdle()
   })
 
-  return { applyStacksIdle, applyStacksFlip, currentStackSides }
+  return { applyStacksIdle, applyStacksFlip, applyStacksFan, currentStackSides }
 }

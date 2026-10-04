@@ -65,6 +65,11 @@ export interface FlipSpec {
    * 在一侧时的"上一页从缝侧翻入"动画。未标记时进度 0→1 正常翻出
    */
   reverse?: boolean
+  /**
+   * 封面/封底开合的边界 spec：伴随书体平移（worldFromX/worldToX）且跨距
+   * 固定为 ±1/±2。跳页连翻规划据此不把边界步并入合并大步
+   */
+  boundary?: boolean
 }
 
 export type FlipDirection = ForwardDirection
@@ -150,6 +155,9 @@ export interface FlipSheetOptions {
   curl?: number
   /** 网格纵向分段数覆盖；封面档与内页密度不同时使用 */
   nPolygons?: number
+  /** 折页网格分段数覆盖（默认 96）；骨架占位纸等无内容细节的纸张
+   *  传低值降低多张并发形变的逐帧开销 */
+  foldSegments?: number
 }
 
 /**

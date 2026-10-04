@@ -87,6 +87,7 @@ const maxZoomLevel = ref(MAX_ZOOM)
 
 const peelOn = ref(true)
 const clickFlip = ref(true)
+const jumpAnim = ref(true)
 const dragFlip = ref(true)
 const stackOn = ref(true)
 // before-flip 拦截演示：开启后禁止翻到封底纸张（末尾两页）。
@@ -219,6 +220,14 @@ function goLast() {
   if (n >= 1) turnRef.value?.goToPage(n)
 }
 
+// 跳页输入框：jumpAnimation 开启时播放连翻过渡动画
+const jumpPage = ref(1)
+
+function goJump() {
+  const n = Math.round(Number(jumpPage.value))
+  if (n >= 1) turnRef.value?.goToPage(n)
+}
+
 async function onRefresh() {
   log('refresh', '开始重绘全部页面纹理')
   await turnRef.value?.refresh()
@@ -253,6 +262,7 @@ function onZoomInput(event: Event) {
       :drag-to-flip="dragFlip"
       :peel="peelOn"
       :stack="stackOn"
+      :jump-animation="jumpAnim"
       @before-flip="onBeforeFlip"
       @flip-start="onFlipStart"
       @flip-end="onFlipEnd"
@@ -512,6 +522,10 @@ export function curlPoint(s, θ, κ) {
           <span>纸叠（stack）</span>
         </label>
         <label class="panel-row panel-check">
+          <input v-model="jumpAnim" type="checkbox" />
+          <span>跳页扇形翻页（jumpAnimation）</span>
+        </label>
+        <label class="panel-row panel-check">
           <input v-model="blockBackCover" type="checkbox" :disabled="singlePageMode" />
           <span>before-flip 拦截封底演示{{ singlePageMode ? '（单页模式自动开启）' : '' }}</span>
         </label>
@@ -558,6 +572,16 @@ export function curlPoint(s, θ, κ) {
         >
           末页
         </button>
+        <input
+          v-model.number="jumpPage"
+          class="page-input"
+          type="number"
+          min="1"
+          :max="state?.numPages || 1"
+          :disabled="isDisabled"
+          @keydown.enter="goJump"
+        />
+        <button class="nav-btn" :disabled="isDisabled || !state?.numPages" @click="goJump">跳页</button>
       </div>
 
       <span class="tool-divider"></span>
@@ -610,41 +634,50 @@ export function curlPoint(s, θ, κ) {
 .toolbar {
   position: absolute;
   left: 50%;
-  bottom: 24px;
+  bottom: 20px;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 12px;
+  /* 单行布局：宽度足够时居中，放不下时左对齐并横向滚动兜底（隐藏滚动条） */
+  flex-wrap: nowrap;
+  justify-content: safe center;
+  gap: 8px;
   max-width: calc(100% - 32px);
-  padding: 10px 18px;
+  padding: 6px 14px;
   border-radius: 999px;
   background: rgba(20, 24, 33, 0.72);
   backdrop-filter: blur(8px);
   color: #e8ecf4;
   z-index: 10;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.toolbar::-webkit-scrollbar {
+  display: none;
 }
 
 .tool-group {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
 }
 
 .tool-divider {
+  flex: none;
   width: 1px;
-  height: 20px;
+  height: 18px;
   background: rgba(232, 236, 244, 0.22);
 }
 
 .nav-btn {
-  padding: 6px 14px;
+  flex: none;
+  padding: 4px 10px;
   border: 1px solid rgba(232, 236, 244, 0.28);
   border-radius: 999px;
   background: transparent;
   color: inherit;
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
   cursor: pointer;
   transition: background 0.2s;
@@ -659,18 +692,47 @@ export function curlPoint(s, θ, κ) {
   cursor: not-allowed;
 }
 
+.page-input {
+  flex: none;
+  width: 46px;
+  padding: 3px 6px;
+  border: 1px solid rgba(232, 236, 244, 0.28);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+
+.page-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 去掉 number input 的步进箭头（压缩宽度） */
+.page-input::-webkit-outer-spin-button,
+.page-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.page-input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 .indicator {
-  font-size: 13px;
-  min-width: 96px;
+  font-size: 12px;
+  min-width: 80px;
   text-align: center;
 }
 
 .zoom-indicator {
-  min-width: 44px;
+  min-width: 38px;
 }
 
 .zoom-slider {
-  width: 110px;
+  width: 84px;
   accent-color: #7cc4ff;
 }
 

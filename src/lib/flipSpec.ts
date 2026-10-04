@@ -30,6 +30,8 @@ export interface FlipSpecOptions {
   backward: boolean
   pageAspect: number
   numPages: number
+  /** 一次翻过的纸张数（跳页连翻的合并大步），默认 1；仅内页分支支持跨距，边界步恒为 1 */
+  leafSpan?: number
 }
 
 export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
@@ -54,6 +56,7 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
         backIndex: 1,
         staticPages,
         delta: 1,
+        boundary: true,
         worldFromX: ltr ? -width / 2 : width / 2,
         worldToX: 0,
         fromFitWidth: width,
@@ -73,6 +76,7 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
         backIndex: 0,
         staticPages,
         delta: -1,
+        boundary: true,
         worldFromX: 0,
         worldToX: ltr ? -width / 2 : width / 2,
         fromFitWidth: width * 2,
@@ -92,6 +96,7 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
         backIndex: last,
         staticPages,
         delta: 2,
+        boundary: true,
         worldFromX: 0,
         worldToX: ltr ? width / 2 : -width / 2,
         fromFitWidth: width * 2,
@@ -111,16 +116,21 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
         backIndex: last - 1,
         staticPages,
         delta: -2,
+        boundary: true,
         worldFromX: ltr ? width / 2 : -width / 2,
         worldToX: 0,
         fromFitWidth: width,
         toFitWidth: width * 2,
       }
     }
+    // 跨距 k：一次连翻 k 张纸（跳页合并大步）。翻起的纸张正面仍是当前
+    // 跨页外页，背面取落点跨页的左页（落定后盖住左侧），落点跨页右页
+    // 在纸张下方露出——k=1 时与原逐张索引完全一致
+    const span = Math.max(1, Math.floor(options.leafSpan ?? 1))
     const frontIndex = advancing ? currentPage + 1 : currentPage
-    const backIndex = advancing ? currentPage + 2 : currentPage - 1
+    const backIndex = advancing ? currentPage + 2 * span : currentPage - (2 * span - 1)
     const stay = advancing ? currentPage : currentPage + 1
-    const reveal = advancing ? currentPage + 3 : currentPage - 2
+    const reveal = advancing ? currentPage + 2 * span + 1 : currentPage - 2 * span
     const staticPages: StaticPlacement[] = ltr
       ? [
           ...placement(advancing ? stay : reveal, 'left', numPages),
@@ -136,24 +146,26 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
       frontIndex,
       backIndex,
       staticPages,
-      delta: advancing ? 2 : -2,
+      delta: advancing ? 2 * span : -2 * span,
     }
   }
 
   // 单页模式：页缝固定在阅读方向一侧（LTR 左缘 / RTL 右缘），前进时当前页
   // 绕缝翻出；后退为反向翻页（reverse）——目标页纸张从缝侧翻回放平、盖住
   // 仍显示的当前页，两个方向的铰链与翻入/翻出方向一致，符合"一页一面、
-  // 页缝在一侧"的单页书观感
+  // 页缝在一侧"的单页书观感。跨距 k 时前进一次翻出 k 页、后退一次翻入
+  // k 页（反向翻页的 frontIndex 取落点页）
+  const span = Math.max(1, Math.floor(options.leafSpan ?? 1))
   const ltrSeam = forwardDirection === 'left'
-  const frontIndex = advancing ? currentPage : currentPage - 1
-  const backIndex = advancing ? currentPage + 1 : currentPage
+  const frontIndex = advancing ? currentPage : currentPage - span
+  const backIndex = advancing ? currentPage + span : currentPage
   return {
     geometry: ltrSeam ? 'A' : 'B',
     hingeX: ltrSeam ? -width / 2 : width / 2,
     frontIndex,
     backIndex,
     staticPages: placement(advancing ? backIndex : currentPage, 'center', numPages),
-    delta: advancing ? 1 : -1,
+    delta: advancing ? span : -span,
     reverse: !advancing,
   }
 }
@@ -174,6 +186,48 @@ export function spreadLayout(options: SpreadLayoutOptions): StaticPlacement[] {
   return [
     ...placement(ltr ? currentPage : currentPage + 1, 'left', numPages),
     ...placement(ltr ? currentPage + 1 : currentPage, 'right', numPages),
+  ]
+}
+
+export interface FanLayoutOptions {
+  currentPage: number
+  /** 目标页索引（已对齐） */
+  target: number
+  displayedPages: 1 | 2
+  forwardDirection: ForwardDirection
+  numPages: number
+}
+
+/**
+ * 扇形翻页的静态布局（翻页前置、整段动画共用一次）：多张纸并发翻动时，
+ * 中间页从不展开——书面只呈现"翻动中不被飞纸遮挡"的两页：
+ * - 留驻页：出发侧不被翻走的一页（前进时与飞纸相对的一侧），全程可见；
+ * - 揭示页：落点侧被飞纸盖住的一页，首张纸起飞后露出。
+ * 出发/落点为居中单页（封面/封底）时该侧页面就是飞纸本身，不留静态页；
+ * 单页模式一页一面：前进揭示目标页、后退留驻当前页（反向翻页纸张从
+ * 缝侧翻入盖住它）。
+ */
+export function fanStaticLayout(options: FanLayoutOptions): StaticPlacement[] {
+  const { currentPage, target, displayedPages, forwardDirection, numPages } = options
+  if (displayedPages === 1) {
+    return placement(options.target > currentPage ? target : currentPage, 'center', numPages)
+  }
+  const ltr = forwardDirection === 'left'
+  const last = numPages - 1
+  const centered = (page: number) => page === 0 || (page === last && page % 2 === 1)
+  const advancing = target > currentPage
+  const fromCentered = centered(currentPage)
+  const toCentered = centered(target)
+  // 留驻页/揭示页索引不随方向镜像（页码恒定），只有槽位镜像：前进时
+  // 留驻 = 当前跨页左页索引（LTR 在左槽 / RTL 在右槽），揭示 = 落点跨页
+  // 右页索引；后退对调（留驻 = 当前+1、揭示 = 落点）
+  const stayIndex = fromCentered ? null : advancing ? currentPage : currentPage + 1
+  const revealIndex = toCentered ? null : advancing ? target + 1 : target
+  const staySlot: Slot = ltr === advancing ? 'left' : 'right'
+  const revealSlot: Slot = ltr === advancing ? 'right' : 'left'
+  return [
+    ...(stayIndex !== null ? placement(stayIndex, staySlot, numPages) : []),
+    ...(revealIndex !== null ? placement(revealIndex, revealSlot, numPages) : []),
   ]
 }
 

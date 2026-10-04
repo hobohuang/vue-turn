@@ -18,6 +18,14 @@ const mocks = vi.hoisted(() => {
   const done = {
     flip: null as null | ((committed: boolean) => void),
     drag: null as null | ((committed: boolean) => void),
+    fan: null as null | {
+      plans: Array<{
+        spec: import('@/types/turn').FlipSpec
+        skeleton?: boolean
+        onDone: (committed: boolean) => void
+      }>
+      options: { duration: number; onDone: () => void }
+    },
   }
   // 模拟场景缩放状态：setZoom 写入、getZoom 读出
   // （applyZoom 依赖 getZoom 返回真实值来决定是否派发 zoom-change）
@@ -45,6 +53,18 @@ const mocks = vi.hoisted(() => {
         bend?: number,
       ) => boolean
     >().mockReturnValue(false),
+    startFanFlip: vi.fn<
+      (
+        plans: Array<{
+          spec: import('@/types/turn').FlipSpec
+          frontTexture: FakeTexture | null
+          backTexture: FakeTexture | null
+          skeleton?: boolean
+          onDone: (committed: boolean) => void
+        }>,
+        fanOptions: { duration: number; onDone: () => void },
+      ) => boolean
+    >(),
     beginDragFlip: vi.fn<
       (
         spec: import('@/types/turn').FlipSpec,
@@ -110,6 +130,7 @@ vi.mock('@/composables/useTurnRenderer', () => ({
     setCoverPages: mocks.setCoverPages,
     startFlip: mocks.startFlip,
     startFoldFlip: mocks.startFoldFlip,
+    startFanFlip: mocks.startFanFlip,
     beginDragFlip: mocks.beginDragFlip,
     activateSheet: mocks.activateSheet,
     setDragProgress: mocks.setDragProgress,
@@ -156,6 +177,8 @@ interface HostProps {
   modelValue?: number
   defaultPages?: number
   keyboard?: KeyboardMode
+  /** 跳页连翻动画开关（默认 false：既有用例依赖瞬间跳转语义） */
+  jumpAnimation?: boolean
 }
 
 function createHost(props: HostProps = {}) {
@@ -192,6 +215,7 @@ function createHost(props: HostProps = {}) {
               preset: props.preset,
               coverPreset: props.coverPreset,
               keyboard: props.keyboard,
+              jumpAnimation: props.jumpAnimation,
               'onUpdate:modelValue': (v: number) => {
                 page.value = v
                 bump()
@@ -263,9 +287,12 @@ async function mountTurn(
     coverPreset?: 'soft' | 'hard' | 'custom'
     modelValue?: number
     keyboard?: KeyboardMode
+    jumpAnimation?: boolean
   } = {},
 ) {
-  const Host = createHost({ numPages, ...extraProps })
+  // 默认关闭跳页连翻：既有用例依赖 goToPage 的瞬间跳转语义；
+  // 连翻动画行为在专门的用例中开启验证
+  const Host = createHost({ numPages, jumpAnimation: false, ...extraProps })
   const wrapper = mount(Host)
   await flushPromises()
   return wrapper
@@ -276,6 +303,7 @@ describe('VueTurn', () => {
     vi.clearAllMocks()
     mocks.done.flip = null
     mocks.done.drag = null
+    mocks.done.fan = null
     // 缩放 mock 有状态：setZoom 写入 / getZoom 读出（applyZoom 据此判断
     // 场景是否真的执行了缩放，未执行时不派发 zoom-change）
     mocks.resetZoomState()
@@ -292,6 +320,11 @@ describe('VueTurn', () => {
     })
     // 默认：折页动画路径不可用（回退卷曲 startFlip），个别用例按需覆盖
     mocks.startFoldFlip.mockImplementation(() => false)
+    // 默认：扇形翻页可用，记录计划与回调供逐张/整体触发
+    mocks.startFanFlip.mockImplementation((plans, options) => {
+      mocks.done.fan = { plans, options }
+      return true
+    })
     // 默认：拖拽翻页可用，记录回调供 endDragFlip/stopFlip 触发
     mocks.beginDragFlip.mockImplementation((_spec, _front, _back, onDone) => {
       mocks.done.drag = onDone
@@ -303,11 +336,19 @@ describe('VueTurn', () => {
       cb?.(commit)
     })
     mocks.stopFlip.mockImplementation(() => {
-      // 模拟真实场景 stop 的同步收尾：优先拖拽（按取消），否则翻页动画（按提交）
+      // 模拟真实场景 stop 的同步收尾：优先拖拽（按取消），否则翻页动画（按提交），
+      // 扇形翻页按全部提交收尾（未落定纸张直接到终点）
       if (mocks.done.drag) {
         const cb = mocks.done.drag
         mocks.done.drag = null
         cb(false)
+        return
+      }
+      if (mocks.done.fan) {
+        const fan = mocks.done.fan
+        mocks.done.fan = null
+        for (const plan of fan.plans) plan.onDone(true)
+        fan.options.onDone()
         return
       }
       const cb = mocks.done.flip
@@ -431,6 +472,64 @@ describe('VueTurn', () => {
     await wrapper.find('#jump').trigger('click')
     await flushPromises()
     expect(wrapper.find('#indicator').text()).toBe('4/8')
+  })
+
+  it('fans multiple sheets on goToPage when jumpAnimation is enabled', async () => {
+    mocks.startFanFlip.mockImplementation((plans, options) => {
+      mocks.done.fan = { plans, options }
+      return true
+    })
+    const wrapper = await mountTurn(6, { jumpAnimation: true })
+    // goToPage(5)：目标索引 4 对齐到跨页左页 3——封面展开边界 + 内页共 2 张飞纸
+    await wrapper.find('#jump').trigger('click')
+    await flushPromises()
+    const fan = mocks.done.fan
+    expect(fan).not.toBeNull()
+    expect(fan?.plans).toHaveLength(2)
+    expect(fan?.plans[0]?.spec.delta).toBe(1)
+    expect(fan?.plans[0]?.spec.boundary).toBe(true)
+    expect(fan?.plans[1]?.spec.delta).toBe(2)
+    // 2 张纸都承担锚定面（首张正面/末张背面），无纯骨架纸
+    expect(fan?.plans.map((p) => p.skeleton)).toEqual([false, false])
+    // 总时长预算：max(900, 2*280) = 900
+    expect(fan?.options.duration).toBe(900)
+    // 扇形进行中页码未动
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
+    // 逐张落定提交 + 整体收尾：落在对齐后的目标页
+    for (const plan of fan?.plans ?? []) plan.onDone(true)
+    fan?.options.onDone()
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
+  })
+
+  it('lands on the target when stop() interrupts a fan jump', async () => {
+    const wrapper = await mountTurn(6, { jumpAnimation: true })
+    await wrapper.find('#jump').trigger('click')
+    await flushPromises()
+    // 扇形进行中（页码未动）调用 stop：场景按全部提交收尾，直达目标
+    expect(wrapper.find('#indicator').text()).toBe('1/8')
+    const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
+    inst.stop()
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('4/8')
+  })
+
+  it('fans in single-page mode with skeleton middle sheets', async () => {
+    const wrapper = await mountTurn(6, { displayedPages: 1, jumpAnimation: true })
+    // goToPage(5)：单页模式索引 0 → 4，每张纸一页共 4 张
+    await wrapper.find('#jump').trigger('click')
+    await flushPromises()
+    const fan = mocks.done.fan
+    expect(fan?.plans).toHaveLength(4)
+    expect(fan?.plans.map((p) => p.spec.delta)).toEqual([1, 1, 1, 1])
+    // 首尾两张承担锚定面，中间两张为骨架纸
+    expect(fan?.plans.map((p) => p.skeleton)).toEqual([false, true, true, false])
+    // 总时长预算：max(900, 4*280) = 1120
+    expect(fan?.options.duration).toBe(1120)
+    for (const plan of fan?.plans ?? []) plan.onDone(true)
+    fan?.options.onDone()
+    await flushPromises()
+    expect(wrapper.find('#indicator').text()).toBe('5/6')
   })
 
   it('ignores flips while an animation is in flight', async () => {
@@ -987,6 +1086,7 @@ describe('VueTurn', () => {
                 ref: turnRef,
                 modelValue: 1,
                 displayedPages: mode.value,
+                jumpAnimation: false,
               },
               { default: () => pages(6) },
             ),

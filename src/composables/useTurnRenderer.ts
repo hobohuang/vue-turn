@@ -135,6 +135,16 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     return scene.startFoldFlip(spec, frontTexture, backTexture, duration, onDone, options, bend)
   }
 
+  // 扇形翻页（多页跳转）：多张纸错峰并发翻动，全部落定后触发整体 onDone。
+  // 场景可用返回 true，调用方据此回退（瞬间跳转）
+  function startFanFlip(
+    plans: Parameters<TurnScene['startFanFlip']>[0],
+    fanOptions: Parameters<TurnScene['startFanFlip']>[1],
+  ): boolean {
+    if (!scene) return false
+    return scene.startFanFlip(plans, fanOptions)
+  }
+
   // 拖拽翻页：场景可用返回 true，调用方据此进入拖拽状态。
   // preview=true 为悬停预览：书体/静态页/纸叠钉在起始态
   function beginDragFlip(
@@ -253,6 +263,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     setStackHover,
     startFlip,
     startFoldFlip,
+    startFanFlip,
     beginDragFlip,
     activateSheet,
     setDragProgress,

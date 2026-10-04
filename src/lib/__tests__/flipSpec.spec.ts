@@ -89,6 +89,7 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 1,
       staticPages: [{ index: 2, slot: 'right' }],
       delta: 1,
+      boundary: true,
       worldFromX: -sheetWorldWidth(ASPECT) / 2,
       worldToX: 0,
       fromFitWidth: sheetWorldWidth(ASPECT),
@@ -104,6 +105,7 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 1,
       staticPages: [{ index: 2, slot: 'left' }],
       delta: 1,
+      boundary: true,
       worldFromX: sheetWorldWidth(ASPECT) / 2,
       worldToX: 0,
       fromFitWidth: sheetWorldWidth(ASPECT),
@@ -119,6 +121,7 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 0,
       staticPages: [{ index: 2, slot: 'right' }],
       delta: -1,
+      boundary: true,
       worldFromX: 0,
       worldToX: -sheetWorldWidth(ASPECT) / 2,
       fromFitWidth: sheetWorldWidth(ASPECT) * 2,
@@ -134,6 +137,7 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 0,
       staticPages: [{ index: 2, slot: 'left' }],
       delta: -1,
+      boundary: true,
       worldFromX: 0,
       worldToX: sheetWorldWidth(ASPECT) / 2,
       fromFitWidth: sheetWorldWidth(ASPECT) * 2,
@@ -149,6 +153,7 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 9,
       staticPages: [{ index: 7, slot: 'left' }],
       delta: 2,
+      boundary: true,
       worldFromX: 0,
       worldToX: sheetWorldWidth(ASPECT) / 2,
       fromFitWidth: sheetWorldWidth(ASPECT) * 2,
@@ -164,6 +169,7 @@ describe('computeFlipSpec in spread mode', () => {
       backIndex: 8,
       staticPages: [{ index: 7, slot: 'left', fromSlot: 'center' }],
       delta: -2,
+      boundary: true,
       worldFromX: sheetWorldWidth(ASPECT) / 2,
       worldToX: 0,
       fromFitWidth: sheetWorldWidth(ASPECT),
@@ -222,6 +228,68 @@ describe('computeFlipSpec in single-page mode', () => {
       backIndex: 3,
       staticPages: [{ index: 3, slot: 'center' }],
       delta: -1,
+      reverse: true,
+    })
+  })
+})
+
+describe('computeFlipSpec with leafSpan (jump riffle chunks)', () => {
+  it('flips forward two sheets at once', () => {
+    // 从跨页 [3,4] 一次翻 2 张：纸背落点为跨页 [7,8] 的左页
+    expect(spec({ currentPage: 3, leafSpan: 2 })).toEqual({
+      geometry: 'A',
+      hingeX: 0,
+      frontIndex: 4,
+      backIndex: 7,
+      staticPages: [
+        { index: 3, slot: 'left' },
+        { index: 8, slot: 'right' },
+      ],
+      delta: 4,
+    })
+  })
+
+  it('flips backward two sheets at once', () => {
+    // 从跨页 [7,8] 一次翻回 2 张：纸背落点为跨页 [3,4] 的右页
+    expect(spec({ currentPage: 7, backward: true, leafSpan: 2 })).toEqual({
+      geometry: 'B',
+      hingeX: 0,
+      frontIndex: 7,
+      backIndex: 4,
+      staticPages: [
+        { index: 3, slot: 'left' },
+        { index: 8, slot: 'right' },
+      ],
+      delta: -4,
+    })
+  })
+
+  it('clamps invalid spans to a single sheet', () => {
+    expect(spec({ leafSpan: 0 })).toEqual(spec({}))
+    expect(spec({ leafSpan: -3 })).toEqual(spec({}))
+    expect(spec({ leafSpan: 1.8 })).toEqual(spec({}))
+  })
+
+  it('keeps single-page forward spans on the fixed seam', () => {
+    expect(spec({ displayedPages: 1, currentPage: 2, leafSpan: 3 })).toEqual({
+      geometry: 'A',
+      hingeX: -sheetWorldWidth(ASPECT) / 2,
+      frontIndex: 2,
+      backIndex: 5,
+      staticPages: [{ index: 5, slot: 'center' }],
+      delta: 3,
+      reverse: false,
+    })
+  })
+
+  it('keeps single-page backward spans reversed', () => {
+    expect(spec({ displayedPages: 1, currentPage: 5, backward: true, leafSpan: 3 })).toEqual({
+      geometry: 'A',
+      hingeX: -sheetWorldWidth(ASPECT) / 2,
+      frontIndex: 2,
+      backIndex: 5,
+      staticPages: [{ index: 5, slot: 'center' }],
+      delta: -3,
       reverse: true,
     })
   })
