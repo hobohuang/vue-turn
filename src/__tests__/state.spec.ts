@@ -110,7 +110,7 @@ function createHost(maxZoom: Ref<number>) {
               ref: turnRef,
               modelValue: page.value,
               maxZoom: maxZoom.value,
-              // 既有用例依赖 goToPage 的瞬间跳转语义（连翻动画单独验证）
+              // 既有用例依赖 goToPage 的瞬间跳转语义（扇形动画单独验证）
               jumpAnimation: false,
               'onUpdate:modelValue': (v: number) => {
                 page.value = v

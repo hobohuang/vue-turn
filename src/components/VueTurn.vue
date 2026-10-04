@@ -65,9 +65,9 @@ const props = withDefaults(
     pageAspect?: number
     /** 单次翻页动画时长（毫秒） */
     flipDuration?: number
-    /** 跳页连翻动画：goToPage / v-model / 纸叠点击 / Home·End 跳转时播放连续
-     * 翻页过渡——近距离逐张连翻，远距离按比例合并成大步（封面/封底边界步
-     * 不合并），总时长约一个 flipDuration；false 恢复瞬间跳转 */
+    /** 跳页扇形翻页：goToPage / v-model / 纸叠点击 / Home·End 跳转时播放
+     * 多页并发的扇形翻页过渡（骨架纸占位，起止内容锚定）；false 恢复瞬间
+     * 跳转 */
     jumpAnimation?: boolean
     /** 观感预设（纸张类型）：为专业渲染参数提供成组基线——soft 普通纸张哑光（默认）、hard 纸板刚体强光泽、custom 自定义；look 可逐项覆盖 */
     preset?: TurnPreset
@@ -411,7 +411,7 @@ watch(
   { immediate: true },
 )
 
-// v-model：外部页码变化时跳转（jumpAnimation 开启时播放连翻动画）；
+// v-model：外部页码变化时跳转（jumpAnimation 开启时播放扇形翻页动画）；
 // 翻页中则推迟到动画结束。before-flip 拦截统一由 flipTo 派发（排队跳转
 // 在出队执行时拦截），被取消时回写当前页码纠正外部状态
 watch(
@@ -518,7 +518,7 @@ watch([() => state.currentPage.value, () => state.displayedPages.value], () => {
 
 // 页码变化统一出口：同步 v-model 并派发 change/first/last
 // mountedDone：挂载初始页同步不触发 first/last（与 turn.js 语义一致：仅用户导航触发）。
-// 跳页连翻的中途落页不触发 first/last（经过≠停留），链尾或链被中断时正常判定
+// 扇形翻页的中途落纸不触发 first/last（经过≠停留），全部落定后正常判定
 let mountedDone = false
 watch(
   () => state.currentPage.value,
@@ -666,7 +666,7 @@ function flip(trigger: FlipDirection) {
   })
 }
 
-// 翻页动画执行体（单页翻页与跳页连翻步骤共用）：前置静态布局 + 纸叠过渡
+// 翻页动画执行体（单页翻页与单步跳页共用）：前置静态布局 + 纸叠过渡
 // + 场景动画。fold 开启走折页动画（锚点外缘中部、竖直折线扫过整页），场景
 // 不可用或该纸张所属档位 fold 关闭（如 hard 封面）回退卷曲动画；反向翻页
 // （单页后退）同样走折页动画（场景层按 spec.reverse 反放）。onDone 在落页

@@ -220,7 +220,7 @@ function goLast() {
   if (n >= 1) turnRef.value?.goToPage(n)
 }
 
-// 跳页输入框：jumpAnimation 开启时播放连翻过渡动画
+// 跳页输入框：jumpAnimation 开启时播放扇形翻页过渡动画
 const jumpPage = ref(1)
 
 function goJump() {

@@ -56,7 +56,7 @@ export function useBookState() {
     currentPage.value = clampAndAlign(index)
   }
 
-  // 页码对齐（goToPage/跳页连翻规划共用）：钳制到有效范围并按显示模式对齐跨页
+  // 页码对齐（goToPage/跳页扇形规划共用）：钳制到有效范围并按显示模式对齐跨页
   function alignPage(value: number): number {
     return clampAndAlign(value)
   }

@@ -177,7 +177,7 @@ interface HostProps {
   modelValue?: number
   defaultPages?: number
   keyboard?: KeyboardMode
-  /** 跳页连翻动画开关（默认 false：既有用例依赖瞬间跳转语义） */
+  /** 跳页扇形翻页动画开关（默认 false：既有用例依赖瞬间跳转语义） */
   jumpAnimation?: boolean
 }
 
@@ -290,8 +290,8 @@ async function mountTurn(
     jumpAnimation?: boolean
   } = {},
 ) {
-  // 默认关闭跳页连翻：既有用例依赖 goToPage 的瞬间跳转语义；
-  // 连翻动画行为在专门的用例中开启验证
+  // 默认关闭跳页扇形翻页：既有用例依赖 goToPage 的瞬间跳转语义；
+  // 扇形动画行为在专门的用例中开启验证
   const Host = createHost({ numPages, jumpAnimation: false, ...extraProps })
   const wrapper = mount(Host)
   await flushPromises()

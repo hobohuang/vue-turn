@@ -263,8 +263,8 @@ export function usePageTextures(options: PageTexturesOptions) {
     }
   }
 
-  // 显式范围光栅化（跳页连翻预取）：[start, end) 内补生成缺失纹理。
-  // 不重建静态布局、不发 ready——预取结果只服务即将开始的连翻步骤，
+  // 显式范围光栅化（跳页扇形预取）：[start, end) 内补生成缺失纹理。
+  // 不重建静态布局、不发 ready——预取结果只服务即将开始的扇形翻页，
   // 慢页由步骤推进中的 rasterizeWindow 跟进补齐。与窗口光栅化共用 seq
   // 机制：期间发生的 refresh/模式切换会作废本批结果
   async function rasterizeRange(start: number, end: number) {
@@ -553,7 +553,7 @@ export function usePageTextures(options: PageTexturesOptions) {
     remapModeTextures,
     rasterizeWindow,
     rasterizePages,
-    /** 显式范围光栅化（跳页连翻预取）：[start, end) 内补生成缺失纹理 */
+    /** 显式范围光栅化（跳页扇形预取）：[start, end) 内补生成缺失纹理 */
     rasterizeRange,
     releaseOutsideWindow,
     /** 手动重绘全部页面纹理（cacheBust 生效） */

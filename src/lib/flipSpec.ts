@@ -30,7 +30,7 @@ export interface FlipSpecOptions {
   backward: boolean
   pageAspect: number
   numPages: number
-  /** 一次翻过的纸张数（跳页连翻的合并大步），默认 1；仅内页分支支持跨距，边界步恒为 1 */
+  /** 一次翻过的纸张数（跳页扇形的合并大步），默认 1；仅内页分支支持跨距，边界步恒为 1 */
   leafSpan?: number
 }
 
@@ -123,7 +123,7 @@ export function computeFlipSpec(options: FlipSpecOptions): FlipSpec {
         toFitWidth: width * 2,
       }
     }
-    // 跨距 k：一次连翻 k 张纸（跳页合并大步）。翻起的纸张正面仍是当前
+    // 跨距 k：一次翻过 k 张纸（跳页合并大步）。翻起的纸张正面仍是当前
     // 跨页外页，背面取落点跨页的左页（落定后盖住左侧），落点跨页右页
     // 在纸张下方露出——k=1 时与原逐张索引完全一致
     const span = Math.max(1, Math.floor(options.leafSpan ?? 1))

@@ -1,12 +1,19 @@
 # 更新日志
 
-遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.4.1`。
+遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.5.0`。
 
-## Unreleased
+## 0.5.0 - 2026-10-04
 
 ### 新增
 
-- **跳页扇形翻页（`jumpAnimation`，默认开启）**：`goToPage` / v-model 跳页 / 纸叠点击 / 键盘 Home·End 的跨页跳转播放**多页并发的扇形翻页**——多张纸页错峰起飞、各处不同翻动相位（波浪式扇面），骨架纸占位（统一纸色、低分段形变，中间页不参与光栅化，跳转只依赖起点/落点页纹理），首张飞纸正面为当前页、末张背面为落点页（起止内容锚定）；纸张数逐张封顶 6 张、更远按递增块合并大步（封面/封底开合边界步不合并），总时长 = `max(flipDuration, 张数 × 280ms)` 与页数解耦。事件语义：`before-flip` 整次跳转只发一次、`flip-start`/`flip-end` 各一次、`change`/`update:modelValue` 随每张纸落定逐页派发、`first`/`last` 仅最终落点触发；`stop()` 跳过动画直接落定到目标页。动画期静态布局为"留驻页 + 揭示页"（`fanStaticLayout` 纯函数），书体平移随全局进度插值；纸叠条带三段式过渡：起步在出发侧缩入书内、中段隐藏、末段约 15% 起在落点侧淡入目标厚度（`FAN_STACK_FADE_OUT`/`FAN_STACK_FADE_IN`），避免飞纸与插值条带同区域交叠。跳转前预取起止范围纹理（与 500ms 超时竞速）；传 `:jump-animation="false"` 恢复瞬间跳转，WebGL 不可用时同样退化为瞬间切换。实现：TurnScene 新增 `startFanFlip` 多纸张并发通道（与单纸张状态机互斥、`stopFlip`/上下文丢失/卸载均有收尾路径）、`computeFlipSpec` 新增 `leafSpan`（一次翻 k 张纸，k=1 与原行为一致）与 `boundary` 边界标记、`lib/jumpPlan.ts` 纯函数规划（`MAX_JUMP_STEPS`/`FAN_SHEET_BUDGET` 随之导出）。
+- **跳页扇形翻页（新 prop `jumpAnimation`，默认开启）**：`goToPage` / v-model 跳页 / 纸叠点击 / 键盘 Home·End 的跨页跳转播放**多页并发的扇形翻页**——多张纸页错峰起飞、各处不同翻动相位（波浪式扇面）。骨架纸占位：中间页为统一纸色低分段形变、不参与离屏光栅化（跳转只依赖起点/落点页纹理），首张飞纸正面为当前页、末张背面为落点页锚定起止。纸张数逐张封顶 6 张、更远按递增块合并大步（封面/封底开合边界步不合并），总时长 = `max(flipDuration, 张数 × 280ms)` 与页数解耦。
+- **扇形动画期视觉编排**：动画期静态布局为"留驻页 + 揭示页"（`fanStaticLayout` 纯函数）；书体平移随全局进度插值；纸叠条带三段式过渡——起步在出发侧页缘缩入书内、中段隐藏、末段约 15% 起在落点侧淡入目标厚度（`FAN_STACK_FADE_OUT`/`FAN_STACK_FADE_IN`），避免飞纸与插值条带同区域交叠。跳转前预取起止范围纹理（与 500ms 超时竞速，未赶上的页短暂空白后自动补齐）。
+
+### 变更
+
+- **跳页默认行为变更**：`goToPage` / v-model / 纸叠点击 / Home·End 默认从瞬间切换变为播放扇形动画；传 `:jump-animation="false"` 恢复瞬间跳转，WebGL 不可用时同样退化为瞬间切换。
+- **跳页事件语义**：`before-flip` 整次跳转只发一次（`direction` 为 `null`，`from`/`to` 为起止页码）、`flip-start`/`flip-end` 各一次、`change`/`update:modelValue` 随每张纸落定逐页派发、`first`/`last` 仅最终落点触发；`stop()` 跳过动画直接落定到目标页。
+- **内部扩展**：`computeFlipSpec` 新增 `leafSpan`（一次翻 k 张纸，k=1 与原行为一致）与 `boundary` 边界标记；TurnScene 新增 `startFanFlip` 多纸张并发通道（与单纸张状态机互斥，`stopFlip`/上下文丢失/卸载均有收尾路径）；`lib/jumpPlan.ts` 纯函数规划（`MAX_JUMP_STEPS`/`FAN_SHEET_BUDGET` 随之导出）。
 
 ## 0.4.1 - 2026-10-03
 

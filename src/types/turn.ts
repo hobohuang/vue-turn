@@ -67,7 +67,7 @@ export interface FlipSpec {
   reverse?: boolean
   /**
    * 封面/封底开合的边界 spec：伴随书体平移（worldFromX/worldToX）且跨距
-   * 固定为 ±1/±2。跳页连翻规划据此不把边界步并入合并大步
+   * 固定为 ±1/±2。跳页扇形规划据此不把边界步并入合并大步
    */
   boundary?: boolean
 }
