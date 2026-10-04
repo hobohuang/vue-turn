@@ -2,7 +2,9 @@
 
 基于 Three.js 的 Vue 3 书本翻页组件：真实纸张卷曲形变、双页跨页布局、封面/封底开合动画、拖拽翻页、角点折角拖拽（turn.js 4 风格）、折角提示、跳页扇形翻页、缩放视口与页面热区。页面内容以普通 HTML 编写，运行时离屏光栅化为纹理贴到可形变网格上。
 
-**在线演示**：<https://hobohuang.github.io/vue-turn/>（push 到 `main` 自动部署）
+**在线演示**：<https://hobohuang.github.io/vue-turn/>
+
+**npm**：<https://www.npmjs.com/package/vue-turnbook>
 
 ## 安装
 
