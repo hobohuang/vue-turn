@@ -41,5 +41,5 @@ export function useFoldProfiles(options: {
     return isCoverSheet([index]) ? cover : inner
   }
 
-  return { innerFold: inner, coverFold: cover, isCoverSheet, foldOfSpec, foldOfPage }
+  return { isCoverSheet, foldOfSpec, foldOfPage }
 }

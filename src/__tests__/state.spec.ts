@@ -182,13 +182,14 @@ describe('实例响应式 state', () => {
     mocks.getZoom.mockReturnValue(1)
     const { inst, text } = await mountStateHost()
     expect(text('zoom')).toBe('1')
-    // useZoomPan.applyZoom：setZoom 后读取 getZoom 判定变化并派发 zoom-change
-    mocks.getZoom.mockReturnValueOnce(1).mockReturnValue(3)
+    // useZoomPan.applyZoom：把缩放请求交给场景后回读一次级别，
+    // 与镜像不同才派发 zoom-change（无需比对调用前后的两次读数）
+    mocks.getZoom.mockReturnValue(3)
     inst.zoomIn()
     await flushPromises()
     expect(text('zoom')).toBe('3')
 
-    mocks.getZoom.mockReturnValueOnce(3).mockReturnValue(1)
+    mocks.getZoom.mockReturnValue(1)
     inst.zoomOut()
     await flushPromises()
     expect(text('zoom')).toBe('1')

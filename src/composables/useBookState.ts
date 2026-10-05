@@ -1,14 +1,13 @@
 import { computed, ref } from 'vue'
 
-import type { ForwardDirection } from '../types/turn'
-
 // 组件内部状态机：不依赖任何全局状态库，每个 vue-turn 实例天然隔离
+// 阅读方向不入本状态机：所有消费方读的都是 props.forwardDirection，
+// 另存一份只会产生"改一处忘另一处"的漂移
 export function useBookState() {
   const numPages = ref(0)
   const currentPage = ref(0)
   const displayedPages = ref<1 | 2>(2)
   const isFlipping = ref(false)
-  const forwardDirection = ref<ForwardDirection>('left')
 
   const page = computed(() => currentPage.value + 1)
 
@@ -18,14 +17,6 @@ export function useBookState() {
 
   const canGoBack = computed(() => !isFlipping.value && currentPage.value > 0)
 
-  const canFlipLeft = computed(() =>
-    forwardDirection.value === 'left' ? canGoForward.value : canGoBack.value,
-  )
-
-  const canFlipRight = computed(() =>
-    forwardDirection.value === 'left' ? canGoBack.value : canGoForward.value,
-  )
-
   function clampAndAlign(value: number): number {
     const max = Math.max(0, numPages.value - 1)
     const result = Math.min(Math.max(0, Math.round(value)), max)
@@ -34,10 +25,6 @@ export function useBookState() {
       return result - 1
     }
     return result
-  }
-
-  function setForwardDirection(direction: ForwardDirection) {
-    forwardDirection.value = direction
   }
 
   function setNumPages(count: number) {
@@ -81,13 +68,9 @@ export function useBookState() {
     currentPage,
     displayedPages,
     isFlipping,
-    forwardDirection,
     page,
     canGoForward,
     canGoBack,
-    canFlipLeft,
-    canFlipRight,
-    setForwardDirection,
     setNumPages,
     setDisplayedPages,
     goToPage,

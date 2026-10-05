@@ -96,6 +96,33 @@ function collectPages(slots: Slots): PageItem[] {
   return result
 }
 
+function toFaces(items: PageItem[]): PageFace[] {
+  const error = validateItemTypes(items.map((item) => item.type))
+  if (error) {
+    if (!erroredItemTypes) {
+      erroredItemTypes = true
+      console.error(`[vue-turn] ${error}；本书拒绝渲染`)
+    }
+    return []
+  }
+  return items.map((item): PageFace => {
+    switch (item.type) {
+      case 'cover':
+        return { vnode: item.vnode, spread: false, regions: item.regions, face: 'coverFront' }
+      case 'cover-inside':
+        return { vnode: item.vnode, spread: false, regions: item.regions, face: 'coverBack' }
+      case 'back-cover':
+        return { vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverFront' }
+      case 'back-cover-inside':
+        return { vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverBack' }
+      case 'jacket':
+        return { vnode: item.vnode, spread: true, regions: item.regions, face: 'coverSpread' }
+      default:
+        return { vnode: item.vnode, spread: item.spread, regions: item.regions, face: 'content' }
+    }
+  })
+}
+
 /**
  * 页面收集与面映射：渲染期从默认插槽收集 turn-item（展平 v-for Fragment），
  * 并按 type 标注把 item 归类为面——cover → coverFront、cover-inside →
@@ -106,37 +133,19 @@ function collectPages(slots: Slots): PageItem[] {
  * buildPageSources（lib/pageMapping.ts）按位置约定兜底。
  * 标注非法（重复/混用/孤儿衬页/未知值）时整本书拒绝渲染（pageFaces 为空）。
  *
- * 必须在渲染函数内调用插槽（computed 内读取 slots.default），
- * 才能让父组件的内容变化正常触发本组件更新。
+ * 求值时机（勿轻易改成"渲染期直接调用插槽"）：插槽必须在渲染上下文内调用，
+ * Vue 才会追踪插槽内容用到的依赖；否则父组件重渲染不触发本组件更新。
+ * computed 的 effect 在模板首次读取时正处于本组件渲染中，因此依赖被正确收集，
+ * 同时缓存住这批 vnode——本组件因内部状态（悬停提示、缩放级别、页码）重渲染时
+ * 沿用同一批 vnode，离屏页面 DOM 不会被整体重建（VnodeHolder 做最小 diff 的前提）。
+ * 注意：DEV 下若 computed 先于渲染被求值（setup 期的 immediate watcher、
+ * flush: 'pre' 的回调），Vue 会打印 "Slot invoked outside of the render
+ * function" 告警。已试过改用「插槽函数引用变化」作为缓存键来绕开该告警，
+ * 但那会漏掉「插槽内依赖变化而父组件未重渲染」的场景（父级 render 函数把
+ * 响应式读取留在插槽闭包内时引用不变），故维持现状。
  */
 export function usePageSources(slots: Slots) {
-  const pageFaces = computed<PageFace[]>(() => {
-    const items = collectPages(slots)
-    const error = validateItemTypes(items.map((item) => item.type))
-    if (error) {
-      if (!erroredItemTypes) {
-        erroredItemTypes = true
-        console.error(`[vue-turn] ${error}；本书拒绝渲染`)
-      }
-      return []
-    }
-    return items.map((item): PageFace => {
-      switch (item.type) {
-        case 'cover':
-          return { vnode: item.vnode, spread: false, regions: item.regions, face: 'coverFront' }
-        case 'cover-inside':
-          return { vnode: item.vnode, spread: false, regions: item.regions, face: 'coverBack' }
-        case 'back-cover':
-          return { vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverFront' }
-        case 'back-cover-inside':
-          return { vnode: item.vnode, spread: false, regions: item.regions, face: 'backCoverBack' }
-        case 'jacket':
-          return { vnode: item.vnode, spread: true, regions: item.regions, face: 'coverSpread' }
-        default:
-          return { vnode: item.vnode, spread: item.spread, regions: item.regions, face: 'content' }
-      }
-    })
-  })
+  const pageFaces = computed<PageFace[]>(() => toFaces(collectPages(slots)))
 
   return { pageFaces }
 }

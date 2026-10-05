@@ -22,7 +22,10 @@ export interface ZoomPanOptions {
   isBusy: () => boolean
   renderer: ZoomPanRenderer
   safeMaxZoom: ComputedRef<number>
-  emit: (event: 'zoom-change', level: number) => void
+  /** 缩放请求已交给场景：编排层据此回读级别、同步响应式镜像并派发
+   *  zoom-change。场景没执行（翻页中忽略 setZoom、请求值即当前值）时级别
+   *  不变，镜像同步自然不派发——无需在此比对前后值 */
+  onZoomChange: () => void
 }
 
 /**
@@ -30,8 +33,16 @@ export interface ZoomPanOptions {
  * 放大后的平移手势由主指针状态机路由到 renderer.panBy。
  */
 export function useZoomPan(options: ZoomPanOptions) {
-  const { zoomEnabled, dblClickZoom, isDisabled, isFlipping, isBusy, renderer, safeMaxZoom, emit } =
-    options
+  const {
+    zoomEnabled,
+    dblClickZoom,
+    isDisabled,
+    isFlipping,
+    isBusy,
+    renderer,
+    safeMaxZoom,
+    onZoomChange,
+  } = options
 
   function isZoomed() {
     return renderer.getZoom() > 1 + ZOOM_TOLERANCE
@@ -55,12 +66,8 @@ export function useZoomPan(options: ZoomPanOptions) {
   function applyZoom(level: number, animate = true) {
     const value = Number.isFinite(level) ? level : 1
     const clamped = Math.min(Math.max(value, 1), safeMaxZoom.value)
-    const before = renderer.getZoom()
     renderer.setZoom(clamped, animate)
-    const after = renderer.getZoom()
-    // 场景未执行（翻页/拖拽中或请求值即当前值）时不派发，
-    // 避免 zoom-change 事件与实际缩放状态背离
-    if (after !== before) emit('zoom-change', after)
+    onZoomChange()
   }
 
   // 缩放实例方法

@@ -4,7 +4,7 @@ import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 
 import TurnItem from '@/components/TurnItem.vue'
 import VueTurn from '@/components/VueTurn.vue'
-import type { KeyboardMode, LookOptions, TurnInstance } from '@/types/turn'
+import type { BeforeFlipContext, KeyboardMode, LookOptions, TurnInstance } from '@/types/turn'
 
 // 组件卸载时会移除 document 级键盘监听并递减实例计数（多实例键盘互斥依赖
 // 该计数），必须每个用例后自动卸载，否则泄漏实例会跨用例干扰互斥判定
@@ -28,10 +28,13 @@ const mocks = vi.hoisted(() => {
     },
   }
   // 模拟场景缩放状态：setZoom 写入、getZoom 读出
-  // （applyZoom 依赖 getZoom 返回真实值来决定是否派发 zoom-change）
+  // （组件在缩放请求后回读一次级别，级别确有变化才派发 zoom-change）
   let zoomState = 1
   return {
     done,
+    // 容器尺寸（响应式对象由 vi.mock 工厂注入）：auto 显示模式的 resize/转屏
+    // 路径需要测试直接改写它
+    containerSize: null as unknown as { width: number; height: number },
     startFlip: vi.fn<
       (
         spec: import('@/types/turn').FlipSpec,
@@ -97,6 +100,7 @@ const mocks = vi.hoisted(() => {
     setFoldDragAt: vi.fn<(qu: number, qv: number) => number | null>(),
     endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
     setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
+    setMaxZoom: vi.fn<(value: number) => void>(),
     getZoom: vi.fn<() => number>(),
     // 缩放状态访问器（测试内复位/写入，各用例独立）
     resetZoomState: () => {
@@ -108,48 +112,65 @@ const mocks = vi.hoisted(() => {
     readZoomState: (): number => zoomState,
     panBy: vi.fn<(dx: number, dy: number) => void>(),
     pickPage: vi.fn<(x: number, y: number) => unknown>(),
-    setStaticPages: vi.fn<(placements: unknown[], textureOf: (index: number) => unknown) => void>(),
+    setStaticPages: vi.fn<
+      (
+        placements: unknown[],
+        textureOf: (index: number) => unknown,
+        refit?: boolean,
+        spineOf?: unknown,
+      ) => void
+    >(),
     setSpineScale: vi.fn<(scale: number) => void>(),
     applyStaticTexture: vi.fn<(index: number, texture: FakeTexture) => void>(),
     setCoverPages: vi.fn<(indices: number[]) => void>(),
     setStacks: vi.fn<() => void>(),
+    pickStack: vi.fn<
+      (x: number, y: number) => { side: 'left' | 'right'; fraction: number } | null
+    >().mockReturnValue(null),
     elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
     solidColorTexture: vi.fn<() => FakeTexture>(),
   }
 })
 
-vi.mock('@/composables/useTurnRenderer', () => ({
-  useTurnRenderer: () => ({
-    container: ref(null),
-    containerSize: reactive({ width: 900, height: 600 }),
-    webglSupported: ref(true),
-    maxAnisotropy: ref(8),
-    setStaticPages: mocks.setStaticPages,
-    setSpineScale: mocks.setSpineScale,
-    applyStaticTexture: mocks.applyStaticTexture,
-    setCoverPages: mocks.setCoverPages,
-    startFlip: mocks.startFlip,
-    startFoldFlip: mocks.startFoldFlip,
-    startFanFlip: mocks.startFanFlip,
-    beginDragFlip: mocks.beginDragFlip,
-    activateSheet: mocks.activateSheet,
-    setDragProgress: mocks.setDragProgress,
-    endDragFlip: mocks.endDragFlip,
-    beginFoldDrag: mocks.beginFoldDrag,
-    setFoldDragFromClient: mocks.setFoldDragFromClient,
-    foldAnchorDistanceFromClient: mocks.foldAnchorDistanceFromClient,
-    setFoldDragAt: mocks.setFoldDragAt,
-    endFoldDrag: mocks.endFoldDrag,
-    stopFlip: mocks.stopFlip,
-    setZoom: mocks.setZoom,
-    getZoom: mocks.getZoom,
-    panBy: mocks.panBy,
-    pickPage: mocks.pickPage,
-    setStacks: mocks.setStacks,
-    pickStack: vi.fn<() => null>().mockReturnValue(null),
-    setStackHover: vi.fn<() => void>(),
-  }),
-}))
+vi.mock('@/composables/useTurnRenderer', () => {
+  // 容器尺寸由测试驱动（auto 显示模式按宽高判定，resize/转屏路径需要能改它）；
+  // 每个用例在 beforeEach 里复位为横屏 900×600
+  const size = reactive({ width: 900, height: 600 })
+  mocks.containerSize = size
+  return {
+    useTurnRenderer: () => ({
+      container: ref(null),
+      containerSize: size,
+      webglSupported: ref(true),
+      maxAnisotropy: ref(8),
+      setStaticPages: mocks.setStaticPages,
+      setSpineScale: mocks.setSpineScale,
+      applyStaticTexture: mocks.applyStaticTexture,
+      setCoverPages: mocks.setCoverPages,
+      startFlip: mocks.startFlip,
+      startFoldFlip: mocks.startFoldFlip,
+      startFanFlip: mocks.startFanFlip,
+      beginDragFlip: mocks.beginDragFlip,
+      activateSheet: mocks.activateSheet,
+      setDragProgress: mocks.setDragProgress,
+      endDragFlip: mocks.endDragFlip,
+      beginFoldDrag: mocks.beginFoldDrag,
+      setFoldDragFromClient: mocks.setFoldDragFromClient,
+      foldAnchorDistanceFromClient: mocks.foldAnchorDistanceFromClient,
+      setFoldDragAt: mocks.setFoldDragAt,
+      endFoldDrag: mocks.endFoldDrag,
+      stopFlip: mocks.stopFlip,
+      setZoom: mocks.setZoom,
+      getZoom: mocks.getZoom,
+      setMaxZoom: mocks.setMaxZoom,
+      panBy: mocks.panBy,
+      pickPage: mocks.pickPage,
+      setStacks: mocks.setStacks,
+      pickStack: mocks.pickStack,
+      setStackHover: vi.fn<() => void>(),
+    }),
+  }
+})
 
 vi.mock('@/lib/textureFactory', () => ({
   elementToTexture: mocks.elementToTexture,
@@ -304,8 +325,11 @@ describe('VueTurn', () => {
     mocks.done.flip = null
     mocks.done.drag = null
     mocks.done.fan = null
-    // 缩放 mock 有状态：setZoom 写入 / getZoom 读出（applyZoom 据此判断
-    // 场景是否真的执行了缩放，未执行时不派发 zoom-change）
+    // 容器尺寸 mock 跨用例共享：复位为横屏（auto 模式判定为双页）
+    mocks.containerSize.width = 900
+    mocks.containerSize.height = 600
+    // 缩放 mock 有状态：setZoom 写入 / getZoom 读出（组件据此回读级别，
+    // 场景未真正执行缩放时级别不变、不派发 zoom-change）
     mocks.resetZoomState()
     mocks.setZoom.mockImplementation((level: number) => {
       mocks.setZoomState(level)
@@ -356,8 +380,10 @@ describe('VueTurn', () => {
       cb?.(true)
     })
     // getZoom 默认读有状态 zoomState（初始 1）；此处不再 mockReturnValue
-    // 固定值，否则 applyZoom 的前后对比恒等，zoom-change 永不派发
+    // 固定值，否则回读恒等于镜像初值，zoom-change 永不派发
     mocks.pickPage.mockReturnValue(null)
+    // 纸叠拾取有状态（用例可改写返回值），clearAllMocks 不还原 mockReturnValue
+    mocks.pickStack.mockReturnValue(null)
     // 折角预览激活期间的角区进出判定：默认无折角纸张（预览未激活）
     mocks.foldAnchorDistanceFromClient.mockReset()
   })
@@ -512,6 +538,79 @@ describe('VueTurn', () => {
     inst.stop()
     await flushPromises()
     expect(wrapper.find('#indicator').text()).toBe('4/8')
+  })
+
+  it('still lands on the target when the scene rejects the fan jump', async () => {
+    // 场景拒绝扇形翻页（WebGL 上下文丢失、纸张创建失败）时回退瞬间跳转。
+    // 此时状态机仍处于「翻页中」，必须先行解除，否则 goToPage 被自己的守卫
+    // 吞掉：页码不动，而 flipTo 已对外返回 true
+    mocks.startFanFlip.mockImplementation(() => false)
+    const wrapper = await mountTurn(6, { jumpAnimation: true })
+    const turn = wrapper.findComponent(VueTurn)
+    const inst = turn.vm as unknown as TurnInstance
+    expect(inst.goToPage(5)).toBe(true)
+    await flushPromises()
+    // 目标页 5 对齐到所属跨页起点 4
+    expect(inst.page).toBe(4)
+    expect(inst.isFlipping).toBe(false)
+    expect(turn.emitted('flip-start')).toHaveLength(1)
+    expect(turn.emitted('flip-end')).toHaveLength(1)
+    const model = turn.emitted('update:modelValue')
+    expect(model?.[model.length - 1]?.[0]).toBe(4)
+  })
+
+  // 跳页先宣布「翻页中」再等纹理预取（上限 500ms）。这段时间场景里既无纸张
+  // 也无扇形，renderer.stopFlip() 无从收尾——取消必须走编排层的待跑句柄，
+  // 否则用户按了停止，动画却在预取结束后照跑
+  function holdRasterization() {
+    const release: Array<() => void> = []
+    mocks.elementToTexture.mockImplementation(
+      () =>
+        new Promise<FakeTexture>((resolve) => {
+          release.push(() => resolve({ dispose: vi.fn<() => void>() }))
+        }),
+    )
+    return () => {
+      for (const run of release) run()
+    }
+  }
+
+  it('cancels a pending jump when stop() lands inside the prefetch window', async () => {
+    const releaseAll = holdRasterization()
+    const wrapper = await mountTurn(6, { jumpAnimation: true })
+    const turn = wrapper.findComponent(VueTurn)
+    const inst = turn.vm as unknown as TurnInstance
+    expect(inst.goToPage(5)).toBe(true)
+    // 预取仍在途：扇形尚未开跑
+    expect(mocks.startFanFlip).not.toHaveBeenCalled()
+    inst.stop()
+    await flushPromises()
+    expect(inst.isFlipping).toBe(false)
+    expect(turn.emitted('flip-end')).toHaveLength(1)
+    // 放行预取：待跑的跳转必须自行退出，不得开跑
+    releaseAll()
+    await flushPromises()
+    expect(mocks.startFanFlip).not.toHaveBeenCalled()
+    expect(inst.page).toBe(1)
+    expect(inst.isFlipping).toBe(false)
+  })
+
+  it('cancels a pending jump when disable() lands inside the prefetch window', async () => {
+    const releaseAll = holdRasterization()
+    const wrapper = await mountTurn(6, { jumpAnimation: true })
+    const turn = wrapper.findComponent(VueTurn)
+    const inst = turn.vm as unknown as TurnInstance
+    expect(inst.goToPage(5)).toBe(true)
+    expect(mocks.startFanFlip).not.toHaveBeenCalled()
+    inst.disable()
+    await flushPromises()
+    releaseAll()
+    await flushPromises()
+    // flipTo 只在入口检查 disabled，预取结束后不得绕过禁用状态开跑
+    expect(mocks.startFanFlip).not.toHaveBeenCalled()
+    expect(inst.page).toBe(1)
+    expect(inst.isFlipping).toBe(false)
+    expect(inst.disabled).toBe(true)
   })
 
   it('fans in single-page mode with skeleton middle sheets', async () => {
@@ -1072,8 +1171,8 @@ describe('VueTurn', () => {
   })
 
   it('returns to the cover when switching display modes', async () => {
-    // 单双页页码语义不同（页源映射/翻页停靠均不一致），切换后统一回到封面；
-    // 页数按新模式重算（单页无补位页/衬页）
+    // 单双页页码语义不一致（页源映射不同，同一数字指向不同内容），
+    // 切换后有意统一回到封面；页数按新模式重算（单页无补位页/衬页）
     const Host = defineComponent({
       setup() {
         const turnRef = ref<TurnInstance | null>(null)
@@ -1117,6 +1216,28 @@ describe('VueTurn', () => {
     await flushPromises()
     expect(vm().numPages).toBe(8)
     expect(vm().page).toBe(1)
+  })
+
+  it('returns to the cover when auto mode re-resolves on container resize', async () => {
+    // displayedPages 默认 'auto'：容器由横变竖（手机转屏、可拖拽面板）即切单页。
+    // 单双页页码语义不一致，有意统一回到封面并经 v-model 回写给宿主——
+    // 此用例锁定该契约，改动前先确认这是设计变更而非回归
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn(6)
+    const turn = wrapper.findComponent(VueTurn)
+    const vm = () => turn.vm as unknown as TurnInstance
+    expect(vm().goToPage(4)).toBe(true)
+    await flushPromises()
+    expect(vm().page).toBe(4)
+    // 容器改为竖屏 → auto 解析为单页
+    mocks.containerSize.width = 500
+    mocks.containerSize.height = 900
+    await flushPromises()
+    await flushPromises()
+    expect(vm().numPages).toBe(6)
+    expect(vm().page).toBe(1)
+    const resized = turn.emitted('update:modelValue')
+    expect(resized?.[resized.length - 1]?.[0]).toBe(1)
   })
 
   it('flips backward in single-page mode with a reversed sheet from the seam side', async () => {
@@ -2773,6 +2894,31 @@ describe('VueTurn', () => {
     expect(inst.zoom).toBe(1)
   })
 
+  it('keeps instance.zoom and state.zoom on the same level during a flip', async () => {
+    // 两个出口必须同源：场景在翻页启动时就已把相机复位到适配距离（级别归 1），
+    // 若镜像只在 flip-end 更新，动画期间会出现 inst.zoom 已归 1、
+    // 而 state.zoom 仍是旧级别的矛盾读数
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => {
+      // 模拟真实场景：startFlip 内部 rig.resetTo 把缩放级别归 1
+      mocks.setZoomState(1)
+      mocks.done.flip = onDone
+    })
+    const wrapper = await mountTurn()
+    const turn = wrapper.findComponent(VueTurn)
+    const inst = turn.vm as unknown as TurnInstance
+    inst.zoomIn()
+    await flushPromises()
+    expect(inst.zoom).toBe(3)
+    expect(inst.state.zoom).toBe(3)
+    inst.next()
+    await flushPromises()
+    // 动画仍在途（收尾回调尚未触发）：两个出口都已跟随场景归 1
+    expect(mocks.done.flip).not.toBeNull()
+    expect(inst.zoom).toBe(1)
+    expect(inst.state.zoom).toBe(1)
+    expect(turn.emitted('zoom-change')?.map(([level]) => level)).toEqual([3, 1])
+  })
+
   it('re-rasterizes spread pages on refresh instead of reusing the stale promise', async () => {
     const items = [
       h(TurnItem, null, { default: () => [h('div', 'cover')] }),
@@ -2813,5 +2959,200 @@ describe('VueTurn', () => {
     await flushPromises()
     // refresh 为新批次：必须重新光栅化，不得复用旧的 resolved promise
     expect(callsFor(spreadEl)).toBe(2)
+  })
+
+  it('keeps other in-flight pages when one page is re-rasterized', async () => {
+    // 首屏窗口内某页的光栅化仍在途时，另一页发生 DOM 变化：定向重刷只作废
+    // 变化页自己的在途任务，不得连带丢弃其他页的结果（否则被丢弃的页要等到
+    // 下一次翻页才有纹理，表现为随机空白页）
+    let releaseCover: (texture: FakeTexture) => void = () => undefined
+    let first = true
+    mocks.elementToTexture.mockImplementation(() => {
+      if (first) {
+        first = false
+        return new Promise<FakeTexture>((resolve) => {
+          releaseCover = resolve
+        })
+      }
+      return Promise.resolve({ dispose: vi.fn<() => void>() })
+    })
+    const wrapper = await mountTurn()
+    mocks.applyStaticTexture.mockClear()
+    mocks.elementToTexture.mockClear()
+    // 6 item → 8 页（0=封面 item0、1=空白、2..5=item1..4、6=空白、7=item5）；
+    // 挂起的第 0 页仍在途，此时改动 item3（对应页索引 4）的离屏 DOM
+    const pages4 = wrapper.findAll('.page-source')[3]?.element as HTMLElement
+    expect(pages4).toBeTruthy()
+    pages4.appendChild(document.createElement('span'))
+    await flushPromises()
+    await flushPromises()
+    // 定向重刷只针对变化页
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(1)
+    // 放行封面页的光栅化结果：它的代际未被顶替，必须正常落地
+    releaseCover({ dispose: vi.fn<() => void>() })
+    await flushPromises()
+    await flushPromises()
+    const applied = mocks.applyStaticTexture.mock.calls.map((call) => call[0])
+    expect(applied).toContain(0)
+    expect(applied).toContain(4)
+  })
+
+  it('caps how many pages are rasterized at once', async () => {
+    // refresh() 会对全书每一页各走一次 html-to-image（克隆子树、逐节点读
+    // computed style、图片转 dataURL），不设并发闸时厚书一次性发起数百个
+    // 主线程重活
+    const wrapper = await mountTurn(12)
+    const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
+    // 挂载期的窗口光栅化不计入本用例
+    mocks.elementToTexture.mockClear()
+    let inFlight = 0
+    let peak = 0
+    const gates: Array<() => void> = []
+    mocks.elementToTexture.mockImplementation(
+      () =>
+        new Promise<FakeTexture>((resolve) => {
+          inFlight++
+          peak = Math.max(peak, inFlight)
+          gates.push(() => {
+            inFlight--
+            resolve({ dispose: vi.fn<() => void>() })
+          })
+        }),
+    )
+    const refreshing = inst.refresh()
+    // 逐轮放行在途任务：并发闸生效时每轮只会有上限数量在途
+    for (let round = 0; round < 20; round++) {
+      await flushPromises()
+      for (const run of gates.splice(0)) run()
+    }
+    await refreshing
+    await flushPromises()
+    // 12 item → 14 页（含 2 张空白衬页走纯色纹理），内容页 12 张全部光栅化
+    expect(mocks.elementToTexture).toHaveBeenCalledTimes(12)
+    expect(peak).toBe(2)
+  })
+
+  it('warns about frozen look props only when the values actually change', async () => {
+    // 内联对象字面量是这两个 prop 最常见的写法（:look="{ curl: 0.8 }"），
+    // 父组件每次渲染都换新引用；按引用比较会在任何无关重渲染时误报
+    const warns: string[] = []
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warns.push(String(args[0]))
+    })
+    const tick = ref(0)
+    const curl = ref(0.8)
+    const Host = defineComponent({
+      setup: () => () => {
+        void tick.value
+        return h('div', [
+          h(VueTurn, { look: { curl: curl.value } }, { default: () => pages(6) }),
+          h('button', { id: 'bump', onClick: () => tick.value++ }, 'bump'),
+          h('button', { id: 'change', onClick: () => (curl.value = 0.2) }, 'change'),
+        ])
+      },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    const freezeWarnings = () => warns.filter((w) => w.includes('在挂载时冻结')).length
+    const baseline = freezeWarnings()
+    await wrapper.find('#bump').trigger('click')
+    await flushPromises()
+    await wrapper.find('#bump').trigger('click')
+    await flushPromises()
+    expect(freezeWarnings()).toBe(baseline)
+    // 值真的变了才提示
+    await wrapper.find('#change').trigger('click')
+    await flushPromises()
+    expect(freezeWarnings()).toBe(baseline + 1)
+    spy.mockRestore()
+  })
+
+  it('emits stack-tap only when the stack click actually jumps', async () => {
+    // stack-tap 的语义是"这次点击已触发跳转"：被 before-flip 取消时不得派发，
+    // 否则接入方会以为读者已经翻过去了
+    mocks.pickStack.mockReturnValue({ side: 'right', fraction: 0.5 })
+    const buildHost = (cancel: boolean) =>
+      defineComponent({
+        setup: () => () =>
+          h(
+            VueTurn,
+            {
+              modelValue: 1,
+              jumpAnimation: false,
+              onBeforeFlip: (ctx: BeforeFlipContext) => {
+                if (cancel) ctx.preventDefault()
+              },
+            },
+            { default: () => pages(6) },
+          ),
+      })
+    const allowed = mount(buildHost(false))
+    await flushPromises()
+    await allowed.find('.viewport').trigger('click', { clientX: 500, clientY: 200 })
+    expect(allowed.findComponent(VueTurn).emitted('stack-tap')).toHaveLength(1)
+
+    const cancelled = mount(buildHost(true))
+    await flushPromises()
+    await cancelled.find('.viewport').trigger('click', { clientX: 500, clientY: 200 })
+    expect(cancelled.findComponent(VueTurn).emitted('stack-tap')).toBeUndefined()
+  })
+
+  it('keeps spineShadow frozen at mount in both directions', async () => {
+    // 挂载时 false → 运行时改 true 也不补注入（着色器注入只在建材质时发生）。
+    // 编排层此前读的是实时 prop，于是 true→false 生效、false→true 无效，
+    // 同一个 prop 两个方向行为不同；统一按挂载期常量判定后与文档一致
+    const spineShadow = ref(false)
+    const Host = defineComponent({
+      setup: () => () =>
+        h(
+          VueTurn,
+          { modelValue: 1, spineShadow: spineShadow.value },
+          { default: () => pages(6) },
+        ),
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    const lastSpineOf = () => {
+      const calls = mocks.setStaticPages.mock.calls
+      return calls[calls.length - 1]?.[3]
+    }
+    expect(lastSpineOf()).toBeUndefined()
+    spineShadow.value = true
+    await flushPromises()
+    const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
+    inst.next()
+    await flushPromises()
+    // 布局确已重建（有新的 setStaticPages 调用），但 spineOf 仍未注入
+    const calls = mocks.setStaticPages.mock.calls
+    const lastCall = calls[calls.length - 1]
+    const placements = lastCall ? (lastCall[0] as unknown[]) : []
+    expect(placements.length).toBeGreaterThan(0)
+    expect(lastSpineOf()).toBeUndefined()
+  })
+
+  it('shares one blank paper texture and never disposes it while pages use it', async () => {
+    // 空白补位页无内容、纸色一致：全书共用一张纯色纸纹（旧实现每页各建一张，
+    // 窗口滑动时反复创建/释放）。共享实例不得被任何按页释放路径 dispose
+    const blankDisposes: Array<ReturnType<typeof vi.fn>> = []
+    mocks.solidColorTexture.mockImplementation(() => {
+      const dispose = vi.fn<() => void>()
+      blankDisposes.push(dispose)
+      return { dispose }
+    })
+    mocks.startFlip.mockImplementation((_spec, _front, _back, _duration, onDone) => onDone())
+    const wrapper = await mountTurn(6)
+    // 6 item → 8 页，页 1（封面底）与页 6（封底里）为空白补位页
+    expect(mocks.solidColorTexture).toHaveBeenCalledTimes(1)
+    const inst = wrapper.findComponent(VueTurn).vm as unknown as TurnInstance
+    // 翻到封底：窗口滑动会释放离开窗口的纹理，共享纸纹必须留下
+    for (let i = 0; i < 6; i++) {
+      inst.next()
+      await flushPromises()
+    }
+    expect(inst.page).toBe(8)
+    expect(blankDisposes[0]).not.toHaveBeenCalled()
+    // 卸载时才统一释放
+    wrapper.unmount()
+    expect(blankDisposes[0]).toHaveBeenCalled()
   })
 })

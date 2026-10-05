@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿<script lang="ts">
+<script lang="ts">
 import { defineComponent, type PropType, type VNode } from 'vue'
 import { cloneVNode } from 'vue'
 
@@ -35,7 +35,6 @@ import { usePageSources } from '../composables/usePageSources'
 import { usePageStack } from '../composables/usePageStack'
 import { usePageTextures } from '../composables/usePageTextures'
 import { useTurnRenderer } from '../composables/useTurnRenderer'
-import { ZOOM_TOLERANCE } from '../composables/useZoomPan'
 import { fanStaticLayout, spreadLayout, computeFlipSpec, mergeSpreadPlacements } from '../lib/flipSpec'
 import { FAN_SHEET_BUDGET, planJump, type JumpPlanStep } from '../lib/jumpPlan'
 import { positive } from '../lib/math'
@@ -181,6 +180,12 @@ const safePageAspect = Number.isFinite(props.pageAspect) && props.pageAspect > 0
   ? props.pageAspect
   : 0.75
 
+// 书脊内阴影：挂载时读取一次，与场景注入策略一致（着色器注入只在创建材质时
+// 发生，运行时 false→true 补不回来）。此前这里读的是实时 prop，于是
+// true→false 生效、false→true 无效——同一个 prop 两个方向行为不同，
+// 与"挂载时冻结"的文档相悖；统一用挂载期常量后两个方向都冻结，行为与文档一致
+const spineShadowEnabled = props.spineShadow
+
 // 数值 prop 校验：非法值（NaN/非有限/非正）回退默认值（lib/math 共享实现）。
 // flipDuration 下限 500ms：过短的翻页在低帧率环境下只剩寥寥数帧，
 // 落页换帧与异步收尾容易被感知为闪烁
@@ -216,7 +221,7 @@ const renderer = useTurnRenderer({
   coverAmbient: coverLook.ambient,
   coverGloss: coverLook.gloss,
   // 书脊内阴影开关（挂载时冻结）
-  spineShadow: props.spineShadow,
+  spineShadow: spineShadowEnabled,
   fitMargin: props.fitMargin,
   // 传入校验后的值并 watch 同步：maxZoom 为交互参数（非挂载冻结的观感
   // 参数），运行时修改应生效，避免交互层钳制与场景钳制漂移
@@ -274,32 +279,83 @@ const offscreenEl = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 // 本实例标识：多实例时最近交互过的实例获得 document 级键盘响应权
 const instanceToken: object = {}
-// 缩放级别镜像：state.zoom 的响应式来源（级别本身存在场景内，非响应式源）。
-// 全部变化来源（滚轮/双击/实例方法经交互层 onZoomChange、翻页复位、
-// maxZoom 收敛）都汇入此 ref
+// 缩放级别镜像：场景（CameraRig）里的级别是非响应式的真值，此 ref 是它在
+// Vue 侧的响应式镜像，也是 state.zoom 与实例 zoom 两个出口的共同来源——
+// 两个出口读同一个 ref，读数不可能互相矛盾
 const zoomLevel = ref(1)
 const pageEls = ref<HTMLElement[]>([])
-const pageCount = ref(0)
+// 页数不再单独存一份：state.numPages 是全书唯一真值（页源变化由
+// usePageTextures.syncPageCount 经 setNumPages 写入，内部会重钳当前页）
 // v-model 跳转目标：翻页中推迟到动画结束
 let pendingTarget: number | null = null
 
+// 从场景回读缩放级别并同步镜像：级别确有变化才写入并派发 zoom-change。
+// 所有可能改动级别的路径（滚轮/双击/实例方法、翻页与跳页的相机复位、
+// 拖拽松手收尾、stop、maxZoom 收敛）之后都调一次；场景没执行（翻页中
+// 忽略 setZoom、请求值即当前值）时级别不变，自然不派发
+function syncZoom() {
+  const level = getZoom()
+  if (zoomLevel.value === level) return
+  zoomLevel.value = level
+  emit('zoom-change', level)
+}
+
 // maxZoom 运行时变化同步到场景（挂载时已传 safeMaxZoom 初始值）；
-// 级别超出新上限时场景立即收敛，收敛不发 zoom-change，此处补镜像与事件
+// 级别超出新上限时场景立即收敛，收敛后回读补镜像与事件
 watch(safeMaxZoom, (value) => {
   renderer.setMaxZoom(value)
-  const level = getZoom()
-  if (zoomLevel.value !== level) {
-    zoomLevel.value = level
-    emit('zoom-change', level)
-  }
+  syncZoom()
 })
 
 // 开发期提示：观感/几何参数挂载时冻结（与场景初始化策略一致），运行时
-// 修改不生效也不报错——业务方最容易踩的"改了没反应"静默坑
+// 修改不生效也不报错——业务方最容易踩的"改了没反应"静默坑。
+// look/coverLook 按逐项浅比较而非引用比较：这两个 prop 的常见写法是内联对象
+// 字面量（:look="{ curl: 0.5 }"），父组件每次渲染都换新引用但内容相同，
+// 按引用比较会在任何无关重渲染时误报"你改了冻结参数"
+function lookValuesChanged(prev?: LookOptions, next?: LookOptions): boolean {
+  if (prev === next) return false
+  if (!prev || !next) return true
+  const keys = new Set<keyof LookOptions>([
+    ...Object.keys(prev),
+    ...Object.keys(next),
+  ] as (keyof LookOptions)[])
+  for (const key of keys) {
+    if (prev[key] !== next[key]) return true
+  }
+  return false
+}
+
 if (import.meta.env.DEV) {
+  let seen = {
+    pageAspect: props.pageAspect,
+    fitMargin: props.fitMargin,
+    preset: props.preset,
+    coverPreset: props.coverPreset,
+    look: props.look,
+    coverLook: props.coverLook,
+    spineShadow: props.spineShadow,
+  }
   watch(
-    () => [props.pageAspect, props.fitMargin, props.preset, props.coverPreset, props.look, props.coverLook, props.spineShadow],
-    () => {
+    () => [
+      props.pageAspect,
+      props.fitMargin,
+      props.preset,
+      props.coverPreset,
+      props.look,
+      props.coverLook,
+      props.spineShadow,
+    ] as const,
+    ([pageAspect, fitMargin, preset, coverPreset, look, coverLook, spineShadow]) => {
+      const unchanged =
+        seen.pageAspect === pageAspect &&
+        seen.fitMargin === fitMargin &&
+        seen.preset === preset &&
+        seen.coverPreset === coverPreset &&
+        seen.spineShadow === spineShadow &&
+        !lookValuesChanged(seen.look, look) &&
+        !lookValuesChanged(seen.coverLook, coverLook)
+      if (unchanged) return
+      seen = { pageAspect, fitMargin, preset, coverPreset, look, coverLook, spineShadow }
       console.warn(
         '[vue-turn] 观感/几何参数（preset/coverPreset/look/coverLook/pageAspect/fitMargin）' +
           '在挂载时冻结，运行时修改不生效；如需变更请用 key 重建组件',
@@ -341,7 +397,8 @@ const {
   pageSources,
   pageEls,
   offscreenEl,
-  pageCount,
+  numPages: state.numPages,
+  setNumPages: state.setNumPages,
   currentPage: state.currentPage,
   displayedPages: state.displayedPages,
   isFlipping: state.isFlipping,
@@ -356,15 +413,6 @@ const {
   onReady: () => emit('ready'),
   onRasterizeError: (page, error) => emit('rasterize-error', page, error),
 })
-
-watch(
-  () => [props.forwardDirection, pageCount.value] as const,
-  ([direction, count]) => {
-    state.setForwardDirection(direction)
-    state.setNumPages(count)
-  },
-  { immediate: true },
-)
 
 // 显示模式解析：auto 按容器宽高判定，1/2 为强制值
 function resolveDisplayedPages(): 1 | 2 {
@@ -383,17 +431,18 @@ function resolveDisplayedPages(): 1 | 2 {
 // 应用时按最新容器尺寸重新解析，避免用到动画期间的过期快照
 let pendingDisplayedPagesResolve = false
 
-// 显示模式应用统一出口：单双页的页码语义不同（页源映射、翻页停靠均不一致，
-// 原地按内容映射存在对齐漂移等边界），切换后统一回到封面（页码经 v-model
-// 回写给宿主）。已光栅化纹理按内容源迁移到新页索引（不重做栅格化），
-// 缺失页补生成；静态布局由 currentPage/displayedPages 的 watch 统一重建
+// 显示模式应用统一出口：单双页的页码语义不一致（页源映射不同——单页无补位页/
+// 衬页、跨页项被忽略，同一数字在两种模式下指向不同内容；翻页停靠点也不同），
+// 因此**有意**统一回到封面（页码经 v-model 回写给宿主），不做跨模式保位换算。
+// 已光栅化纹理按内容源迁移到新页索引（不重做栅格化），缺失页补生成；
+// 静态布局由 currentPage/displayedPages 的 watch 统一重建
 function applyDisplayedPages(next: 1 | 2) {
   if (state.displayedPages.value === next) return
   const oldSources = pageSources.value
   state.setDisplayedPages(next)
   state.goToPage(0)
-  if (pageCount.value > 0) {
-    // 挂载时 pageCount 尚未同步（纹理为空、静态布局由挂载流程建立），跳过
+  if (state.numPages.value > 0) {
+    // 挂载时页数尚未同步（纹理为空、静态布局由挂载流程建立），跳过
     remapModeTextures(oldSources, pageSources.value)
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
   }
@@ -458,7 +507,7 @@ function spineOf(index: number, placement: StaticPlacement) {
   return spineUOfPlacement(placement, {
     displayedPages: state.displayedPages.value,
     ltr: props.forwardDirection === 'left',
-    numPages: pageCount.value,
+    numPages: state.numPages.value,
   })
 }
 
@@ -469,7 +518,7 @@ function spineOf(index: number, placement: StaticPlacement) {
 
 const { applyStacksIdle, applyStacksFlip, applyStacksFan, currentStackSides } = usePageStack({
   state,
-  pageCount,
+  numPages: state.numPages,
   safePageAspect,
   stackEnabled: () => props.stack,
   forwardDirection: () => props.forwardDirection,
@@ -480,12 +529,12 @@ function renderStatic() {
   if (state.isFlipping.value) return
   // 书脊内阴影随页数缩放（薄书浅、厚书封顶）：页数变化经既有 watch 触发
   // renderStatic，在此先行更新系数，随后的 setStaticPages 写入各页 uniforms
-  setSpineScale(spineScaleOf(pageCount.value))
+  setSpineScale(spineScaleOf(state.numPages.value))
   const placements = spreadLayout({
     currentPage: state.currentPage.value,
     displayedPages: state.displayedPages.value,
     forwardDirection: props.forwardDirection,
-    numPages: pageCount.value,
+    numPages: state.numPages.value,
   })
   // 跨页合并：左右两页同属一个跨页项时渲染为一张双倍宽度的居中整页
   // （纯函数实现见 lib/flipSpec.ts，含单测）
@@ -507,7 +556,7 @@ function renderStatic() {
       return textures.get(index) ?? null
     },
     true,
-    props.spineShadow ? spineOf : undefined,
+    spineShadowEnabled ? spineOf : undefined,
   )
   applyStacksIdle()
 }
@@ -529,7 +578,7 @@ watch(
     // 扇形翻页的中途落页不触发 first/last：仅在全部落定后判定
     if (fanRemaining > 0) return
     if (state.page.value === 1) emit('first')
-    if (pageCount.value > 0 && state.page.value === pageCount.value) emit('last')
+    if (state.numPages.value > 0 && state.page.value === state.numPages.value) emit('last')
   },
 )
 
@@ -566,7 +615,7 @@ function computeFlipSpecFor(trigger: FlipDirection): FlipSpec | null {
     forwardDirection: props.forwardDirection,
     backward: !advancing,
     pageAspect: safePageAspect,
-    numPages: pageCount.value,
+    numPages: state.numPages.value,
   })
 }
 
@@ -600,14 +649,12 @@ const {
   props,
   state,
   emit,
-  onZoomChange: (level) => {
-    zoomLevel.value = level
-  },
+  onZoomChange: syncZoom,
   renderer,
   query: {
     sheetTextures,
     staticTextures,
-    pageCount,
+    numPages: state.numPages,
     containerSize,
     webglSupported,
     rootEl,
@@ -633,6 +680,7 @@ const {
     applyStacksFlip,
     rasterizeWindow,
     releaseOutsideWindow,
+    cancelPendingJump,
   },
 })
 
@@ -649,18 +697,12 @@ function flip(trigger: FlipDirection) {
   // 折角悬停的纸张会被 startFlip 静默替换
   discardPeel()
   clearStackHover()
-  const prevZoom = getZoom()
   state.startFlip()
   emit('flip-start', trigger)
   runFlip(spec, safeFlipDuration.value, () => {
     state.commitFlip(spec.delta)
     renderStatic()
     emit('flip-end', trigger)
-    // 翻页会将相机复位到适配距离，缩放级别随之归 1
-    if (prevZoom > 1 + ZOOM_TOLERANCE) {
-      zoomLevel.value = 1
-      emit('zoom-change', 1)
-    }
     // 懒光栅化：翻页结束后预取新窗口内缺失纹理，再释放窗口外纹理控制显存
     void rasterizeWindow(false).then(() => releaseOutsideWindow())
   })
@@ -673,7 +715,7 @@ function flip(trigger: FlipDirection) {
 // 时触发（事件派发/页码提交/收尾由调用方负责）
 function runFlip(spec: FlipSpec, durationMs: number, onDone: () => void) {
   // 翻页前置布局：相机由翻页动画接管（静态跨页半页按槽位解析半图）
-  setStaticPages(spec.staticPages, staticTextures(spec), false, props.spineShadow ? spineOf : undefined)
+  setStaticPages(spec.staticPages, staticTextures(spec), false, spineShadowEnabled ? spineOf : undefined)
   applyStacksFlip(spec)
   const fold = foldOfSpec(spec)
   const { front: frontTexture, back: backTexture } = sheetTextures(spec)
@@ -698,6 +740,9 @@ function runFlip(spec: FlipSpec, durationMs: number, onDone: () => void) {
       sheetOptions(spec),
     )
   }
+  // 动画启动即把相机复位到适配距离（缩放级别归 1），同步响应式镜像——
+  // 否则动画期间实例的两个 zoom 出口都还停在旧级别，与场景真值背离
+  syncZoom()
 }
 
 function next() {
@@ -730,6 +775,28 @@ const JUMP_PREFETCH_TIMEOUT = 500
 // 抑制中途落页的 first/last 事件（经过≠停留）
 let fanRemaining = 0
 
+// 预取等待中的跳页：flipTo 先宣布「翻页中」再等纹理预取（上限
+// JUMP_PREFETCH_TIMEOUT），这段时间场景里既无纸张也无扇形，stopFlip 无从
+// 收尾——stop()/disable() 靠这个句柄取消待跑的跳转。对象身份即令牌：
+// 取消时置 null，预取回调比对身份后自行退出
+let pendingJump: { direction: FlipDirection } | null = null
+
+// 取消预取等待中的跳页：返回是否确实取消了一次待跑的跳转。
+// 收尾与 finishJump 同构（补发 flip-end、解除翻页中、恢复空闲布局），
+// 但页码不动——跳转还没开跑，取消就是留在原页；相机也从未动过，不复位缩放
+function cancelPendingJump(): boolean {
+  const pending = pendingJump
+  if (!pending) return false
+  pendingJump = null
+  fanRemaining = 0
+  emit('flip-end', pending.direction)
+  state.cancelFlip()
+  // flipTo 在预取前收起了悬停预览，而预览恢复布局的回调被「翻页中」挡下，
+  // 取消后须自行恢复空闲布局
+  renderStatic()
+  return true
+}
+
 // 跳页到指定页索引（已验证在界内）：返回 false 表示被 before-flip 取消
 function flipTo(target: number): boolean {
   if (disabledRef.value || state.isFlipping.value) return false
@@ -741,7 +808,7 @@ function flipTo(target: number): boolean {
   clearStackHover()
   // 场景未建立（不支持 WebGL / 测试环境）时扇形无从驱动：
   // 与翻页的"场景未建立时同步提交"兜底一致，退化为瞬间跳转
-  if (!props.jumpAnimation || pageCount.value === 0 || !webglSupported.value) {
+  if (!props.jumpAnimation || state.numPages.value === 0 || !webglSupported.value) {
     jumpTo(aligned)
     return true
   }
@@ -750,7 +817,7 @@ function flipTo(target: number): boolean {
     target: aligned,
     displayedPages: state.displayedPages.value,
     forwardDirection: props.forwardDirection,
-    numPages: pageCount.value,
+    numPages: state.numPages.value,
     pageAspect: safePageAspect,
   })
   if (steps.length === 0) {
@@ -764,7 +831,8 @@ function flipTo(target: number): boolean {
     : props.forwardDirection === 'left'
       ? 'right'
       : 'left'
-  const prevZoom = getZoom()
+  const pending = { direction }
+  pendingJump = pending
   state.startFlip()
   emit('flip-start', direction)
   fanRemaining = steps.length
@@ -774,13 +842,14 @@ function flipTo(target: number): boolean {
     rasterizeRange(from, to),
     new Promise<void>((resolve) => setTimeout(resolve, JUMP_PREFETCH_TIMEOUT)),
   ]).then(() => {
-    // 等待期间被 stop() 打断：扇形已终局（fanRemaining 复位），不再开跑
-    if (fanRemaining === 0) return
+    // 等待期间被 stop()/disable() 取消：收尾已由取消方负责，不再开跑
+    if (pendingJump !== pending) return
+    pendingJump = null
     if (steps.length === 1) {
       // 单张纸：与普通翻页同一条路径、同一个 flipDuration
-      runJumpStep(steps[0]!, () => finishJump(direction, prevZoom))
+      runJumpStep(steps[0]!, () => finishJump(direction))
     } else {
-      startJumpFan(steps, aligned, direction, prevZoom)
+      startJumpFan(steps, aligned, direction)
     }
   })
   return true
@@ -794,7 +863,7 @@ function jumpStepSpec(step: JumpPlanStep): FlipSpec {
     forwardDirection: props.forwardDirection,
     backward: step.delta < 0,
     pageAspect: safePageAspect,
-    numPages: pageCount.value,
+    numPages: state.numPages.value,
     leafSpan: step.span,
   })
 }
@@ -810,18 +879,13 @@ function runJumpStep(step: JumpPlanStep, done: () => void) {
 // 扇形翻页：一次性摆好动画期静态布局（留驻页 + 揭示页），每步一张纸
 // 错峰并发翻动；落定逐张提交页码（change/v-model 随之派发），全部落定
 // 后由整体 onDone 收尾
-function startJumpFan(
-  steps: JumpPlanStep[],
-  target: number,
-  direction: FlipDirection,
-  prevZoom: number,
-) {
+function startJumpFan(steps: JumpPlanStep[], target: number, direction: FlipDirection) {
   const placements = fanStaticLayout({
     currentPage: state.currentPage.value,
     target,
     displayedPages: state.displayedPages.value,
     forwardDirection: props.forwardDirection,
-    numPages: pageCount.value,
+    numPages: state.numPages.value,
   })
   // 纸叠随全局进度从起点页状态过渡到目标页状态（不设则沿用过期起止，
   // 临近完成时出现与合书状态矛盾的残留条带）
@@ -834,7 +898,7 @@ function startJumpFan(
       return textureAtSide(index, slot)
     },
     false,
-    props.spineShadow ? spineOf : undefined,
+    spineShadowEnabled ? spineOf : undefined,
   )
   const skeletonPaper = blankTexture()
   const last = steps.length - 1
@@ -861,25 +925,30 @@ function startJumpFan(
   })
   const started = startFanFlip(plans, {
     duration: Math.max(safeFlipDuration.value, plans.length * FAN_SHEET_BUDGET),
-    onDone: () => finishJump(direction, prevZoom),
+    onDone: () => finishJump(direction),
   })
-  if (!started) {
-    // 场景拒绝（如上下文丢失）：回退瞬间跳转，仍按一次翻页收尾
-    fanRemaining = 0
-    jumpTo(target)
-    finishJump(direction, prevZoom)
+  if (started) {
+    // 扇形启动即把相机复位到目标适配距离（缩放级别归 1），同步响应式镜像
+    syncZoom()
+    return
   }
+  // 场景拒绝（如上下文丢失）：回退瞬间跳转，仍按一次翻页收尾。
+  // 必须先解除「翻页中」——goToPage 在翻页中直接 return，否则这次跳转会被
+  // 自己的状态机吞掉（而 flipTo 已经对外返回了成功）。纹理补齐与静态布局
+  // 重建由 finishJump 统一负责，这里不走 jumpTo 以免重复调度一轮光栅化
+  fanRemaining = 0
+  state.cancelFlip()
+  state.goToPage(target)
+  finishJump(direction)
 }
 
 // 扇形/单步跳页终局：收尾事件与收尾调度（最终布局由 renderStatic 重建）
-function finishJump(direction: FlipDirection, prevZoom: number) {
+function finishJump(direction: FlipDirection) {
   fanRemaining = 0
   emit('flip-end', direction)
-  // 缩放复位仅在实际发生翻页动画时成立（等待预取期被取消时相机未动）
-  if (prevZoom > 1 + ZOOM_TOLERANCE) {
-    zoomLevel.value = 1
-    emit('zoom-change', 1)
-  }
+  // 回读场景级别补镜像：实际跑过翻页动画时相机已被复位到 1；
+  // 预取等待期被取消则相机从未移动，级别不变、此处不发事件
+  syncZoom()
   state.cancelFlip()
   renderStatic()
   void rasterizeWindow(false).then(() => releaseOutsideWindow())
@@ -890,7 +959,7 @@ function goToPage(page: number): boolean {
   if (disabledRef.value) return false
   if (state.isFlipping.value) return false
   const target = Math.round(Number(page)) - 1
-  if (!Number.isFinite(target) || target < 0 || target > pageCount.value - 1) return false
+  if (!Number.isFinite(target) || target < 0 || target > state.numPages.value - 1) return false
   return flipTo(target)
 }
 
@@ -903,7 +972,6 @@ onMounted(async () => {
   // 先同步页数到状态机，再设置初始页：否则初始页码会被 0 页钳制到封面
   // （刷新页面带 /book/:page 深度链接时表现为回到第 1 页）
   syncPageCount()
-  state.setNumPages(pageCount.value)
   // 初始页码全权由 modelValue 决定；未绑定时从第 1 页开始
   const initial = props.modelValue
   state.goToPage((initial !== undefined && Number.isFinite(initial) ? Math.round(initial) : 1) - 1)
@@ -926,7 +994,7 @@ const instanceState = readonly(
       return state.page.value
     },
     get numPages() {
-      return pageCount.value
+      return state.numPages.value
     },
     get isFlipping() {
       return state.isFlipping.value
@@ -968,7 +1036,7 @@ defineExpose({
     return state.page.value
   },
   get numPages() {
-    return pageCount.value
+    return state.numPages.value
   },
   get isFlipping() {
     return state.isFlipping.value
@@ -982,8 +1050,10 @@ defineExpose({
   get disabled() {
     return disabledRef.value
   },
+  // 与 state.zoom 同源（响应式镜像）：两个出口读同一个 ref，
+  // 不会出现翻页动画期间一个已归 1、一个仍是旧级别的矛盾读数
   get zoom() {
-    return getZoom()
+    return zoomLevel.value
   },
 } satisfies TurnInstance)
 </script>

@@ -30,19 +30,6 @@ describe('book state', () => {
     expect(state.canGoBack.value).toBe(true)
   })
 
-  it('maps flip sides to direction for ltr', () => {
-    const state = seededState()
-    expect(state.canFlipLeft.value).toBe(state.canGoForward.value)
-    expect(state.canFlipRight.value).toBe(state.canGoBack.value)
-  })
-
-  it('maps flip sides to direction for rtl', () => {
-    const state = seededState()
-    state.setForwardDirection('right')
-    expect(state.canFlipLeft.value).toBe(state.canGoBack.value)
-    expect(state.canFlipRight.value).toBe(state.canGoForward.value)
-  })
-
   it('keeps odd left pages and aligns even targets in two-page mode', () => {
     const state = seededState()
     state.goToPage(3)

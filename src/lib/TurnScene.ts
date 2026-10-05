@@ -5,7 +5,7 @@ import { StackRenderer } from './StackRenderer'
 import { PAGE_HEIGHT, sheetWorldWidth } from './flipSpec'
 import { clamp, positive } from './math'
 import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from './pageFold'
-import { deriveStackEdges } from './pageStack'
+import { deriveStackEdges, type StackEdgeSource } from './pageStack'
 import { curledColumns, easeInOutCubic } from './pageCurl'
 import type { SpineShadeU } from './spineShading'
 import type {
@@ -304,6 +304,12 @@ export class TurnScene {
   private pageFitWidth: number
   // 页面布局 + 纸叠的总适配宽度（推送给相机装配）
   private targetFitWidth: number
+  // 逐帧/逐次拾取的复用缓冲：条带边缘每帧算一次、拾取每次 pointermove 都走，
+  // 逐次新建数组与向量是纯 GC 压力（成员数很小，但频率高）
+  private readonly edgeScratch: StackEdgeSource[] = []
+  private readonly pickMeshes: THREE.Object3D[] = []
+  private readonly pickEntries: StaticEntry[] = []
+  private readonly pickNdc = new THREE.Vector2()
   private rafId = 0
   // 脏标记：按需渲染。纸张/相机动画进行中每帧渲染；静止时仅在场景
   // 有变化（布局重建、纹理更新、缩放平移、悬停高亮等）的那一帧渲染，
@@ -379,10 +385,6 @@ export class TurnScene {
     this.scene.add(coverGloss)
 
     this.rafId = requestAnimationFrame(this.tick)
-  }
-
-  get isFlipping() {
-    return this.sheet !== null || this.fan !== null
   }
 
   get hasRenderer() {
@@ -674,14 +676,25 @@ export class TurnScene {
   }
 
   // 静态页网格的实际外缘（书体局部坐标）：纸叠条带内缘的跟随来源。
-  // 跨页合并网格宽为两页，半宽取整页宽
+  // 跨页合并网格宽为两页，半宽取整页宽。
+  // 每帧调用（翻页/扇形动画都走），故复用缓冲就地改写，不逐帧新建数组与对象
   private stackEdges() {
-    return deriveStackEdges(
-      Array.from(this.staticMeshes.values(), (entry) => ({
-        x: entry.mesh.position.x,
-        halfWidth: entry.spread ? this.sheetWidth : this.sheetWidth / 2,
-      })),
-    )
+    const scratch = this.edgeScratch
+    let count = 0
+    for (const entry of this.staticMeshes.values()) {
+      const halfWidth = entry.spread ? this.sheetWidth : this.sheetWidth / 2
+      const x = entry.mesh.position.x
+      const item = scratch[count]
+      if (item) {
+        item.x = x
+        item.halfWidth = halfWidth
+      } else {
+        scratch[count] = { x, halfWidth }
+      }
+      count++
+    }
+    scratch.length = count
+    return deriveStackEdges(scratch)
   }
 
   // 某视觉态下纸叠两侧厚度之和（相机适配宽度计入纸叠，条带不被视口裁剪）
@@ -1263,11 +1276,11 @@ export class TurnScene {
     if (!this.renderer) return null
     const rect = this.renderer.domElement.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return null
-    const ndc = new THREE.Vector2(
+    this.pickNdc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     )
-    this.raycaster.setFromCamera(ndc, this.rig.camera)
+    this.raycaster.setFromCamera(this.pickNdc, this.rig.camera)
     const { origin, direction } = this.raycaster.ray
     if (Math.abs(direction.z) < 1e-6) return null
     const t = -origin.z / direction.z
@@ -1482,20 +1495,26 @@ export class TurnScene {
     if (!this.renderer) return null
     const rect = this.renderer.domElement.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return null
-    const ndc = new THREE.Vector2(
+    const meshes = this.pickMeshes
+    const entries = this.pickEntries
+    meshes.length = 0
+    entries.length = 0
+    for (const entry of this.staticMeshes.values()) {
+      meshes.push(entry.mesh)
+      entries.push(entry)
+    }
+    if (meshes.length === 0) return null
+    this.pickNdc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     )
-    this.raycaster.setFromCamera(ndc, this.rig.camera)
-    const meshes = Array.from(this.staticMeshes.values()).map((entry) => entry.mesh)
-    const hits = this.raycaster.intersectObjects(meshes, false)
-    for (const hit of hits) {
+    this.raycaster.setFromCamera(this.pickNdc, this.rig.camera)
+    for (const hit of this.raycaster.intersectObjects(meshes, false)) {
       if (!hit.uv) continue
-      for (const entry of this.staticMeshes.values()) {
-        if (entry.mesh === hit.object) {
-          return { index: entry.index, u: hit.uv.x, v: hit.uv.y, spread: entry.spread }
-        }
-      }
+      const at = meshes.indexOf(hit.object)
+      if (at < 0) continue
+      const entry = entries[at]!
+      return { index: entry.index, u: hit.uv.x, v: hit.uv.y, spread: entry.spread }
     }
     return null
   }
@@ -1704,9 +1723,11 @@ export class TurnScene {
 
   private tick = (now: number) => {
     if (this.disposed) return
-    if (this.contextLost) {
-      // 上下文丢失：渲染不可能发生，dirty 无法清除，继续排帧是满频空转。
-      // 停帧，恢复时 onContextRestoredHandler 的 markDirty 会重新唤醒
+    // 渲染不可能发生（上下文丢失 / 从未取到 WebGL 上下文）：dirty 只在真正
+    // render() 之后才清零，此时永远清不掉，继续排帧就是满频空转。停帧——
+    // 上下文恢复时 onContextRestoredHandler 的 markDirty 会重新唤醒；
+    // 无渲染器则本就降级到 fallback 文案，再没有可渲染的东西
+    if (this.contextLost || !this.renderer) {
       this.rafId = 0
       return
     }

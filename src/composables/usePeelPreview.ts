@@ -30,7 +30,7 @@ export interface PeelPreviewOptions {
   forwardDirection: () => FlipDirection
   state: ReturnType<typeof useBookState>
   /** 总页数（居中页判定封面/封底用） */
-  pageCount: Ref<number>
+  numPages: Ref<number>
   renderer: Pick<
     ReturnType<typeof useTurnRenderer>,
     | 'setStaticPages'
@@ -82,7 +82,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
     isDisabled,
     forwardDirection,
     state,
-    pageCount,
+    numPages,
     renderer,
     sheetTextures,
     staticTextures,
@@ -199,7 +199,7 @@ export function usePeelPreview(options: PeelPreviewOptions) {
             getLastPlacements(),
             forwardDirection(),
             sheetWorldWidth(safePageAspect),
-            pageCount.value,
+            numPages.value,
             state.displayedPages.value,
           )
         : null

@@ -16,6 +16,16 @@ export default defineConfigWithVueTs(
     files: ['**/*.{vue,ts,mts,tsx}'],
   },
 
+  {
+    // 源文件一律不带 BOM：编辑器/合并事故会在文件头堆出多个 BOM，
+    // 编译能过但会让工具的字符偏移与行号对不上
+    name: 'app/no-bom',
+    files: ['**/*.{vue,ts,mts,tsx}'],
+    rules: {
+      'unicode-bom': ['error', 'never'],
+    },
+  },
+
   globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**']),
 
   ...pluginVue.configs['flat/essential'],

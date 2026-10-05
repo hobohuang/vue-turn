@@ -19,7 +19,7 @@ const STACK_DEPTH = 0.02
 
 export interface PageStackOptions {
   state: ReturnType<typeof useBookState>
-  pageCount: Ref<number>
+  numPages: Ref<number>
   /** 校验后的页宽高比（挂载期冻结） */
   safePageAspect: number
   /** 纸叠开关（props.stack，响应式） */
@@ -43,14 +43,14 @@ export interface PageStackOptions {
  *   在 from/to 中清除，避免动画中悬浮细线
  */
 export function usePageStack(options: PageStackOptions) {
-  const { state, pageCount, safePageAspect, stackEnabled, forwardDirection } = options
+  const { state, numPages, safePageAspect, stackEnabled, forwardDirection } = options
 
   function stackSidesFor(pageIndex: number): StackSides {
     return computeStackSides({
       currentPage: pageIndex,
       displayedPages: state.displayedPages.value,
       forwardDirection: forwardDirection(),
-      numPages: pageCount.value,
+      numPages: numPages.value,
     })
   }
 
@@ -61,13 +61,13 @@ export function usePageStack(options: PageStackOptions) {
     const maxDepth = width * STACK_DEPTH
     // 合页（居中单页）状态书页全部压紧叠放，条带按压实系数收窄；
     // 翻开状态的纸叠页边微张，保持蓬松厚度
-    const compact = isCenteredLayout(pageIndex, state.displayedPages.value, pageCount.value)
+    const compact = isCenteredLayout(pageIndex, state.displayedPages.value, numPages.value)
       ? STACK_COMPACT
       : 1
     const toVisual = (side: StackSide | null) =>
       side
         ? {
-            thickness: stackThickness(side.count, pageCount.value, maxDepth) * compact,
+            thickness: stackThickness(side.count, numPages.value, maxDepth) * compact,
             layers: side.count,
           }
         : null
@@ -87,7 +87,7 @@ export function usePageStack(options: PageStackOptions) {
     }
     const from = stackVisualFor(state.currentPage.value)
     const to = stackVisualFor(state.currentPage.value + spec.delta)
-    const last = pageCount.value - 1
+    const last = numPages.value - 1
     if (spec.frontIndex === last || spec.backIndex === last) {
       const side = forwardDirection() === 'left' ? 'right' : 'left'
       from[side] = null

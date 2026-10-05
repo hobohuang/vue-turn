@@ -66,7 +66,6 @@ export interface FlipInteractionEmits {
   (event: 'region-tap', page: number, region: PageRegion): void
   (event: 'stack-hover', page: number | null, point?: ViewportPoint): void
   (event: 'stack-tap', page: number): void
-  (event: 'zoom-change', level: number): void
 }
 
 /** 场景查询（只读）：交互层做命中判定与翻页构造所需的数据与纯函数 */
@@ -75,7 +74,7 @@ export interface FlipInteractionQuery {
   sheetTextures: (spec: FlipSpec) => { front: THREE.Texture | null; back: THREE.Texture | null }
   /** 翻页前置静态布局的纹理回调：静态跨页半页按槽位（屏幕侧）解析 */
   staticTextures: (spec: FlipSpec) => (index: number) => THREE.Texture | null
-  pageCount: Ref<number>
+  numPages: Ref<number>
   containerSize: { width: number }
   webglSupported: Ref<boolean>
   rootEl: Ref<HTMLElement | null>
@@ -110,6 +109,9 @@ export interface FlipInteractionActions {
   applyStacksFlip: (spec: FlipSpec) => void
   rasterizeWindow: (force?: boolean) => Promise<void>
   releaseOutsideWindow: () => void
+  /** 取消「预取等待中」的跳页：返回是否确实取消了一次待跑的跳转。
+   *  这段时间场景里既无纸张也无扇形，stopFlip 无从收尾，必须由编排层取消 */
+  cancelPendingJump: () => boolean
 }
 
 export interface FlipInteractionOptions {
@@ -117,8 +119,9 @@ export interface FlipInteractionOptions {
   props: FlipInteractionProps
   state: ReturnType<typeof useBookState>
   emit: FlipInteractionEmits
-  /** zoom-change 同步回调：缩放级别每次变化时调用（编排层据此镜像响应式 state.zoom） */
-  onZoomChange: (level: number) => void
+  /** 场景侧缩放级别可能已变化（缩放请求、拖拽/中断收尾复位相机）：
+   *  编排层据此回读级别、同步响应式镜像并派发 zoom-change */
+  onZoomChange: () => void
   /** 场景能力（useTurnRenderer） */
   renderer: ReturnType<typeof useTurnRenderer>
   /** 场景查询（只读）：交互层不得经由 query 产生副作用 */
@@ -163,7 +166,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
   const {
     sheetTextures,
     staticTextures,
-    pageCount,
+    numPages,
     containerSize,
     webglSupported,
     rootEl,
@@ -189,6 +192,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     applyStacksFlip,
     rasterizeWindow,
     releaseOutsideWindow,
+    cancelPendingJump,
   } = actions
 
   const disabledRef = ref(false)
@@ -222,7 +226,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     forwardDirection: () => props.forwardDirection ?? 'left',
     rootEl,
     instanceToken,
-    pageCount,
+    numPages,
     next,
     prev,
     goToPage,
@@ -248,10 +252,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     isBusy: () => drag !== null || pan !== null || ownership.owner !== null,
     renderer,
     safeMaxZoom,
-    emit: (event, level) => {
-      onZoomChange(level)
-      emit(event, level)
-    },
+    onZoomChange,
   })
 
   // 纸张完成/取消的统一收尾：拖拽提交或回弹后恢复状态机，悬停预览仅恢复布局。
@@ -279,7 +280,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     isDisabled,
     forwardDirection: () => props.forwardDirection ?? 'left',
     state,
-    pageCount,
+    numPages,
     renderer,
     sheetTextures,
     staticTextures,
@@ -314,7 +315,7 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       getLastPlacements(),
       props.forwardDirection ?? 'left',
       sheetWorldWidth(safePageAspect),
-      pageCount.value,
+      numPages.value,
       state.displayedPages.value,
     )
   }
@@ -398,9 +399,10 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
           hit.side === 'left' ? currentStackSides.value.left : currentStackSides.value.right
         if (side && side.count > 0) {
           const page = pageAtFraction(side, hit.fraction) + 1
-          emit('stack-tap', page)
           clearStackHover()
-          goToPage(page)
+          // 先跳转再派发：stack-tap 的语义是"这次点击已触发跳转"，
+          // 被 before-flip 取消或翻页中被拒绝时仍报已跳转会误导接入方
+          if (goToPage(page)) emit('stack-tap', page)
           return
         }
       }
@@ -720,14 +722,16 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
         dragState.progress > DRAG_COMMIT_PROGRESS ||
         (dragState.velocity > FOLD_FLICK_VELOCITY && dragState.progress > DRAG_FLICK_PROGRESS)
       renderer.endFoldDrag(commit, safeFlipDuration.value)
-      return
+    } else {
+      const progress = rect ? dragProgressFrom(event.clientX, rect, dragState) : dragState.progress
+      // 超过阈值，或朝翻页方向的快速甩动，都视为完成翻页
+      const commit =
+        progress > DRAG_COMMIT_PROGRESS ||
+        (dragState.velocity > CURL_FLICK_VELOCITY && progress > DRAG_FLICK_PROGRESS)
+      renderer.endDragFlip(commit, safeFlipDuration.value)
     }
-    const progress = rect ? dragProgressFrom(event.clientX, rect, dragState) : dragState.progress
-    // 超过阈值，或朝翻页方向的快速甩动，都视为完成翻页
-    const commit =
-      progress > DRAG_COMMIT_PROGRESS ||
-      (dragState.velocity > CURL_FLICK_VELOCITY && progress > DRAG_FLICK_PROGRESS)
-    renderer.endDragFlip(commit, safeFlipDuration.value)
+    // 松手收尾会把相机复位到适配距离（缩放级别随之归 1），同步响应式镜像
+    onZoomChange()
   }
 
   function onPointerCancel(event: PointerEvent) {
@@ -750,6 +754,8 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       } else {
         renderer.endDragFlip(false, safeFlipDuration.value)
       }
+      // 取消收尾同样会复位相机（缩放级别归 1），同步响应式镜像
+      onZoomChange()
     }
   }
 
@@ -780,9 +786,13 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
     }
     clearClickTimer()
     clearStackHover()
+    // 跳页预取等待中：场景里还没有纸张，stopFlip 无从收尾，由编排层取消
+    cancelPendingJump()
     // stopFlip 同步触发 onDone → makeSheetDone 收尾（drag 提交/回弹 +
     // flip-end，peel 恢复布局），纸张归属随 makeSheetDone 一并清除
     renderer.stopFlip()
+    // 收尾会把相机复位到适配距离（缩放级别归 1），同步响应式镜像
+    onZoomChange()
   }
 
   // 禁用/启用组件交互与翻页
@@ -792,6 +802,9 @@ export function useFlipInteraction(options: FlipInteractionOptions) {
       // 收起悬停预览，避免禁用后残留掀起的页角
       releasePeelNow()
       clearClickTimer()
+      // 待跑的跳页同样作废：否则预取结束后禁用状态被绕过、动画照跑
+      // （flipTo 只在入口检查 disabledRef）
+      cancelPendingJump()
     }
   }
 

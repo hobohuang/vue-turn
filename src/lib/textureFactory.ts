@@ -15,22 +15,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | void> {
   ]).finally(() => clearTimeout(timer))
 }
 
-// 提取元素计算样式里所有 background-image 的 url(...) 地址
+// 提取元素计算样式里的 background-image url 地址。
+// 只读 background-image：background 是它的简写，计算样式中已展开到长期属性，
+// 两个都读等于把同一份值解析两遍（这段遍历每页每次光栅化都要跑一遍全部后代）
 function collectBackgroundUrls(root: Element): string[] {
-  const urls: string[] = []
+  const urls = new Set<string>()
   const elements = [root, ...Array.from(root.querySelectorAll('*'))]
   for (const el of elements) {
-    const style = getComputedStyle(el)
-    for (const name of ['background-image', 'background']) {
-      const value = style.getPropertyValue(name)
-      if (!value || value === 'none') continue
-      for (const match of value.matchAll(/url\((['"]?)([^'")]+)\1\)/g)) {
-        const url = match[2]
-        if (url && !url.startsWith('data:')) urls.push(url)
-      }
+    const value = getComputedStyle(el).getPropertyValue('background-image')
+    if (!value || value === 'none') continue
+    for (const match of value.matchAll(/url\((['"]?)([^'")]+)\1\)/g)) {
+      const url = match[2]
+      // data: 内联无需等待；同一 URL 被多个元素引用时只等一次
+      if (url && !url.startsWith('data:')) urls.add(url)
     }
   }
-  return urls
+  return Array.from(urls)
 }
 
 // 等待任意 URL 图片解码完成（background-image 无原生 decode，用临时 img 触发同源请求）

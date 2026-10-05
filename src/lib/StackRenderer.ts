@@ -21,6 +21,20 @@ const STACK_MAX_UNITS = 6
 // 保证层理在屏幕上可分辨（窄条带下不会被采样糊掉）
 const STACK_MIN_LINE_PX = 2
 
+// 确定性伪随机（mulberry32）：纸叠层理噪点的分布与 Math.random 一致，但图样
+// 可复现。旧实现每个实例、每次上下文恢复都换一副噪点，截图对比与视觉回归
+// 永远对不齐
+function seededRandom(seed: number) {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
 // 程序化生成纸叠层理纹理：暖白纸色底 + 等距页线（一层纸一条线）+
 // 上下边缘阴影。页线为"暗缝 + 亮边"双线：暗缝是纸页间缝隙，
 // 亮边是纸页边缘的反光，两者相间构成可感知的层理。
@@ -32,14 +46,15 @@ function createStackTexture(): THREE.Texture {
   canvas.height = 64
   const ctx = canvas.getContext('2d')
   if (ctx) {
+    const random = seededRandom(0x9e3779b9)
     // 纸页切口的暖白底色，接近页面白避免色块突兀
     ctx.fillStyle = '#ede4d3'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     // 等距页线（8px 一条 → 32 条/单元）：3px 深暗缝 + 1px 亮边，
     // 高对比保证窄条带下仍可分辨（配合禁用 mipmap 的锐利采样）
     for (let x = 0; x < canvas.width; x += 8) {
-      const lx = x + Math.floor(Math.random() * 2)
-      const tone = 0.3 + Math.random() * 0.22
+      const lx = x + Math.floor(random() * 2)
+      const tone = 0.3 + random() * 0.22
       ctx.fillStyle = `rgba(104, 88, 64, ${tone.toFixed(3)})`
       ctx.fillRect(lx, 0, 3, canvas.height)
       // 纸页边缘反光亮线，紧贴暗缝右侧
@@ -48,7 +63,7 @@ function createStackTexture(): THREE.Texture {
     }
     // 少量更深的错位缝：纸堆局部滑移形成的"书口纹"
     for (let i = 0; i < 4; i++) {
-      const x = Math.floor(Math.random() * canvas.width)
+      const x = Math.floor(random() * canvas.width)
       ctx.fillStyle = 'rgba(112, 96, 72, 0.32)'
       ctx.fillRect(x, 0, 2, canvas.height)
     }
@@ -169,6 +184,11 @@ export class StackRenderer {
   private baseTexture: THREE.Texture | null = null
   private highlight: THREE.Mesh | null = null
   private highlightMaterial: THREE.MeshBasicMaterial | null = null
+  // 拾取复用缓冲：纸叠拾取每次 pointermove 都会走到，逐次新建候选数组、
+  // Vector2 与 Vector3 是纯 GC 压力
+  private readonly pickMeshes: THREE.Mesh[] = []
+  private readonly pickNdc = new THREE.Vector2()
+  private readonly pickPoint = new THREE.Vector3()
 
   constructor(options: StackRendererOptions) {
     this.parent = options.parent
@@ -256,30 +276,32 @@ export class StackRenderer {
     if (!this.renderer) return null
     const rect = this.renderer.domElement.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return null
-    const entries = (['left', 'right'] as const)
-      .map((side) => ({ side, entry: this.sides[side] }))
-      .filter(
-        (item): item is { side: 'left' | 'right'; entry: StackSideMesh } =>
-          item.entry !== null && item.entry.mesh.visible && item.entry.thickness > 0,
-      )
-    if (entries.length === 0) return null
-    const ndc = new THREE.Vector2(
+    const meshes = this.pickMeshes
+    meshes.length = 0
+    for (const side of ['left', 'right'] as const) {
+      const entry = this.sides[side]
+      if (entry && entry.mesh.visible && entry.thickness > 0) meshes.push(entry.mesh)
+    }
+    if (meshes.length === 0) return null
+    this.pickNdc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     )
-    this.raycaster.setFromCamera(ndc, this.camera)
-    const hits = this.raycaster.intersectObjects(
-      entries.map((item) => item.entry.mesh),
-      false,
-    )
-    const hit = hits[0]
+    this.raycaster.setFromCamera(this.pickNdc, this.camera)
+    const hit = this.raycaster.intersectObjects(meshes, false)[0]
     if (!hit) return null
-    const found = entries.find((item) => item.entry.mesh === hit.object)
-    if (!found) return null
-    const { entry } = found
-    const localX = this.parent.worldToLocal(hit.point.clone()).x
+    const side: 'left' | 'right' | null =
+      this.sides.left?.mesh === hit.object
+        ? 'left'
+        : this.sides.right?.mesh === hit.object
+          ? 'right'
+          : null
+    if (!side) return null
+    const entry = this.sides[side]!
+    this.pickPoint.copy(hit.point)
+    const localX = this.parent.worldToLocal(this.pickPoint).x
     const fraction = ((localX - entry.edge) * entry.dir) / entry.thickness
-    return { side: found.side, fraction: clamp(fraction, 0, 0.9999) }
+    return { side, fraction: clamp(fraction, 0, 0.9999) }
   }
 
   // 设置纸叠高亮条带（null 清除）

@@ -22,7 +22,7 @@ export interface KeyboardNavOptions {
   rootEl: Ref<HTMLElement | null>
   /** 本实例标识：多实例时最近交互过的实例获得 document 级键盘响应权 */
   instanceToken: object
-  pageCount: Ref<number>
+  numPages: Ref<number>
   next: () => void
   prev: () => void
   goToPage: (page: number) => boolean
@@ -43,7 +43,7 @@ export function useKeyboardNav(options: KeyboardNavOptions) {
     forwardDirection,
     rootEl,
     instanceToken,
-    pageCount,
+    numPages,
     next,
     prev,
     goToPage,
@@ -100,7 +100,7 @@ export function useKeyboardNav(options: KeyboardNavOptions) {
         break
       case 'End':
         event.preventDefault()
-        goToPage(pageCount.value)
+        goToPage(numPages.value)
         break
       default:
         break
