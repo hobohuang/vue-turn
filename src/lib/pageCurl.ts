@@ -7,6 +7,12 @@ export function easeInOutCubic(t: number) {
 // 渲染循环内同步使用，无并发问题）
 const curlBufferCache = new Map<number, { xs: Float32Array; zs: Float32Array }>()
 
+// 缓冲只被渲染循环同步使用，但渲染器销毁后缓存仍常驻；场景卸载时
+// 调用本函数归还内存，下次挂载按需重建
+export function clearCurlBufferCache() {
+  curlBufferCache.clear()
+}
+
 export function curledColumns(theta: number, amp: number, width: number, columns: number) {
   let buffers = curlBufferCache.get(columns)
   if (!buffers) {

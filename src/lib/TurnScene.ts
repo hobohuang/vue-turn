@@ -6,7 +6,7 @@ import { PAGE_HEIGHT, sheetWorldWidth } from './flipSpec'
 import { clamp, positive } from './math'
 import { clampFoldDragToSpine, computeCrease, foldPoint, foldProgress, FOLD_TILT } from './pageFold'
 import { deriveStackEdges, type StackEdgeSource } from './pageStack'
-import { curledColumns, easeInOutCubic } from './pageCurl'
+import { clearCurlBufferCache, curledColumns, easeInOutCubic } from './pageCurl'
 import type { SpineShadeU } from './spineShading'
 import type {
   FlipSheetOptions,
@@ -110,6 +110,16 @@ export interface TurnSceneOptions {
   maxZoom?: number
   // WebGL 上下文恢复回调：调用方应重建静态页并重光栅化窗口内纹理
   onContextRestored?: () => void
+}
+
+/** applyLook 可热更新的观感参数子集（未给出的项保持不变） */
+export interface SceneLookOptions {
+  ambient?: number
+  gloss?: number
+  coverAmbient?: number
+  coverGloss?: number
+  curl?: number
+  nPolygons?: number
 }
 
 /** 页面拾取结果：index 为页索引，u/v 为命中点纹理坐标（v 从底边起算） */
@@ -278,8 +288,8 @@ interface StaticEntry {
 export class TurnScene {
   private readonly container: HTMLElement
   private readonly pageAspect: number
-  private readonly nPolygons: number
-  private readonly curl: number
+  private nPolygons: number
+  private curl: number
   private readonly sheetWidth: number
   private readonly renderer: THREE.WebGLRenderer | null
   private contextLost = false
@@ -292,6 +302,11 @@ export class TurnScene {
   private readonly staticMeshes = new Map<number, StaticEntry>()
   // 封面/封底页索引集合：这些页的网格挂到封面图层（封面灯光照亮）
   private readonly coverPages = new Set<number>()
+  // 内页与封面两组灯光：applyLook 运行时热更新强度
+  private readonly innerAmbient: THREE.AmbientLight
+  private readonly innerGloss: THREE.DirectionalLight
+  private readonly coverAmbientLight: THREE.AmbientLight
+  private readonly coverGlossLight: THREE.DirectionalLight
   // 书脊内阴影开关（挂载时冻结）与页数缩放系数（随页数变化实时更新）
   private readonly spineShadow: boolean
   private spineScale = 1
@@ -365,24 +380,25 @@ export class TurnScene {
     })
 
     // 内页灯光组（图层 0）：整本书共用
-    this.scene.add(new THREE.AmbientLight(0xffffff, options.ambient ?? 1))
-    const gloss = new THREE.DirectionalLight(0xffffff, options.gloss ?? 0.35)
-    gloss.position.set(0.4, 0.9, 1.2)
-    this.scene.add(gloss)
+    this.innerAmbient = new THREE.AmbientLight(0xffffff, options.ambient ?? 1)
+    this.scene.add(this.innerAmbient)
+    this.innerGloss = new THREE.DirectionalLight(0xffffff, options.gloss ?? 0.35)
+    this.innerGloss.position.set(0.4, 0.9, 1.2)
+    this.scene.add(this.innerGloss)
     // 封面灯光组（图层 1）：只照亮封面/封底网格，实现封面独立光影
-    const coverAmbient = new THREE.AmbientLight(
+    this.coverAmbientLight = new THREE.AmbientLight(
       0xffffff,
       options.coverAmbient ?? options.ambient ?? 1,
     )
-    coverAmbient.layers.set(COVER_LAYER)
-    this.scene.add(coverAmbient)
-    const coverGloss = new THREE.DirectionalLight(
+    this.coverAmbientLight.layers.set(COVER_LAYER)
+    this.scene.add(this.coverAmbientLight)
+    this.coverGlossLight = new THREE.DirectionalLight(
       0xffffff,
       options.coverGloss ?? options.gloss ?? 0.35,
     )
-    coverGloss.position.set(0.4, 0.9, 1.2)
-    coverGloss.layers.set(COVER_LAYER)
-    this.scene.add(coverGloss)
+    this.coverGlossLight.position.set(0.4, 0.9, 1.2)
+    this.coverGlossLight.layers.set(COVER_LAYER)
+    this.scene.add(this.coverGlossLight)
 
     this.rafId = requestAnimationFrame(this.tick)
   }
@@ -1476,6 +1492,35 @@ export class TurnScene {
     this.wake()
   }
 
+  // 运行时热更新观感参数：灯光强度（内页/封面两组）、卷曲幅度与翻页网格
+  // 分段数。未给出的项保持不变。nPolygons/curl 只在创建纸张时读取，运行时
+  // 修改对后续翻页生效；pageAspect/fitMargin/spineShadow/perspective 等几何
+  // 与着色器注入项仍挂载冻结（由编排层负责提示）
+  applyLook(look: SceneLookOptions) {
+    if (look.ambient !== undefined) this.innerAmbient.intensity = look.ambient
+    if (look.gloss !== undefined) this.innerGloss.intensity = look.gloss
+    if (look.coverAmbient !== undefined) this.coverAmbientLight.intensity = look.coverAmbient
+    if (look.coverGloss !== undefined) this.coverGlossLight.intensity = look.coverGloss
+    if (look.curl !== undefined) this.curl = look.curl
+    if (look.nPolygons !== undefined) {
+      // 与构造函数同一钳制：round 可能把 (0,0.5) 收敛为 0，colW=width/0=Infinity
+      this.nPolygons = Math.max(2, Math.round(positive(look.nPolygons, 64)))
+    }
+    this.markDirty()
+  }
+
+  // 当前生效的观感参数快照（与 applyLook 同一子集，供调用方回读与测试）
+  getLook(): SceneLookOptions {
+    return {
+      ambient: this.innerAmbient.intensity,
+      gloss: this.innerGloss.intensity,
+      coverAmbient: this.coverAmbientLight.intensity,
+      coverGloss: this.coverGlossLight.intensity,
+      curl: this.curl,
+      nPolygons: this.nPolygons,
+    }
+  }
+
   // 设置缩放级别（钳制到 [1, maxZoom]）；翻页进行中忽略
   setZoom(level: number, animate = true, duration = 200) {
     if (!this.renderer || this.sheet || this.fan) return
@@ -1793,5 +1838,6 @@ export class TurnScene {
       this.renderer.dispose()
       this.renderer.domElement.remove()
     }
+    clearCurlBufferCache()
   }
 }

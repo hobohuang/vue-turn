@@ -3,6 +3,7 @@ import type { ComputedRef, Ref } from 'vue'
 import type * as THREE from 'three'
 
 import type { PageSource } from '../lib/pageMapping'
+import type { PageRasterizer } from '../types/turn'
 import { elementToTexture, solidColorTexture, waitForResources } from '../lib/textureFactory'
 import type { FlipSpec, StaticPlacement } from '../types/turn'
 
@@ -24,6 +25,8 @@ export interface PageTexturesOptions {
   prefetchWindow: ComputedRef<number>
   cacheBust: () => boolean
   maxAnisotropy: Ref<number>
+  /** 自定义光栅化器（未传时走内置 html-to-image 按需加载路径） */
+  rasterizer: () => PageRasterizer | undefined
   applyStaticTexture: (index: number, texture: THREE.Texture) => void
   /** 纹理就绪后重建静态布局（由编排层提供） */
   renderStatic: () => void
@@ -230,6 +233,7 @@ export function usePageTextures(options: PageTexturesOptions) {
           options.pixelRatio.value,
           bust && options.cacheBust(),
           options.maxAnisotropy.value,
+          options.rasterizer(),
         )
         if (stale()) {
           texture.dispose()
@@ -253,6 +257,7 @@ export function usePageTextures(options: PageTexturesOptions) {
                 options.pixelRatio.value,
                 bust && options.cacheBust(),
                 options.maxAnisotropy.value,
+                options.rasterizer(),
               ),
               pending: 0,
             }

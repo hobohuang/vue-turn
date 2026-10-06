@@ -147,6 +147,15 @@ export interface LookOptions {
   bend?: number
 }
 
+/**
+ * 自定义页面光栅化函数：把页面的离屏 DOM 元素转为画布，画布将被包装为
+ * 纸张纹理（画布尺寸由实现自行决定，`pixelRatio` prop 不会自动套用）。
+ * 传入后组件不再调用内置的 html-to-image 光栅化器（该依赖改为按需动态
+ * 加载，自定义实现可在打包时把它从产物中剔除）。资源等待（img/字体/
+ * background-image）仍在自定义函数调用前执行。
+ */
+export type PageRasterizer = (element: HTMLElement) => Promise<HTMLCanvasElement>
+
 /** 拖拽翻页参数 */
 export interface FlipSheetOptions {
   /** 卷曲幅度覆盖；硬页（纸板页）传 0 做纯刚体翻转 */

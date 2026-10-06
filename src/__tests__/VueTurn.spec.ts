@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => {
     endFoldDrag: vi.fn<(commit: boolean, baseDuration: number) => void>(),
     setZoom: vi.fn<(level: number, animate?: boolean, duration?: number) => void>(),
     setMaxZoom: vi.fn<(value: number) => void>(),
+    applyLook: vi.fn<(look: Record<string, number | undefined>) => void>(),
     getZoom: vi.fn<() => number>(),
     // 缩放状态访问器（测试内复位/写入，各用例独立）
     resetZoomState: () => {
@@ -127,7 +128,15 @@ const mocks = vi.hoisted(() => {
     pickStack: vi.fn<
       (x: number, y: number) => { side: 'left' | 'right'; fraction: number } | null
     >().mockReturnValue(null),
-    elementToTexture: vi.fn<(element: HTMLElement) => Promise<FakeTexture>>(),
+    elementToTexture: vi.fn<
+      (
+        element: HTMLElement,
+        pixelRatio?: number,
+        cacheBust?: boolean,
+        maxAnisotropy?: number,
+        rasterizer?: (element: HTMLElement) => Promise<HTMLCanvasElement>,
+      ) => Promise<FakeTexture>
+    >(),
     solidColorTexture: vi.fn<() => FakeTexture>(),
   }
 })
@@ -163,6 +172,7 @@ vi.mock('@/composables/useTurnRenderer', () => {
       setZoom: mocks.setZoom,
       getZoom: mocks.getZoom,
       setMaxZoom: mocks.setMaxZoom,
+      applyLook: mocks.applyLook,
       panBy: mocks.panBy,
       pickPage: mocks.pickPage,
       setStacks: mocks.setStacks,
@@ -3032,22 +3042,29 @@ describe('VueTurn', () => {
     expect(peak).toBe(2)
   })
 
-  it('warns about frozen look props only when the values actually change', async () => {
-    // 内联对象字面量是这两个 prop 最常见的写法（:look="{ curl: 0.8 }"），
-    // 父组件每次渲染都换新引用；按引用比较会在任何无关重渲染时误报
+  it('hot-applies look changes and warns only for frozen geometry props', async () => {
+    // 内联对象字面量是 look prop 最常见的写法（:look="{ curl: 0.8 }"），
+    // 父组件每次渲染都换新引用；按引用比较会在任何无关重渲染时误触
+    // 热更新或冻结警告
     const warns: string[] = []
     const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
       warns.push(String(args[0]))
     })
     const tick = ref(0)
     const curl = ref(0.8)
+    const aspect = ref(0.75)
     const Host = defineComponent({
       setup: () => () => {
         void tick.value
         return h('div', [
-          h(VueTurn, { look: { curl: curl.value } }, { default: () => pages(6) }),
+          h(
+            VueTurn,
+            { look: { curl: curl.value }, pageAspect: aspect.value },
+            { default: () => pages(6) },
+          ),
           h('button', { id: 'bump', onClick: () => tick.value++ }, 'bump'),
           h('button', { id: 'change', onClick: () => (curl.value = 0.2) }, 'change'),
+          h('button', { id: 'aspect', onClick: () => (aspect.value = 0.7) }, 'aspect'),
         ])
       },
     })
@@ -3055,16 +3072,38 @@ describe('VueTurn', () => {
     await flushPromises()
     const freezeWarnings = () => warns.filter((w) => w.includes('在挂载时冻结')).length
     const baseline = freezeWarnings()
-    await wrapper.find('#bump').trigger('click')
-    await flushPromises()
+    mocks.applyLook.mockClear()
+    // 无关重渲染：不触发热更新也不警告
     await wrapper.find('#bump').trigger('click')
     await flushPromises()
     expect(freezeWarnings()).toBe(baseline)
-    // 值真的变了才提示
+    expect(mocks.applyLook).not.toHaveBeenCalled()
+    // look 值变化：热更新到场景，不再警告"冻结"
     await wrapper.find('#change').trigger('click')
+    await flushPromises()
+    expect(freezeWarnings()).toBe(baseline)
+    expect(mocks.applyLook).toHaveBeenCalledWith(expect.objectContaining({ curl: 0.2 }))
+    // 几何参数（pageAspect）变化：仍警告挂载时冻结
+    await wrapper.find('#aspect').trigger('click')
     await flushPromises()
     expect(freezeWarnings()).toBe(baseline + 1)
     spy.mockRestore()
+  })
+
+  it('passes a custom rasterizer through to the texture factory', async () => {
+    // 自定义光栅化器走透传管道：textureFactory 收到该函数（第 5 参数），
+    // 由后者决定用它替代内置 html-to-image 光栅化
+    const rasterizer = vi.fn<() => Promise<HTMLCanvasElement>>(async () =>
+      document.createElement('canvas'),
+    )
+    const Host = defineComponent({
+      setup: () => () => h(VueTurn, { rasterizer }, { default: () => pages(4) }),
+    })
+    mount(Host)
+    await flushPromises()
+    await flushPromises()
+    const call = mocks.elementToTexture.mock.calls.find((args) => args[4] === rasterizer)
+    expect(call).toBeTruthy()
   })
 
   it('emits stack-tap only when the stack click actually jumps', async () => {

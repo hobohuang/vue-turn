@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { toCanvas } from 'html-to-image'
+
+import type { PageRasterizer } from '../types/turn'
 
 // 资源等待默认超时：超时后放弃等待直接光栅化，避免慢资源阻塞初始化
 const DEFAULT_RESOURCE_TIMEOUT = 5000
@@ -82,6 +83,17 @@ export function solidColorTexture(): THREE.Texture {
   return texture
 }
 
+// 内置光栅化器：html-to-image 按需动态加载。顶层静态导入会把它拖进主包，
+// 而仅使用静态图片页（自定义 rasterizer 或纯色纹理）的宿主根本不需要它
+async function defaultRasterizer(
+  element: HTMLElement,
+  pixelRatio: number,
+  cacheBust: boolean,
+): Promise<HTMLCanvasElement> {
+  const { toCanvas } = await import('html-to-image')
+  return toCanvas(element, { pixelRatio, cacheBust })
+}
+
 // 光栅化画布恒为透明（backgroundColor: null）：页面背景由内容自绘，
 // 未绘制区域在纹理中保留 alpha=0（页面材质已开 transparent，透出宿主页面）。
 // pixelRatio 默认 1，与组件 props 的 pixelRatio 默认值保持一致，避免两处默认不一致
@@ -91,11 +103,12 @@ export async function elementToTexture(
   cacheBust = true,
   // 各向异性过滤等级：应由调用方按 renderer.capabilities.getMaxAnisotropy() 钳制后传入
   maxAnisotropy = 8,
+  rasterizer?: PageRasterizer,
 ) {
-  const canvas = await toCanvas(element, {
-    pixelRatio,
-    cacheBust,
-  })
+  // 自定义光栅化器不自动套 pixelRatio：画布尺寸由实现自行决定
+  const canvas = rasterizer
+    ? await rasterizer(element)
+    : await defaultRasterizer(element, pixelRatio, cacheBust)
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.anisotropy = maxAnisotropy

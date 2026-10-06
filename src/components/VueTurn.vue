@@ -49,6 +49,7 @@ import type {
   FlipSpec,
   KeyboardMode,
   LookOptions,
+  PageRasterizer,
   PageRegion,
   StaticPlacement,
   TurnInstance,
@@ -101,6 +102,10 @@ const props = withDefaults(
     prefetchWindow?: number
     /** 光栅化前资源等待超时（毫秒），超时后放弃等待直接光栅化 */
     resourceTimeout?: number
+    /** 自定义页面光栅化函数：把页面离屏 DOM 转为画布。传入后不再调用内置
+     *  html-to-image 光栅化器（该依赖按需动态加载，纯静态图片页等场景可在
+     *  打包时把它从产物中剔除）。资源等待仍在自定义函数调用前执行 */
+    rasterizer?: PageRasterizer
     /** 是否允许拖拽翻页（按住页面拖动，松手按位置/速度决定完成或回弹） */
     dragToFlip?: boolean
     /** 悬停预览总开关：开启后显示悬停预览——fold 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷 */
@@ -207,19 +212,20 @@ const safeMaxZoom = computed(() =>
 
 const state = useBookState()
 
-// 观感解析（挂载时读取一次）：preset/coverPreset 档位为基线，look/coverLook
-// 逐项覆盖；封面未传项逐项回退内页 look
-const innerLook = resolveLook(props.preset, props.look)
-const coverLookOptions = mergeLook(props.coverLook, props.look)
-const coverLook = resolveLook(props.coverPreset, coverLookOptions)
+// 观感解析：preset/coverPreset 档位为基线，look/coverLook 逐项覆盖；封面未传
+// 项逐项回退内页 look。保持 computed：运行时修改 preset/look 会重新解析并
+// 经 applyLook 热更新到场景（几何项 perspective 与书脊开关仍挂载冻结）
+const innerLook = computed(() => resolveLook(props.preset, props.look))
+const coverLookOptions = computed(() => mergeLook(props.coverLook, props.look))
+const coverLook = computed(() => resolveLook(props.coverPreset, coverLookOptions.value))
 
 const renderer = useTurnRenderer({
   pageAspect: safePageAspect,
   // 内页观感参数：preset 基线 + look 覆盖
-  ...innerLook,
+  ...innerLook.value,
   // 封面/封底光影：coverPreset 独立灯光组
-  coverAmbient: coverLook.ambient,
-  coverGloss: coverLook.gloss,
+  coverAmbient: coverLook.value.ambient,
+  coverGloss: coverLook.value.gloss,
   // 书脊内阴影开关（挂载时冻结）
   spineShadow: spineShadowEnabled,
   fitMargin: props.fitMargin,
@@ -325,52 +331,74 @@ function lookValuesChanged(prev?: LookOptions, next?: LookOptions): boolean {
   return false
 }
 
+// 观感热更新：preset/coverPreset/look/coverLook 运行时变化重新解析后经
+// applyLook 同步到场景（灯光强度、卷曲幅度、翻页网格分段）。computed 引用
+// 每次重算都是新对象，按值浅比较过滤无变化的重算，避免无谓的标脏重绘
+let appliedLook = {
+  inner: innerLook.value,
+  cover: coverLook.value,
+}
+watch([innerLook, coverLook], ([inner, cover]) => {
+  const changed =
+    lookValuesChanged(appliedLook.inner, inner) || lookValuesChanged(appliedLook.cover, cover)
+  if (!changed) return
+  appliedLook = { inner, cover }
+  renderer.applyLook({
+    ambient: inner.ambient,
+    gloss: inner.gloss,
+    curl: inner.curl,
+    nPolygons: inner.nPolygons,
+    coverAmbient: cover.ambient,
+    coverGloss: cover.gloss,
+  })
+})
+
+// 开发期提示：几何/着色器注入参数挂载时冻结（与场景初始化策略一致），
+// 运行时修改不生效——业务方最容易踩的"改了没反应"静默坑。观感项
+// （preset/coverPreset/look/coverLook）已支持热更新，不在提示之列。
+// look/coverLook 内的 perspective 同样冻结（相机与纸叠装配在挂载时取值）。
+// 逐项浅比较而非引用比较：这两个 prop 的常见写法是内联对象字面量
+// （:look="{ curl: 0.5 }"），父组件每次渲染都换新引用但内容相同，
+// 按引用比较会在任何无关重渲染时误报"你改了冻结参数"
 if (import.meta.env.DEV) {
   let seen = {
     pageAspect: props.pageAspect,
     fitMargin: props.fitMargin,
-    preset: props.preset,
-    coverPreset: props.coverPreset,
-    look: props.look,
-    coverLook: props.coverLook,
     spineShadow: props.spineShadow,
+    perspective: innerLook.value.perspective,
   }
   watch(
-    () => [
-      props.pageAspect,
-      props.fitMargin,
-      props.preset,
-      props.coverPreset,
-      props.look,
-      props.coverLook,
-      props.spineShadow,
-    ] as const,
-    ([pageAspect, fitMargin, preset, coverPreset, look, coverLook, spineShadow]) => {
-      const unchanged =
-        seen.pageAspect === pageAspect &&
-        seen.fitMargin === fitMargin &&
-        seen.preset === preset &&
-        seen.coverPreset === coverPreset &&
-        seen.spineShadow === spineShadow &&
-        !lookValuesChanged(seen.look, look) &&
-        !lookValuesChanged(seen.coverLook, coverLook)
-      if (unchanged) return
-      seen = { pageAspect, fitMargin, preset, coverPreset, look, coverLook, spineShadow }
+    () => [props.pageAspect, props.fitMargin, props.spineShadow, innerLook.value.perspective] as const,
+    ([pageAspect, fitMargin, spineShadow, perspective]) => {
+      const frozen = (
+        [
+          ['pageAspect', seen.pageAspect !== pageAspect],
+          ['fitMargin', seen.fitMargin !== fitMargin],
+          ['spineShadow', seen.spineShadow !== spineShadow],
+          ['look.perspective', seen.perspective !== perspective],
+        ] as const
+      )
+        .filter(([, changed]) => changed)
+        .map(([key]) => key)
+        .join('、')
+      seen = { pageAspect, fitMargin, spineShadow, perspective }
+      if (!frozen) return
       console.warn(
-        '[vue-turn] 观感/几何参数（preset/coverPreset/look/coverLook/pageAspect/fitMargin）' +
-          '在挂载时冻结，运行时修改不生效；如需变更请用 key 重建组件',
+        `[vue-turn] 几何/着色器参数（${frozen}）在挂载时冻结，运行时修改不生效；` +
+          '如需变更请用 key 重建组件。观感参数（preset/look 等）支持运行时更新。',
       )
     },
   )
 }
 
 // 折页档位（内页按 preset/look、封面/封底纸张按 coverPreset/coverLook 各取一档，
-// 挂载时读取一次）：解析与归属判定见 composables/useFoldProfiles.ts。
+// 每次翻页时按当前 props 重新解析，支持运行时热更新）：解析与归属判定见
+// composables/useFoldProfiles.ts。
 // 单页模式同样启用：页缝固定在书脊侧，前进半区的折页/折角拖拽与双页
 // 同一套几何（锚点=外缘/外角、书脊约束以缝侧为基准），后退半区走反向卷曲
 const { isCoverSheet, foldOfSpec, foldOfPage } = useFoldProfiles({
-  innerFold: resolveFold(props.preset, props.look),
-  coverFold: resolveFold(props.coverPreset, coverLookOptions),
+  innerFold: () => resolveFold(props.preset, props.look),
+  coverFold: () => resolveFold(props.coverPreset, coverLookOptions.value),
   pageSources: () => pageSources.value,
   pageAspect: safePageAspect,
 })
@@ -407,6 +435,7 @@ const {
   prefetchWindow: safePrefetchWindow,
   cacheBust: () => props.cacheBust,
   maxAnisotropy,
+  rasterizer: () => props.rasterizer,
   applyStaticTexture,
   renderStatic,
   getLastPlacements: () => lastPlacements.value,
@@ -601,7 +630,7 @@ function emitBeforeFlip(direction: FlipDirection | null, from: number, to: numbe
 // 光影由场景封面灯光组按面独立照亮，不在此处传递
 function sheetOptions(spec: FlipSpec): FlipSheetOptions {
   return isCoverSheet([spec.frontIndex, spec.backIndex])
-    ? { curl: coverLook.curl, nPolygons: coverLook.nPolygons }
+    ? { curl: coverLook.value.curl, nPolygons: coverLook.value.nPolygons }
     : {}
 }
 

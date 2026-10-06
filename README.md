@@ -2,6 +2,8 @@
 
 基于 Three.js 的 Vue 3 书本翻页组件：真实纸张卷曲形变、双页跨页布局、封面/封底开合动画、拖拽翻页、角点折角拖拽（turn.js 4 风格）、折角提示、跳页扇形翻页、缩放视口与页面热区。页面内容以普通 HTML 编写，运行时离屏光栅化为纹理贴到可形变网格上。
 
+[![CI](https://github.com/hobohuang/vue-turn/actions/workflows/ci.yml/badge.svg)](https://github.com/hobohuang/vue-turn/actions/workflows/ci.yml)
+
 **在线演示**：<https://hobohuang.github.io/vue-turn/>
 
 **npm**：<https://www.npmjs.com/package/vue-turnbook>
@@ -66,8 +68,8 @@ const page = ref(1)
 | 1 | `modelValue` | `number` | - | 当前页码（从 1 开始），支持 v-model |
 | 2 | `preset` | `'soft' \| 'hard' \| 'custom'` | `'soft'` | 内页纸张类型：soft 普通纸张哑光（可卷曲/折角）、hard 纸板刚体强光泽、custom 自定义；为专业参数提供成组基线，`look` 可逐项覆盖（详见下文「观感预设」） |
 | 3 | `coverPreset` | `'soft' \| 'hard' \| 'custom'` | `'hard'` | 封面/封底纸张类型：控制封面纸张的卷曲、折页/折角开关与折缝、网格密度与光影（独立灯光组照亮）；`coverLook` 可逐项覆盖（详见下文「封面与封底」） |
-| 4 | `look` | `LookOptions` | - | 内页观感与折页参数，逐项覆盖 `preset` 基线：`nPolygons`（网格分段，回退 64）、`perspective`（透视参考距离，回退 2400，**全局相机参数**）、`ambient`（环境光，回退 1）、`gloss`（方向光，回退 0.15）、`curl`（卷曲幅度，0 为刚体，回退 0.8）、`fold`（折页变形开关，soft 开 / hard 关）、`bend`（折缝圆角占页宽比例，回退 0.04）。挂载时冻结 |
-| 5 | `coverLook` | `LookOptions` | - | 封面/封底观感与折页参数，逐项覆盖 `coverPreset` 基线，未传项回退 `look`（`perspective` 为全局参数在此无效）。挂载时冻结 |
+| 4 | `look` | `LookOptions` | - | 内页观感与折页参数，逐项覆盖 `preset` 基线：`nPolygons`（网格分段，回退 64）、`perspective`（透视参考距离，回退 2400，**全局相机参数**）、`ambient`（环境光，回退 1）、`gloss`（方向光，回退 0.15）、`curl`（卷曲幅度，0 为刚体，回退 0.8）、`fold`（折页变形开关，soft 开 / hard 关）、`bend`（折缝圆角占页宽比例，回退 0.04）。支持运行时更新（`perspective` 除外，挂载时冻结） |
+| 5 | `coverLook` | `LookOptions` | - | 封面/封底观感与折页参数，逐项覆盖 `coverPreset` 基线，未传项回退 `look`（`perspective` 为全局参数在此无效）。支持运行时更新 |
 | 6 | `pageAspect` | `number` | `0.75` | 页面宽高比（宽/高），非法值（NaN/零/负数）回退 0.75；常见图书尺寸参考下文「常见图书宽高比」 |
 | 7 | `flipDuration` | `number` | `900` | 翻页动画时长（毫秒），下限 500：更小的取值按 500 生效（回弹/收尾等派生动画同步受此下限约束） |
 | 8 | `forwardDirection` | `'left' \| 'right'` | `'left'` | 阅读方向（决定往哪边翻算下一页）：`'left'` 左翻书（页码自左向右递增），`'right'` 右翻书（整体镜像）；运行时可改，详见下文「阅读方向」 |
@@ -81,13 +83,14 @@ const page = ref(1)
 | 16 | `cacheBust` | `boolean` | `true` | 手动重绘（`refresh`/`refreshPage`）时是否给图片加破缓存参数，避免拿到旧图；懒光栅化与 DOM 变化触发的自动光栅化不破缓存（详见下文「cacheBust 使用场景」） |
 | 17 | `prefetchWindow` | `number` | `4` | 懒光栅化预取窗口：当前可见页前后各 N 页预生成纹理，窗口外释放（设为 0 关闭懒加载，全量光栅化） |
 | 18 | `resourceTimeout` | `number` | `5000` | 光栅化前资源等待超时（毫秒）：等待 `<img>`、CSS background-image、文档字体；超时后放弃等待直接光栅化 |
-| 19 | `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
-| 20 | `peel` | `boolean` | `false` | 悬停预览总开关：开启后显示悬停预览——`fold` 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷（详见下文「拖拽翻页与折角交互」） |
-| 21 | `maxZoom` | `number` | `3` | 最大缩放倍数（响应式：运行中修改即生效，当前级别超出新上限时立即收敛） |
-| 22 | `zoomMode` | `'off' \| 'wheel' \| 'dblclick' \| 'both'` | `'off'` | 允许哪些**手势**触发缩放：`wheel` 滚轮按指数步进调级别、`dblclick` 双击在 1 倍与 `maxZoom` 间切换（含 `dblclick` 时单击翻页会延迟约 260ms 以区分双击）、`both` 两种都要、`off` 关闭。实例方法 `zoomIn`/`setZoom` 等不受此开关限制 |
-| 23 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
-| 24 | `spineShadow` | `boolean` | `true` | 书脊内阴影：所有书页靠书脊一侧模仿真实书页的"缝谷"光影（深色缝芯 + 长尾缓降 + 外缘微暗），强度/宽度随书页数量缩放且封顶（默认开启，`false` 关闭）。长在纸面上、跟随卷曲/折页形变；单双页与阅读方向自动定侧（详见下文「书脊阴影（spineShadow）」）。挂载时冻结 |
-| 25 | `jumpAnimation` | `boolean` | `true` | 跳页扇形翻页：`goToPage` / v-model 跳页 / 纸叠点击 / 键盘 Home·End 跳转时播放多页并发的扇形翻页过渡（骨架纸占位、起止内容锚定，总时长与页数解耦）；`false` 恢复瞬间跳转（详见下文「跳页扇形翻页」） |
+| 19 | `rasterizer` | `PageRasterizer` | - | 自定义页面光栅化函数 `(el: HTMLElement) => Promise<HTMLCanvasElement>`：传入后替代内置 html-to-image 光栅化（该依赖按需动态加载，纯静态图片页场景可在打包时将其从产物剔除）；画布尺寸由实现决定（`pixelRatio` 不自动套用），资源等待仍在函数调用前执行 |
+| 20 | `dragToFlip` | `boolean` | `true` | 拖拽翻页：按住页面拖动，松手按拖动距离/甩动速度决定完成或回弹 |
+| 21 | `peel` | `boolean` | `false` | 悬停预览总开关：开启后显示悬停预览——`fold` 开启时为四角折角预览（仅页面四角区域），关闭时为视口边缘条带整页轻卷（详见下文「拖拽翻页与折角交互」） |
+| 22 | `maxZoom` | `number` | `3` | 最大缩放倍数（响应式：运行中修改即生效，当前级别超出新上限时立即收敛） |
+| 23 | `zoomMode` | `'off' \| 'wheel' \| 'dblclick' \| 'both'` | `'off'` | 允许哪些**手势**触发缩放：`wheel` 滚轮按指数步进调级别、`dblclick` 双击在 1 倍与 `maxZoom` 间切换（含 `dblclick` 时单击翻页会延迟约 260ms 以区分双击）、`both` 两种都要、`off` 关闭。实例方法 `zoomIn`/`setZoom` 等不受此开关限制 |
+| 24 | `stack` | `boolean` | `true` | 是否显示书本左右两侧的纸叠（页层厚度条带，厚度随翻页在两侧间转移，可悬停/点击跳页；平躺的封面/封底不计入层数） |
+| 25 | `spineShadow` | `boolean` | `true` | 书脊内阴影：所有书页靠书脊一侧模仿真实书页的"缝谷"光影（深色缝芯 + 长尾缓降 + 外缘微暗），强度/宽度随书页数量缩放且封顶（默认开启，`false` 关闭）。长在纸面上、跟随卷曲/折页形变；单双页与阅读方向自动定侧（详见下文「书脊阴影（spineShadow）」）。挂载时冻结 |
+| 26 | `jumpAnimation` | `boolean` | `true` | 跳页扇形翻页：`goToPage` / v-model 跳页 / 纸叠点击 / 键盘 Home·End 跳转时播放多页并发的扇形翻页过渡（骨架纸占位、起止内容锚定，总时长与页数解耦）；`false` 恢复瞬间跳转（详见下文「跳页扇形翻页」） |
 
 ## TurnItem Attributes（turn-item 属性）
 
@@ -382,7 +385,7 @@ function onRegionTap(_page: number, region: PageRegion) {
 
 档位按**纸张归属**生效，不是全局一刀切：一张纸的正反两面同档——内页纸张读 `preset` + `look`，封面/封底专用纸张读 `coverPreset` + `coverLook`（未传项逐项回退 `look`）。因此默认的 `preset="soft" coverPreset="hard"` 下，内页可折角卷曲、封面为纸板刚体，互不干扰。`perspective` 例外：它是全局相机参数，只读 `look.perspective`（`coverLook.perspective` 无效）。
 
-这些参数在组件挂载时读取一次（与此前行为一致），运行中切换 preset 或专业参数不会热更新。
+这些参数支持运行时更新：切换 `preset` / `coverPreset` 或修改 `look` / `coverLook` 后，灯光强度、卷曲幅度与网格分段会立即同步到场景（对后续翻页生效）；仅 `look.perspective` 例外——它是全局相机参数，挂载时冻结。`pageAspect` / `fitMargin` / `spineShadow` 同样挂载时冻结（开发模式会 `console.warn` 提示哪些冻结参数未生效）。
 
 ## 常见图书宽高比
 
@@ -475,6 +478,35 @@ function onRegionTap(_page: number, region: PageRegion) {
 
 注意：设为 `false` 后，若图片同名但内容已更新（如运营后台替换了同 URL 的图），手动重绘可能拿到浏览器缓存的旧图；这种情况需保持 `true`，或改用带版本号的 URL（如 `img.png?v=2`）后关闭 `cacheBust`。
 
+## 自定义光栅化器（rasterizer）
+
+默认实现用 [html-to-image](https://www.npmjs.com/package/html-to-image) 把页面离屏 DOM 光栅化为纹理。若页面内容不需要完整的 HTML/CSS 光栅化（如整本静态图片书），可传入自定义 `rasterizer` 函数替代：
+
+```vue
+<template>
+  <VueTurn :rasterizer="rasterize">
+    <TurnItem><img src="p1.png" /></TurnItem>
+    <!-- ... -->
+  </VueTurn>
+</template>
+
+<script setup lang="ts">
+// 自行决定画布尺寸与内容（pixelRatio 不会自动套用）
+const rasterize = (el: HTMLElement) =>
+  new Promise<HTMLCanvasElement>((resolve) => {
+    const canvas = document.createElement('canvas')
+    // ...按需绘制
+    resolve(canvas)
+  })
+</script>
+```
+
+要点：
+
+- 传入后组件不再调用内置光栅化器：`html-to-image` 在内置实现中改为**按需动态加载**，自定义实现的宿主配合打包配置可把它从产物中剔除，显著减小包体积。
+- 资源等待（`<img>`、background-image、字体，`resourceTimeout` 控制）仍在自定义函数调用**之前**执行；若自定义实现自带资源管理，可忽略该等待。
+- 画布会被包装为纸张纹理，建议尺寸与页面内容像素尺寸一致（可参考 `pageWidth` × 页高 × `pixelRatio`）；透明区域会透出宿主页面背景。
+
 ## 奇数总页数的自动补页
 
 封底合上动画依赖末页索引为奇数（即总页数为偶数）。封面纸张与封底纸张各占 2 页（恒为偶数），因此补页只取决于内页区段：当内页区段计数为奇数时，组件在封底纸张之前自动补一张空白页（补在内页区段末尾不会破坏跨页的奇数起始对齐，封底固定落在最后一个索引）。
@@ -530,6 +562,24 @@ function onChange(p: number) {
 - **页码是映射后的页索引空间**：封面/封底专用纸张各占 2 页（外侧 + 里侧，里侧为衬页声明或空白兜底）、跨页项占 2 页、对齐/补偶的自动补位页同样计入 `numPages`（见「跨页大图（spread）」「奇数总页数的自动补页」）。业务"第 N 个内容"对应的组件页码请按此空间换算——例如内容项前有 1 张封面纸（2 页）时，第 1 个内容页从页码 3 开始。
 - **深度链接定位**：以 `v-model` 初始值传入即可在挂载时定位；运行中收到外部跳转调 `turnRef.value?.goToPage(page)`（翻页中或越界时会被拒绝并返回 `false`，可在路由同步处据此回退）。
 - **双向同步防环**：路由 → 页码方向用 `v-model` / `goToPage`；页码 → 路由方向监听 `change`（或响应式 `state.page`），回写前先比对当前路由参数、相同则跳过，避免冗余导航与多余历史记录。含非法值纠正的完整参考实现见演示页 `BookView.vue` 的 `applyRoutePage` / `watch(currentPage)`。
+
+## SSR
+
+组件兼容服务端渲染（Nuxt 3/4 等）：所有 DOM / WebGL 访问都发生在客户端挂载（`onMounted`）之后，服务端只会渲染占位结构，安全导入本包不会触碰 `document` / `window`。
+
+- **Nuxt 中推荐用 `<ClientOnly>` 包裹**：书本视口依赖容器实际尺寸与 WebGL，服务端无从计算，客户端挂载后自会补全。WebGL 不可用时组件降级到 `#fallback` 插槽，可借此提供静态目录等替代内容。
+- 页面内容的离屏光栅化（`html-to-image`、字体与图片等待）同样只在客户端执行，无需额外配置。
+
+```vue
+<template>
+  <ClientOnly>
+    <VueTurn v-model="page">
+      <!-- TurnItem 列表 -->
+      <template #fallback>加载中…</template>
+    </VueTurn>
+  </ClientOnly>
+</template>
+```
 
 ## 已知限制
 

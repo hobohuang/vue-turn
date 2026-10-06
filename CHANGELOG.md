@@ -2,6 +2,23 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。当前发布版本为 `0.5.2`。
 
+## Unreleased
+
+### 新增
+
+- **CI 测试门禁**：新增 GitHub Actions workflow（push main / 全部 PR 触发），依次执行 lint、type-check 与全部单元测试，防止回归直接进入发布包；README 顶部加 CI badge。
+- **观感参数运行时热更新**：`preset` / `coverPreset` / `look` / `coverLook` 不再挂载时冻结——运行时修改会重新解析并同步到场景（内页与封面灯光强度、卷曲幅度、翻页网格分段，对后续翻页生效），折页档位同样按当前 props 实时解析。仅 `look.perspective`（全局相机参数）与 `pageAspect` / `fitMargin` / `spineShadow` 保持挂载冻结；DEV 模式警告改为明确列出是哪些冻结参数未生效。
+- **自定义光栅化器 `rasterizer` prop**：传入 `(el: HTMLElement) => Promise<HTMLCanvasElement>` 后替代内置 html-to-image 光栅化，内置实现改为按需动态加载——纯静态图片页等场景的宿主可在打包时将该依赖从产物中剔除（画布尺寸由实现决定，`pixelRatio` 不自动套用；资源等待仍在函数调用前执行）。新增 `PageRasterizer` 类型。
+- **SSR 支持声明**：确认所有 DOM / WebGL 访问均在客户端挂载后执行，README 新增「SSR」章节（Nuxt `<ClientOnly>` 用法与 `#fallback` 配合）。
+
+### 性能
+
+- **curl 采样缓冲随场景卸载释放**：`TurnScene.dispose` 时清空 `pageCurl` 的分段缓冲缓存，多实例频繁挂载/卸载不再累积常驻内存。
+
+### 文档
+
+- README 新增「自定义光栅化器（rasterizer）」章节；「观感预设」章节改写为运行时更新语义；属性表新增 `rasterizer` 行。
+
 ## 0.5.2 - 2026-10-05
 
 本轮为一次全局架构审查的落地：修掉 5 个可复现的功能缺陷（其中 3 个会造成静默失效或随机空白页），补齐行为契约文档，并做一轮性能与内部一致性清理。新增 12 条回归测试（304 → 315）。

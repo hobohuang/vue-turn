@@ -1,7 +1,7 @@
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type * as THREE from 'three'
 
-import { TurnScene, type PagePick } from '../lib/TurnScene'
+import { TurnScene, type PagePick, type SceneLookOptions } from '../lib/TurnScene'
 import type { SpineShadeU } from '../lib/spineShading'
 import type {
   FlipSheetOptions,
@@ -241,6 +241,11 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     scene?.setMaxZoom(value)
   }
 
+  // 运行时热更新观感参数（灯光强度/卷曲幅度/翻页网格分段）
+  function applyLook(look: SceneLookOptions) {
+    scene?.applyLook(look)
+  }
+
   function panBy(dxPixels: number, dyPixels: number) {
     scene?.panBy(dxPixels, dyPixels)
   }
@@ -276,6 +281,7 @@ export function useTurnRenderer(options: TurnRendererOptions) {
     stopFlip,
     setZoom,
     setMaxZoom,
+    applyLook,
     getZoom,
     panBy,
     pickPage,
